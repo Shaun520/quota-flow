@@ -44,8 +44,7 @@
 ### 3.1 模式 A：开源 + 官方托管 + 自部署
 
 **开源策略**：
-- 开源：packages/* + apps/web + apps/desktop + apps/cli + apps/skill
-- 闭源：apps/admin（你运营后台，只连你的官方 Supabase）
+- 全部开源：packages/* + apps/web + apps/desktop + apps/cli + apps/skill + apps/admin（含运营后台与消耗表编辑器）
 
 **两种使用方式**：
 
@@ -183,7 +182,7 @@
 ```
 Vercel（两个独立项目）
   web/     落地页：定价/文档/下载/注册/赞助
-  admin/   后台管理（闭源，只给你用）
+  admin/   后台管理（开源）
                 |
                 | 短查询：CRUD
                 | 代调用：Edge Function（member 调公共 key）
@@ -231,9 +230,10 @@ packages/
   cookie-manager/    cookie 健康检查 + 自动续期
   logger/            统一日志（jobs.jsonl 追加）
   auth/              Supabase Auth 封装
+  migrations/        SQL 迁移脚本（按序执行，含 provider_cost_tables 初始数据，见 §5.7）
 apps/
   web/               落地页（Next.js + React，Vercel）
-  admin/             后台管理（Next.js + React，闭源，Vercel）
+  admin/             后台管理（Next.js + React，Vercel）
   desktop/           Electron + React（唯一产品入口）
   cli/              命令行
   skill/            SKILL.md（可选附件）
@@ -982,7 +982,7 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 ### 13.2 部署
 
-- 独立 Next.js + React 项目（apps/admin，闭源）
+- 独立 Next.js + React 项目（apps/admin，开源）
 - 部署在 Vercel，独立域名
 - 连同一个官方 Supabase
 - 加 IP 白名单 + TOTP 二步验证 + 操作审计
@@ -1135,7 +1135,7 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 ## 17. 开源策略
 
-### 17.1 开源 vs 闭源
+### 17.1 开源范围
 
 | 仓库 | 开源 | 说明 |
 |---|---|---|
@@ -1144,7 +1144,7 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 | apps/desktop | 是 | 桌面端 |
 | apps/cli | 是 | 命令行 |
 | apps/skill | 是 | SKILL.md |
-| apps/admin | 否 | 后台管理（你运营用，闭源；含消耗表编辑器） |
+| apps/admin | 是 | 后台管理（含消耗表编辑器；自部署用户也可自建运营后台） |
 
 ### 17.2 License
 

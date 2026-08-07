@@ -34,7 +34,7 @@
 ```
 Vercel（两个独立项目）
   web/     落地页：定价/文档/下载/注册/赞助
-  admin/   后台管理（闭源，运营者用，含消耗表编辑器）
+  admin/   后台管理（开源，运营者用，含消耗表编辑器）
                 |
                 v
 Supabase（数据库 + Auth + Edge Functions）
@@ -61,18 +61,19 @@ quota-flow/
 packages/
   core/          ✅ 已实现  调度核心（路由、降级、账本逻辑、等效次数换算、消耗表缓存）
   providers/     ✅ 已实现  厂商适配器（mathmind/qwen/yuanbao 已接入，其余待补）+ estimateCost
-  crypto/        🔲 待实现  AES 加密（团队 cookie 云端加密 + 桌面端本地解密）
-  db-supabase/   🔲 待实现  Supabase 客户端（RLS、Auth、团队权限）
-  shared-ui/     🔲 待实现  React 共享组件（桌面端 + 落地页复用）
-  cookie-manager/🔲 合并进 WebView 引擎  健康检查 + 自动续期（与执行引擎共享实例池）
-  logger/        🔲 待实现  统一日志（桌面端 + CLI + Edge Functions）
-  auth/          🔲 待实现  Supabase Auth 封装（官方托管登录 / 自部署模式切换）
+  crypto/        🔲 骨架已建 · 待实现  AES 加密（团队 cookie 云端加密 + 桌面端本地解密）
+  db-supabase/   🔲 骨架已建 · 待实现  Supabase 客户端（RLS、Auth、团队权限）
+  shared-ui/     🔲 骨架已建 · 待实现  React 共享组件（桌面端 + 落地页复用）
+  cookie-manager/🔲 骨架已建 · 待实现  健康检查 + 自动续期（与 WebView 执行引擎共享实例池）
+  logger/        🔲 骨架已建 · 待实现  统一日志（桌面端 + CLI + Edge Functions）
+  auth/          🔲 骨架已建 · 待实现  Supabase Auth 封装（官方托管登录 / 自部署模式切换）
 apps/
-  web/           🔲 待实现  落地页（Next.js + React + Vercel）
-  admin/         🔲 闭源      后台管理（Next.js + React + Vercel）
-  desktop/       🔲 待实现  Electron + React（唯一产品入口，WebView 统一引擎）
+  web/           🔲 骨架已建 · 待实现  落地页（Next.js + React + Vercel）
+  admin/         🔲 骨架已建 · 待实现  后台管理（开源，Next.js + React + Vercel）
+  desktop/       🔲 骨架已建 · 待实现  Electron + React（唯一产品入口，WebView 统一引擎）
   cli/           ✅ 已实现  命令行（check-quota / generate / refresh）
-  skill/         🔲 待实现  SKILL.md（可选 Skill 附件）
+  skill/         🔲 骨架已建 · 待实现  SKILL.md（可选 Skill 附件）
+  migrations/    🆕 新建  Supabase SQL 迁移脚本（约定见 migrations/README.md）
 ```
 
 ## 技术选型
@@ -123,7 +124,7 @@ cp .env.example .env
 # 填入：SUPABASE_URL / SUPABASE_ANON_KEY / SELF_HOSTED=true
 
 # 3. 跑 migrations（创建表结构 + provider_cost_tables 初始消耗规则）
-# 方式 A：Supabase Dashboard → SQL Editor → 跑 migrations/*.sql
+# 方式 A：Supabase Dashboard → SQL Editor → 按序执行 migrations/*.sql（约定见 migrations/README.md）
 # 方式 B：桌面端首次启动会提示自动执行
 
 # 4. 桌面端模式切换
@@ -180,7 +181,7 @@ pnpm release                            # 构建并打包桌面端安装包
 | apps/desktop | 是 |
 | apps/cli | 是 |
 | apps/skill | 是 |
-| apps/admin | 否（运营者专用，含消耗表可视化编辑器） |
+| apps/admin | 是（含消耗表可视化编辑器） |
 
 ## 客户支持
 

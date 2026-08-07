@@ -21,6 +21,8 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  apps/admin: {}
+
   apps/cli:
     dependencies:
       '@quota-flow/core':
@@ -46,7 +48,58 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  apps/desktop: {}
+
+  apps/skill: {}
+
+  apps/web: {}
+
+  packages/auth:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.0
+        version: 8.5.1(tsx@4.23.11)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/cookie-manager:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.0
+        version: 8.5.1(tsx@4.23.11)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
   packages/core:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.0
+        version: 8.5.1(tsx@4.23.11)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/crypto:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.0
+        version: 8.5.1(tsx@4.23.11)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/db-supabase:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.0
+        version: 8.5.1(tsx@4.23.11)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/logger:
     devDependencies:
       tsup:
         specifier: ^8.3.0
@@ -60,6 +113,15 @@ importers:
       '@quota-flow/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      tsup:
+        specifier: ^8.3.0
+        version: 8.5.1(tsx@4.23.11)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
+  packages/shared-ui:
     devDependencies:
       tsup:
         specifier: ^8.3.0
