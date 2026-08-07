@@ -1,0 +1,44 @@
+﻿{
+  "name": "quota-flow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unified daily free-quota scheduler for multi-provider video generation.",
+  "packageManager": "pnpm@9.7.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0",
+    "npm": "please-use-pnpm",
+    "yarn": "please-use-pnpm"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean",
+    "release": "pnpm --filter @quota-flow/desktop run release"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.0",
+    "tsup": "^8.3.0",
+    "@types/node": "^20.14.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "better-sqlite3",
+      "vite",
+      "esbuild",
+      "sharp"
+    ]
+  },
+  "// DEV_DEPS_NOTE": {
+    "electron": "Electron 28+ LTS（安装在 apps/desktop/package.json，不在根 devDependencies），配合 .npmrc 的 only-built-dependencies 预拉取二进制；升级时同步改 apps/desktop 的 electron 版本",
+    "tsup": "所有 packages/* 通过 tsup 同时输出 CJS + ESM + DTS；exports 字段显式声明 types/import/require；禁止单格式输出",
+    "workspace": "packages/（共享库）与 apps/（应用）两层 workspace，引用一律用 workspace:*；不要手写相对路径"
+  },
+  "// CONVENTIONS": {
+    "modules": "共享 tsconfig 使用 ESNext target + Bundler moduleResolution；共享库双格式；Electron 主进程 CJS/ESM 均可；Next.js App Router 默认 ESM",
+    "providers": "新厂商走声明式 WebProviderConfig（填 URL+选择器，~2h/厂），99% 场景不需要写 Node.js HTTP adapter；mcp_mathmind 是唯一真 API 例外"
+  }
+}

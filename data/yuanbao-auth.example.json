@@ -1,0 +1,9 @@
+{
+  "//": "使用说明：1) 打开浏览器 DevTools → Network；2) 刷新 yuanbao.tencent.com；3) 随便点一个 xhr 请求（如 /api/user/agent/conversation/v1/detail）；4) 在 Request Headers 里找到 Cookie 字段，复制全部值（没有换行的长字符串），粘贴到 yuanbao-auth.json 的 cookie 值里。其他字段我已经根据你当前浏览器会话预填好了，通常不需要改。",
+  "cookie": "在这里粘贴 Cookie 请求头的完整值",
+  "agentId": "naQivTmsDa",
+  "conversationId": "0PPry88dMzQ",
+  "xDeviceId": "1a807130d0c100baeb2135a62e5d8d472fb1e55f8f",
+  "xHY92": "ccb57cb8eb2135a62e5d8d470200000871a807",
+  "xHY93": "1a807130d0c100baeb2135a62e5d8d472fb1e55f8f"
+}

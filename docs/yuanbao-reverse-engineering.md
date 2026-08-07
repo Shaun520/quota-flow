@@ -1,0 +1,386 @@
+# 元宝（腾讯混元）视频生成 API 逆向记录
+
+> 抓包日期：2026-08-07
+> 目标：通过 Cookie 模拟浏览器调用元宝免费视频生成接口，实现 CLI 独立调用
+> 适配器源码：[src/providers/yuanbao.ts](../src/providers/yuanbao.ts)
+
+---
+
+## 一、核心 API 清单
+
+元宝视频生成涉及 3 个 API，按调用顺序：
+
+| # | API 路径 | 方法 | 用途 | 响应类型 |
+|---|---------|------|------|---------|
+| 1 | /api/user/agent/conversation/updateModel | POST | 切换/确认视频生成模型 | JSON |
+| 2 | /api/chat/{conversationId} | POST | 提交 prompt，触发视频生成 | SSE 流式 |
+| 3 | /api/user/agent/conversation/v1/detail | POST | 轮询会话详情，提取视频 URL | JSON |
+
+Base URL：https://yuanbao.tencent.com
+
+---
+
+## 二、API 详细参数
+
+### 2.1 updateModel — 切换视频生成模型
+
+请求：
+- POST /api/user/agent/conversation/updateModel
+- Content-Type: application/json
+
+请求体：
+```json
+{
+  "cid": "0PPx7bZZPWa",
+  "chatModelId": "hunyuan_gpt_175B_0404",
+  "chatModelExtInfo": "{\"modelId\":\"hunyuan_gpt_175B_0404\",\"subModelId\":\"\",\"supportFunctions\":{}}"
+}
+```
+
+作用：确保会话使用混元视频模型（hunyuan_gpt_175B_0404）。非必须步骤，但能提高成功率。适配器中用 try/catch 包裹，失败不阻塞。
+
+### 2.2 sendPrompt — 提交生成请求（SSE）
+
+请求：
+- POST /api/chat/{conversationId}
+- Content-Type: application/json
+- Accept: text/event-stream, application/json
+
+请求体（浏览器抓包确认）：
+```json
+{
+  "model": "gpt_175B_0404",
+  "prompt": "生成5秒视频：海浪拍打沙滩",
+  "plugin": "Adaptive",
+  "displayPrompt": "生成5秒视频：海浪拍打沙滩",
+  "displayPromptType": 1,
+  "agentId": "naQivTmsDa",
+  "isTemporary": false,
+  "projectId": "",
+  "chatModelId": "hunyuan_gpt_175B_0404",
+  "supportFunctions": ["openAutoSearchSwitch", "autoInternetSearch"],
+  "docOpenid": "",
+  "options": {
+    "imageIntention": {
+      "needIntentionModel": true,
+      "backendUpdateFlag": 2,
+      "intentionStatus": true
+    }
+  },
+  "multimedia": [],
+  "supportHint": 1,
+  "chatModelExtInfo": "{\"modelId\":\"hunyuan_gpt_175B_0404\",\"subModelId\":\"\",\"supportFunctions\":{\"internetSearch\":\"\"},\"internetSearch\":\"autoInternetSearch\"}",
+  "applicationIdList": [],
+  "chatSource": "prompt",
+  "version": "v2",
+  "extReportParams": null,
+  "isAtomInput": false,
+  "conversationId": "0PPx7bZZPWa",
+  "offsetOfHour": 8,
+  "offsetOfMinute": 0
+}
+```
+
+img2video 模式：multimedia 字段填图片 URL：
+```json
+"multimedia": [{ "url": "https://...", "type": "image" }]
+```
+
+SSE 响应（分段到达），成功时：
+```
+event: speech_type
+data: status
+
+data: {"type":"text"}
+...
+event: success
+data: {"stage":"draw","status":"ok","msg":"视频生成大约需要2分钟，完成后我会提醒你"}
+```
+
+失败时（额度用完/审核拒绝）：
+```
+event: error
+data: {"type":"error","msg":"抱歉，我无法回答这个问题，让我们换个话题再聊聊吧。","error":{}}
+```
+
+注意：SSE 连接是长连接，视频生成需要 1-3 分钟。适配器在收到 success 或"视频已生成"时提前 destroy 连接，不等 SSE 结束。
+
+### 2.3 detail — 轮询会话详情拿视频 URL
+
+请求：
+- POST /api/user/agent/conversation/v1/detail
+- Content-Type: application/json
+
+请求体：
+```json
+{ "conversationId": "0PPx7bZZPWa" }
+```
+
+响应结构（关键字段）：
+```json
+{
+  "id": "0PPx7bZZPWa",
+  "userId": "8c06209d9e1b42d38cfc5316f9713e59",
+  "title": "生成橘猫跳跃视频",
+  "convs": [
+    {
+      "speaker": "ai",
+      "speechesV2": [
+        {
+          "content": [
+            { "stage": "llm", "status": "ok", "msg": "正在优化提示词" },
+            { "stage": "draw", "status": "ok", "msg": "视频生成大约需要2分钟" },
+            { "stage": "success", "status": "ok", "msg": "视频已生成，今天还能生成3个" }
+          ],
+          "extra": {
+            "replaces": [
+              {
+                "topic": "以下是为你生成的视频。",
+                "multimedias": [
+                  {
+                    "url": "https://hunyuan-prod-1258344703.cos.ap-guangzhou.myqcloud.com/media-processor/...",
+                    "downloadUrl": "https://hunyuan-prod-1258344703.cos.ap-guangzhou.myqcloud.com/...",
+                    "type": "loadingVideo",
+                    "ratio": 0,
+                    "mediaId": "aca6d0d7d4d34ce3b20a140726773a3d_0",
+                    "ext": { "videoDuration": 5 }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+视频 URL 特征：
+- 域名：hunyuan-prod-1258344703.cos.ap-guangzhou.myqcloud.com
+- 路径含 /media-processor/
+- 带腾讯云 COS 签名参数（q-sign-algorithm、q-ak、q-sign-time、q-signature）
+- 签名有效期约 1 年（q-sign-time 跨度 31536000 秒）
+- Content-Type: video/mp4
+- 文件头：标准 MP4（字节 4-7 = ftyp）
+
+轮询策略：每 5 秒一次，最多 36 次（3 分钟）。
+
+---
+
+## 三、认证要求
+
+### 3.1 必需的 Cookie 字段
+
+| Cookie 字段 | 说明 | HTTPOnly |
+|-------------|------|:--------:|
+| hy_token | 登录令牌（最关键） | 是 |
+| hy_user | 用户唯一 ID | 否 |
+| hy_source | 来源（值 web） | 否 |
+| _qimei_uuid42 / _qimei_h38 等 | 腾讯设备指纹（风控） | 否 |
+
+关键：hy_token 是 HTTPOnly，document.cookie 读不到。必须从 DevTools Network 面板的请求头 Cookie 字段复制。
+
+### 3.2 必需的请求头
+
+通过浏览器 window.$webApi.getYbCommonHeaders() 生成，关键字段：
+
+| Header | 值示例 | 说明 |
+|--------|--------|------|
+| X-device-id | 1a807130d0c100baeb... | 设备 ID |
+| X-HY92 | ccb57cb8eb2135... | 风控签名 |
+| X-HY93 | 1a807130d0c100baeb... | 同 X-device-id |
+| X-Source | web | 来源 |
+| X-Language | zh-CN | 语言 |
+| X-Platform | Android | 平台标识（浏览器伪装移动端） |
+| X-webdriver | 0 | 反自动化检测 |
+| X-Instance-ID | 5 | 实例 ID |
+| X-os_version | Android(6.0)-Blink | 系统版本 |
+
+### 3.3 配置文件
+
+配置文件路径：data/yuanbao-auth.json（参考 data/yuanbao-auth.example.json）
+
+```json
+{
+  "cookie": "完整的 Cookie 请求头值（含 hy_token）",
+  "agentId": "naQivTmsDa",
+  "conversationId": "0PPx7bZZPWa",
+  "commonHeaders": {
+    "X-Instance-ID": 5,
+    "X-Platform": "Android",
+    "X-webdriver": 0,
+    "X-HY92": "ccb57cb8eb2135a62e5d8d470200000871a807",
+    "X-device-id": "1a807130d0c100baeb2135a62e5d8d472fb1e55f8f",
+    "X-HY93": "1a807130d0c100baeb2135a62e5d8d472fb1e55f8f",
+    "X-Source": "web",
+    "X-Language": "zh-CN",
+    "X-os_version": "Android(6.0)-Blink"
+  }
+}
+```
+
+commonHeaders 是可选的，但强烈推荐填写。从浏览器 window.$webApi.getYbCommonHeaders() 的返回值原样复制。
+
+---
+
+## 四、注意事项（踩坑记录）
+
+### 4.1 Cookie 和 conversationId 必须同属一个用户
+
+这是最致命的坑。Cookie 里的 hy_user 和 conversationId 的所属用户必须一致，否则 API 返回 403/服务异常。
+
+- conversationId 是 URL /chat/{agentId}/{conversationId} 的最后一段
+- 每个 conversationId 绑定创建它的用户
+- 用 A 用户的 cookie 访问 B 用户的 conversationId 会报错
+
+验证方法：调 detail API，返回的 userId 应与 cookie 里的 hy_user 一致。
+
+### 4.2 每日视频生成额度有限
+
+- 默认每天 5 次免费视频生成
+- 额度用完后，SSE 返回："今天生成视频次数已用完，明天再来试试吧～"
+- 额度刷新时间：北京时间 00:00
+- 适配器中 dailyQuota 设为 5
+
+### 4.3 SSE 返回 error 不代表完全失败
+
+SSE 可能返回"抱歉，我无法回答这个问题"，有三种情况：
+1. 额度用完：prompt 未提交，无视频生成
+2. 内容审核：prompt 被拒，无视频生成
+3. 模型未切换：updateModel 未执行，会话不在视频模式
+
+需要通过 detail API 确认实际状态，不能仅凭 SSE 判断。
+
+### 4.4 extractVideoFromDetail 的假阳性 Bug（待修复）
+
+当前问题：extractVideoFromDetail 会返回会话里任意一个视频 URL，包括之前提交的旧视频。即使最新一次 prompt 失败了，仍可能返回旧视频 URL，导致 CLI 报 ok: true 但视频是旧的。
+
+正确做法：只查找最新一次 human prompt 之后的 AI 回复中的视频。如果 AI 回复包含"次数已用完"或 error，返回 null。
+
+### 4.5 新会话创建方式
+
+元宝没有独立的"创建会话" API。创建新会话的方法：
+
+1. 浏览器访问 https://yuanbao.tencent.com/chat/{agentId}（不带 conversationId）
+2. 在输入框发送任意一条消息
+3. 页面 URL 会自动跳转为 /chat/{agentId}/{新conversationId}
+4. 从 URL 复制新的 conversationId
+
+注意：这条消息会占用会话的第一条记录，但不消耗视频额度（除非消息本身就是视频生成请求）。
+
+### 4.6 PowerShell UTF8 BOM 问题
+
+PowerShell 的 Set-Content -Encoding UTF8 会写入 BOM（Byte Order Mark），导致 Node.js JSON.parse 失败（报 Unexpected token）。
+
+解决：用 [System.IO.File]::WriteAllText + New-Object System.Text.UTF8Encoding($false) 写入无 BOM 的 UTF8。
+
+### 4.7 Router degraded 状态跳过问题（已修复）
+
+原问题：Router 的 isAvailable() 只认 active 状态，degraded（coolDown 未过期）直接跳过，即使用 --provider 指定也不调用。
+
+修复（src/router.ts）：--provider 指定时，只要有额度（rem > 0）就强制调用，不受 degraded 限制。
+
+### 4.8 videoUrl 的 type 字段
+
+detail 响应中 multimedias 的 type 字段：
+- loadingVideo：占位符，视频还在生成中
+- 其他值（或无 type）：视频已生成完成
+
+适配器中优先返回非 loadingVideo 类型的视频。
+
+---
+
+## 五、操作指南
+
+### 5.1 如何获取 Cookie 和配置
+
+#### Step 1：登录元宝
+
+打开 https://yuanbao.tencent.com ，使用微信或 QQ 登录。
+
+#### Step 2：创建会话
+
+1. 访问 https://yuanbao.tencent.com/chat/naQivTmsDa（视频生成 Agent）
+2. 在输入框发一条普通消息（如"你好"），触发创建新会话
+3. 页面 URL 变为 https://yuanbao.tencent.com/chat/naQivTmsDa/{conversationId}
+4. 记下 URL 中的 conversationId
+
+#### Step 3：获取完整 Cookie（含 HTTPOnly）
+
+1. 按 F12 打开 DevTools
+2. 切到 Network 标签
+3. 刷新页面或发送一条消息
+4. 在请求列表中找到 yuanbao.tencent.com/api/... 的请求（如 conversation/v1/detail）
+5. 点击该请求，右侧 Headers，Request Headers
+6. 找到 Cookie 字段，复制整个值（一整行，分号分隔的 key=value 对）
+
+不要用 document.cookie 复制，因为它读不到 HTTPOnly 的 hy_token。
+
+#### Step 4：获取 commonHeaders
+
+在 DevTools Console 中执行：
+```javascript
+JSON.stringify(await window.$webApi.getYbCommonHeaders(), null, 2)
+```
+复制完整输出。
+
+#### Step 5：填入配置文件
+
+编辑 data/yuanbao-auth.json，填入 cookie、agentId、conversationId、commonHeaders。
+
+### 5.2 验证 Cookie 有效性
+
+配置完成后，先 ping detail API 验证：
+- 调用 POST /api/user/agent/conversation/v1/detail
+- STATUS 应为 200
+- 返回的 userId 应与 cookie 里的 hy_user 值一致
+- title 应为会话标题
+
+### 5.3 运行 CLI 真调
+
+```bash
+# 检查额度
+npx tsx src/cli.ts check-quota --json
+
+# 生成视频（text2video）
+npx tsx src/cli.ts generate --mode text2video --prompt "生成5秒视频：一只猫在阳光下跳跃" --provider yuanbao --json
+
+# 生成视频（img2video）
+npx tsx src/cli.ts generate --mode img2video --imageUrl "https://example.com/photo.jpg" --prompt "让图片动起来" --provider yuanbao --json
+```
+
+预期成功输出包含：
+- ok: true
+- videoUrl: https://hunyuan-prod-1258344703.cos.ap-guangzhou.myqcloud.com/...
+- quotaUsed: 1
+- durationSec: 5
+
+### 5.4 验证视频 URL
+
+用 Range 请求拉前 32 字节：
+- Status 应为 206 Partial Content
+- Content-Type 应为 video/mp4
+- 字节 4-7 应为 ftyp（标准 MP4 签名）
+
+---
+
+## 六、额度与限制
+
+| 限制项 | 值 |
+|--------|-----|
+| 每日免费视频生成次数 | 5 次 |
+| 单次视频时长 | 5 秒（可选 10 秒，消耗更多额度） |
+| Cookie 有效期 | 约 7-30 天（取决于腾讯风控） |
+| 视频签名有效期 | 约 1 年（COS 长期签名） |
+| 额度刷新时间 | 北京时间 00:00 |
+
+---
+
+## 七、已知问题与待办
+
+- [ ] extractVideoFromDetail 假阳性：返回旧视频 URL 而非最新提交的结果。需改为只查找最新 human prompt 之后的 AI 回复中的视频。
+- [ ] SSE error 处理：SSE 返回 error 时，应先检查 detail 确认是否额度用完，再决定是否降级。
+- [ ] 自动创建新会话：目前需要手动创建会话获取 conversationId，未来应支持 CLI 自动创建。
+- [ ] 多账号轮转：当额度用完时自动切换到下一个账号的 cookie。
+- [ ] Cookie 过期检测：401 时自动标记账号失效，通知用户重新登录。

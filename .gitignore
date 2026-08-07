@@ -1,0 +1,18 @@
+node_modules
+dist
+data/ledger.json
+data/jobs.jsonl
+*.log
+.DS_Store
+
+# Monorepo
+.turbo
+*.tsbuildinfo
+
+# 本地编辑器配置与拷贝的全局 skill
+.trae/
+skills/
+__pycache__/
+
+# 敏感配置
+data/*-auth.json

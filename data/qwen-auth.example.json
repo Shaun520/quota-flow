@@ -1,0 +1,17 @@
+{
+  "cookie": "从 DevTools > Network > 任意请求 > Request Headers > Cookie 复制完整值",
+  "deviceId": "x-deviceid 头的值（如 09727ec3-xxxx）",
+  "xXsrfToken": "x-xsrf-token 头的值",
+  "sessionId": "URL /chat/{sessionId} 中的 sessionId",
+  "topicId": "chat 请求 body 中的 topic_id 字段",
+  "chatHeaders": {
+    "bx-ua": "从 chat 请求的 Request Headers 复制（风控签名，每次变化）",
+    "bx-umidtoken": "同上",
+    "bx_et": "同上",
+    "clt-acs-bfg": "同上",
+    "clt-acs-sign": "同上",
+    "eo-clt-actkn": "同上",
+    "eo-clt-dvidn": "同上",
+    "eo-clt-sacsft": "同上"
+  }
+}
