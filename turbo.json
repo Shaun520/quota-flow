@@ -5,6 +5,9 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
+    "@quota-flow/desktop#build": {
+      "outputs": ["out/**"]
+    },
     "typecheck": {
       "dependsOn": ["^typecheck"]
     },
