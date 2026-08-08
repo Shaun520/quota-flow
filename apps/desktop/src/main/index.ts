@@ -1,12 +1,13 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
+import { initWebviewTest } from './webview-test'
 
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    minWidth: 1120,
+    minHeight: 700,
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -18,6 +19,7 @@ function createWindow(): void {
   })
 
   win.on('ready-to-show', () => win.show())
+  initWebviewTest(win)
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     void win.loadURL(process.env['ELECTRON_RENDERER_URL'])

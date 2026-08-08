@@ -10,50 +10,150 @@ body {
 }
 
 .app {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 48px 24px;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
 }
 
-h1 {
-  margin: 0 0 8px;
-  font-size: 28px;
+.sidebar {
+  width: 360px;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  background: #0f1115;
 }
 
-.subtitle {
-  margin: 0 0 32px;
+.sidebar-header h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.sidebar-header p {
+  margin: 0;
+  font-size: 12px;
   color: #8b929c;
 }
 
 .panel {
   border: 1px solid #262b33;
   border-radius: 10px;
-  padding: 16px 20px;
-  margin-bottom: 16px;
+  padding: 14px 16px;
   background: #161a21;
 }
 
 .panel h2 {
-  margin: 0 0 12px;
-  font-size: 15px;
+  margin: 0 0 10px;
+  font-size: 13px;
   color: #9aa3af;
 }
 
-.panel ul {
-  margin: 0;
-  padding-left: 18px;
-  line-height: 1.9;
+.provider-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 button {
-  padding: 8px 16px;
+  padding: 7px 10px;
   border: 1px solid #3b4452;
   border-radius: 6px;
   background: #1f2733;
   color: #e6e8eb;
   cursor: pointer;
+  font-size: 13px;
 }
 
 button:hover {
   background: #273241;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.active,
+button.primary {
+  background: #2b5a9b;
+  border-color: #3d74c4;
+}
+
+label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #9aa3af;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #3b4452;
+  border-radius: 6px;
+  background: #0f1115;
+  color: #e6e8eb;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.tips ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #b6bcc4;
+}
+
+.log-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.log {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-family: Consolas, 'Courier New', monospace;
+}
+
+.log .empty {
+  color: #5c646e;
+}
+
+.log-line {
+  margin: 0 0 6px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.log-time {
+  color: #5c646e;
+  margin-right: 6px;
+}
+
+.log-provider {
+  color: #6ea8dc;
+  margin-right: 6px;
+}
+
+.log-line.error .log-msg {
+  color: #e58f8f;
+}
+
+.log-line.capture .log-msg {
+  color: #9dd98c;
 }
