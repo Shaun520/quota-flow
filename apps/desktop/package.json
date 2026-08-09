@@ -25,5 +25,9 @@
     "react-dom": "^19.2.8",
     "typescript": "^5.5.0",
     "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "@quota-flow/auth": "workspace:^",
+    "@quota-flow/db-supabase": "workspace:^"
   }
 }

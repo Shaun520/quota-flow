@@ -1,6 +1,49 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { initWebviewTest } from './webview-test'
+
+interface StoredSession {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+}
+
+function sessionFilePath(): string {
+  return join(app.getPath('userData'), 'auth.json')
+}
+
+function readStoredSession(): StoredSession | null {
+  try {
+    const file = sessionFilePath()
+    if (!existsSync(file) || !safeStorage.isEncryptionAvailable()) return null
+    const json = safeStorage.decryptString(
+      Buffer.from(readFileSync(file, 'utf8'), 'base64')
+    )
+    const session = JSON.parse(json) as StoredSession
+    if (typeof session.accessToken !== 'string' || typeof session.refreshToken !== 'string') {
+      return null
+    }
+    return session
+  } catch {
+    return null
+  }
+}
+
+function writeStoredSession(session: StoredSession): void {
+  if (!safeStorage.isEncryptionAvailable()) return
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  const encrypted = safeStorage.encryptString(JSON.stringify(session))
+  writeFileSync(sessionFilePath(), encrypted.toString('base64'), 'utf8')
+}
+
+function clearStoredSession(): void {
+  try {
+    rmSync(sessionFilePath(), { force: true })
+  } catch {
+    // ignore
+  }
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -43,6 +86,18 @@ app.whenReady().then(() => {
     else win.maximize()
   })
   ipcMain.handle('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  ipcMain.handle('auth:get-session', () => readStoredSession())
+  ipcMain.handle('auth:set-session', (_e, session: StoredSession) => {
+    if (!session || typeof session.accessToken !== 'string' || typeof session.refreshToken !== 'string') {
+      throw new Error('invalid session payload')
+    }
+    writeStoredSession({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      expiresAt: typeof session.expiresAt === 'number' ? session.expiresAt : 0
+    })
+  })
+  ipcMain.handle('auth:clear-session', () => clearStoredSession())
   createWindow()
 
   app.on('activate', () => {

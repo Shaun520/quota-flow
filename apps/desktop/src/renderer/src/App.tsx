@@ -4,7 +4,12 @@ import Dashboard from './components/Dashboard'
 import Providers from './components/Providers'
 import History from './components/History'
 import Team from './components/Team'
+import TitleBar from './components/TitleBar'
 import { BrandMark } from './components/Brand'
+import AuthScreen from './auth/AuthScreen'
+import { useAuth } from './hooks/useAuth'
+import type { AuthUser } from './hooks/useAuth'
+import type { TeamContext } from '@quota-flow/db-supabase'
 import { ProfileModal, SettingsModal, getInitialTheme, applyTheme, getInitialFontSize, applyFontSize } from './components/Modals'
 import {
   IconClock,
@@ -31,59 +36,13 @@ const TABS: TabDef[] = [
   { id: 'team', label: '团队', icon: IconUsers }
 ]
 
-function TitleBar() {
-  const [maximized, setMaximized] = useState(false)
-
-  useEffect(() => {
-    if (!window.api?.windowControls?.onMaximizeChange) return
-    return window.api.windowControls.onMaximizeChange(setMaximized)
-  }, [])
-
-  return (
-    <div className="title-bar">
-      <div className="title-bar-text">Quota-Flow · Unified LLM Router</div>
-      <div className="window-controls">
-        <button
-          title="最小化"
-          aria-label="最小化"
-          onClick={() => void window.api?.windowControls?.minimize?.()}
-        >
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-            <rect x="1" y="5.5" width="10" height="1" fill="currentColor" />
-          </svg>
-        </button>
-        <button
-          title={maximized ? '还原' : '最大化'}
-          aria-label={maximized ? '还原' : '最大化'}
-          onClick={() => void window.api?.windowControls?.toggleMaximize?.()}
-        >
-          {maximized ? (
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-              <rect x="1.5" y="3.5" width="7" height="7" stroke="currentColor" />
-              <path d="M3.5 3.5V1.5h7v7h-2" stroke="currentColor" />
-            </svg>
-          ) : (
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-              <rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor" />
-            </svg>
-          )}
-        </button>
-        <button
-          className="btn-close"
-          title="关闭"
-          aria-label="关闭"
-          onClick={() => void window.api?.windowControls?.close?.()}
-        >
-          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-            <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.2" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  )
+interface MainAppProps {
+  user: AuthUser
+  team: TeamContext | null
+  onSignOut: () => Promise<void>
 }
 
-export default function App() {
+function MainApp({ user, team, onSignOut }: MainAppProps) {
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -128,10 +87,10 @@ export default function App() {
         <div className="user-area">
           <div className="team-badge">
             <IconUsers size={10} />
-            团队免费 · 2/3
+            {team ? '团队 · ' + team.id.slice(0, 8) : '个人模式'}
           </div>
           <div className="avatar-wrap">
-            <div className="avatar">L</div>
+            <div className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</div>
             <div className="avatar-dropdown">
               <button className="dropdown-item" onClick={() => setModal('profile')}>
                 <IconUser size={14} />
@@ -142,7 +101,11 @@ export default function App() {
                 设置
               </button>
               <div className="dropdown-divider" />
-              <button className="dropdown-item" style={{ color: 'var(--error)' }}>
+              <button
+                className="dropdown-item"
+                style={{ color: 'var(--error)' }}
+                onClick={() => void onSignOut()}
+              >
                 <IconLogout size={14} />
                 退出登录
               </button>
@@ -182,4 +145,98 @@ export default function App() {
       {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
     </div>
   )
+}
+
+function SplashScreen() {
+  return (
+    <div className="auth-shell">
+      <TitleBar />
+      <div className="auth-wrap">
+        <div className="auth-card" style={{ alignItems: 'center', gap: 12, padding: '40px 48px' }}>
+          <BrandMark size={30} className="brand-icon" />
+          <span style={{ color: 'var(--fg-muted)' }}>正在恢复会话…</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ConfigWarning() {
+  return (
+    <div className="auth-shell">
+      <TitleBar />
+      <div className="auth-wrap">
+        <div className="auth-card" style={{ gap: 10, maxWidth: 420 }}>
+          <div className="auth-title" style={{ fontSize: '1.2em' }}>
+            未配置 Supabase
+          </div>
+          <p style={{ color: 'var(--fg-secondary)', margin: 0, lineHeight: 1.7 }}>
+            请在 <code>apps/desktop/.env</code> 中设置{' '}
+            <code>VITE_SUPABASE_URL</code> 与 <code>VITE_SUPABASE_ANON_KEY</code> 后重启应用。
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword } =
+    useAuth()
+  const [submitting, setSubmitting] = useState(false)
+
+  if (loading) return <SplashScreen />
+  if (!configured) return <ConfigWarning />
+
+  if (!user) {
+    return (
+      <AuthScreen
+        error={error}
+        notice={notice}
+        submitting={submitting}
+        onSignIn={async (email, password) => {
+          setSubmitting(true)
+          try {
+            await signIn(email, password)
+          } finally {
+            setSubmitting(false)
+          }
+        }}
+        onSignUp={async (email, token, password, displayName) => {
+          setSubmitting(true)
+          try {
+            await signUp(email, token, password, displayName)
+          } finally {
+            setSubmitting(false)
+          }
+        }}
+        onSendOtp={async (email) => {
+          setSubmitting(true)
+          try {
+            await sendOtp(email)
+          } finally {
+            setSubmitting(false)
+          }
+        }}
+        onVerifyOtp={async (email, token) => {
+          setSubmitting(true)
+          try {
+            await verifyOtp(email, token)
+          } finally {
+            setSubmitting(false)
+          }
+        }}
+        onResendOtp={async (email) => {
+          setSubmitting(true)
+          try {
+            await sendOtp(email)
+          } finally {
+            setSubmitting(false)
+          }
+        }}
+      />
+    )
+  }
+
+  return <MainApp user={user} team={team} onSignOut={signOut} />
 }

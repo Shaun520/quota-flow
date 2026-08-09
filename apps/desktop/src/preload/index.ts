@@ -10,6 +10,12 @@ export interface WebviewTestEvent {
   ts: number
 }
 
+export interface AuthSessionTokens {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+}
+
 export interface DesktopApi {
   versions: {
     electron: string
@@ -17,6 +23,11 @@ export interface DesktopApi {
     node: string
   }
   ping: () => Promise<string>
+  auth: {
+    getSession: () => Promise<AuthSessionTokens | null>
+    setSession: (tokens: AuthSessionTokens) => Promise<void>
+    clearSession: () => Promise<void>
+  }
   windowControls: {
     minimize: () => Promise<void>
     toggleMaximize: () => Promise<void>
@@ -60,6 +71,11 @@ const api: DesktopApi = {
     node: process.versions.node ?? ''
   },
   ping: () => ipcRenderer.invoke('ping') as Promise<string>,
+  auth: {
+    getSession: () => ipcRenderer.invoke('auth:get-session') as Promise<AuthSessionTokens | null>,
+    setSession: (tokens) => ipcRenderer.invoke('auth:set-session', tokens) as Promise<void>,
+    clearSession: () => ipcRenderer.invoke('auth:clear-session') as Promise<void>
+  },
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
