@@ -1,199 +1,185 @@
-import { useEffect, useRef, useState } from 'react'
-import type { ProviderId, WebviewTestEvent } from '../../preload'
+import { useEffect, useState } from 'react'
+import type { ComponentType } from 'react'
+import Dashboard from './components/Dashboard'
+import Providers from './components/Providers'
+import History from './components/History'
+import Team from './components/Team'
+import { BrandMark } from './components/Brand'
+import { ProfileModal, SettingsModal, getInitialTheme, applyTheme, getInitialFontSize, applyFontSize } from './components/Modals'
+import {
+  IconClock,
+  IconGear,
+  IconGrid,
+  IconLogout,
+  IconMonitor,
+  IconUser,
+  IconUsers
+} from './components/icons'
 
-interface LogLine {
-  id: number
-  ts: number
-  provider: ProviderId
-  type: WebviewTestEvent['type']
-  message: string
+type TabId = 'dispatch' | 'providers' | 'history' | 'team'
+
+interface TabDef {
+  id: TabId
+  label: string
+  icon: ComponentType<{ size?: number }>
 }
 
-const PROVIDER_LABEL: Record<ProviderId, string> = {
-  yuanbao: '元宝',
-  qwenwan: '千问'
-}
+const TABS: TabDef[] = [
+  { id: 'dispatch', label: '调度台', icon: IconGrid },
+  { id: 'providers', label: '厂商', icon: IconMonitor },
+  { id: 'history', label: '历史', icon: IconClock },
+  { id: 'team', label: '团队', icon: IconUsers }
+]
 
-let nextId = 1
-
-export default function App() {
-  const [provider, setProvider] = useState<ProviderId>('yuanbao')
-  const [prompt, setPrompt] = useState('生成5秒视频：一只猫在阳光下跳跃')
-  const [logs, setLogs] = useState<LogLine[]>([])
-  const [busy, setBusy] = useState(false)
-  const logRef = useRef<HTMLDivElement>(null)
+function TitleBar() {
+  const [maximized, setMaximized] = useState(false)
 
   useEffect(() => {
-    const unsubscribe = window.api.webviewTest.onEvent((event) => {
-      setLogs((prev) =>
-        [
-          ...prev,
-          { id: nextId++, ts: event.ts, provider: event.provider, type: event.type, message: event.message }
-        ].slice(-500)
-      )
-    })
-    return unsubscribe
+    if (!window.api?.windowControls?.onMaximizeChange) return
+    return window.api.windowControls.onMaximizeChange(setMaximized)
   }, [])
 
+  return (
+    <div className="title-bar">
+      <div className="title-bar-text">Quota-Flow · Unified LLM Router</div>
+      <div className="window-controls">
+        <button
+          title="最小化"
+          aria-label="最小化"
+          onClick={() => void window.api?.windowControls?.minimize?.()}
+        >
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <rect x="1" y="5.5" width="10" height="1" fill="currentColor" />
+          </svg>
+        </button>
+        <button
+          title={maximized ? '还原' : '最大化'}
+          aria-label={maximized ? '还原' : '最大化'}
+          onClick={() => void window.api?.windowControls?.toggleMaximize?.()}
+        >
+          {maximized ? (
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <rect x="1.5" y="3.5" width="7" height="7" stroke="currentColor" />
+              <path d="M3.5 3.5V1.5h7v7h-2" stroke="currentColor" />
+            </svg>
+          ) : (
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor" />
+            </svg>
+          )}
+        </button>
+        <button
+          className="btn-close"
+          title="关闭"
+          aria-label="关闭"
+          onClick={() => void window.api?.windowControls?.close?.()}
+        >
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.2" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  const [tab, setTab] = useState<TabId>(() => {
+    const hit = location.hash.match(/#tab=(.+)/)
+    const t = hit ? hit[1] : 'dispatch'
+    return (['dispatch', 'providers', 'history', 'team'] as TabId[]).includes(t as TabId)
+      ? (t as TabId)
+      : 'dispatch'
+  })
+  const [modal, setModal] = useState<'profile' | 'settings' | null>(null)
+
   useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [logs])
-
-  const run = async (label: string, action: () => Promise<unknown>): Promise<void> => {
-    setBusy(true)
-    try {
-      const result = (await action()) as {
-        ok?: boolean
-        message?: string
-        reason?: string
-        error?: string
-      }
-      const text =
-        result?.message ??
-        result?.reason ??
-        (result?.error ? `失败：${result.error}` : result?.ok === false ? '操作未成功' : '完成')
-      setLogs((prev) => [
-        ...prev,
-        { id: nextId++, ts: Date.now(), provider, type: 'log', message: `${label}: ${text}` }
-      ])
-    } catch (err) {
-      setLogs((prev) => [
-        ...prev,
-        {
-          id: nextId++,
-          ts: Date.now(),
-          provider,
-          type: 'error',
-          message: `${label} 异常：${err instanceof Error ? err.message : String(err)}`
-        }
-      ])
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const formatTime = (ts: number): string =>
-    new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
+    applyTheme(getInitialTheme())
+    applyFontSize(getInitialFontSize())
+  }, [])
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <header className="sidebar-header">
-          <h1>Quota-Flow WebView 测试台</h1>
-          <p>验证元宝 / 千问 WebView 视频生成可行性</p>
-        </header>
+    <div className="app-shell">
+      <TitleBar />
 
-        <section className="panel">
-          <div className="provider-switch">
-            {(Object.keys(PROVIDER_LABEL) as ProviderId[]).map((p) => (
-              <button
-                key={p}
-                className={provider === p ? 'active' : ''}
-                onClick={() => setProvider(p)}
-                disabled={busy}
-              >
-                {PROVIDER_LABEL[p]}
-              </button>
-            ))}
-          </div>
-          <div className="actions">
+      {/* 顶部导航：主 Tab + 用户区 */}
+      <nav className="top-nav">
+        <div className="brand">
+          <BrandMark size={18} className="brand-icon" />
+          <span>Quota-Flow</span>
+        </div>
+        {TABS.map((t) => {
+          const Icon = t.icon
+          return (
             <button
-              onClick={() => void run(`打开 ${PROVIDER_LABEL[provider]}`, () => window.api.webviewTest.open(provider))}
-              disabled={busy}
-            >
-              打开 WebView
-            </button>
-            <button
-              onClick={() => void run('注入 Cookie', () => window.api.webviewTest.injectCookies(provider))}
-              disabled={busy}
-            >
-              注入本地 Cookie
-            </button>
-            <button
-              onClick={async () => {
-                setBusy(true)
-                try {
-                  const info = await window.api.webviewTest.inspect(provider)
-                  setLogs((prev) => [
-                    ...prev,
-                    {
-                      id: nextId++,
-                      ts: Date.now(),
-                      provider,
-                      type: 'log',
-                      message: `DOM 诊断：输入框=${info.inputFound ? info.inputTag : '未找到'}，候选按钮：${JSON.stringify(info.candidates)}`
-                    }
-                  ])
-                } finally {
-                  setBusy(false)
-                }
+              key={t.id}
+              className={'nav-tab' + (tab === t.id ? ' active' : '')}
+              onClick={() => {
+                setTab(t.id)
+                location.hash = 'tab=' + t.id
               }}
-              disabled={busy}
             >
-              诊断 DOM
+              <Icon size={15} />
+              {t.label}
             </button>
-            <button onClick={() => void window.api.webviewTest.openDevTools(provider)} disabled={busy}>
-              打开 DevTools
-            </button>
-          </div>
-        </section>
+          )
+        })}
 
-        <section className="panel">
-          <label htmlFor="prompt">生成 Prompt</label>
-          <textarea
-            id="prompt"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={3}
-            disabled={busy}
-          />
-          <div className="actions">
-            <button
-              className="primary"
-              onClick={() => void run('自动填写并发送', () => window.api.webviewTest.autoSend(provider, prompt))}
-              disabled={busy}
-            >
-              自动填写并发送
-            </button>
-            <button
-              onClick={() => void run('轮询视频结果', () => window.api.webviewTest.poll(provider))}
-              disabled={busy}
-            >
-              {busy ? '处理中…' : '轮询结果'}
-            </button>
-            <button
-              onClick={() => void run('关闭', () => window.api.webviewTest.close(provider))}
-              disabled={busy}
-            >
-              关闭视图
-            </button>
+        <div className="user-area">
+          <div className="team-badge">
+            <IconUsers size={10} />
+            团队免费 · 2/3
           </div>
-        </section>
-
-        <section className="panel tips">
-          <h2>操作提示</h2>
-          <ul>
-            <li>先“注入 Cookie”，再打开 WebView；也可以直接在右侧手动登录</li>
-            <li>自动填写失败时，可手动在右侧输入并发送，DevTools 里能看到真实网络请求</li>
-            <li>发送后等待“捕获生成请求”日志出现，再点“轮询结果”取视频 URL</li>
-            <li>每次真实发送都会消耗当日 1 次免费额度（两家各 5 次/天）</li>
-          </ul>
-        </section>
-
-        <section className="panel log-panel">
-          <h2>运行日志</h2>
-          <div className="log" ref={logRef}>
-            {logs.length === 0 && <p className="empty">暂无日志</p>}
-            {logs.map((l) => (
-              <p key={l.id} className={`log-line ${l.type}`}>
-                <span className="log-time">{formatTime(l.ts)}</span>
-                <span className="log-provider">{PROVIDER_LABEL[l.provider]}</span>
-                <span className="log-msg">{l.message}</span>
-              </p>
-            ))}
+          <div className="avatar-wrap">
+            <div className="avatar">L</div>
+            <div className="avatar-dropdown">
+              <button className="dropdown-item" onClick={() => setModal('profile')}>
+                <IconUser size={14} />
+                个人中心
+              </button>
+              <button className="dropdown-item" onClick={() => setModal('settings')}>
+                <IconGear size={14} />
+                设置
+              </button>
+              <div className="dropdown-divider" />
+              <button className="dropdown-item" style={{ color: 'var(--error)' }}>
+                <IconLogout size={14} />
+                退出登录
+              </button>
+            </div>
           </div>
-        </section>
-      </aside>
+        </div>
+      </nav>
+
+      {/* 主体内容 */}
+      <main className="main-content">
+        <div className="content-inner">
+          {tab === 'dispatch' && (
+            <Dashboard onGoHistory={() => setTab('history')} onGoProviders={() => setTab('providers')} />
+          )}
+          {tab === 'providers' && <Providers />}
+          {tab === 'history' && <History />}
+          {tab === 'team' && <Team />}
+        </div>
+      </main>
+
+      {/* 底部状态栏 */}
+      <footer className="status-bar">
+        <div className="status-left">
+          <div className="status-item">
+            <span className="status-dot" />
+            调度引擎正常
+          </div>
+          <div className="status-item">上次刷新：14:32</div>
+          <div className="status-item">自动续命：03:00</div>
+        </div>
+        <div className="status-right">
+          <div className="status-item">Quota-Flow v0.9.0</div>
+        </div>
+      </footer>
+
+      {modal === 'profile' && <ProfileModal onClose={() => setModal(null)} />}
+      {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
     </div>
   )
 }

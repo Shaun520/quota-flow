@@ -20,3 +20,11 @@ data/*-auth.json
 # 桌面端构建产物
 apps/desktop/out/
 apps/desktop/release/
+apps/desktop/release-new/
+apps/desktop/build/
+
+# 原型图
+docs/prototype/
+
+
+.codex/

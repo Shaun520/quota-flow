@@ -42,6 +42,7 @@ interface CapturedRequest {
 }
 
 const SIDEBAR_WIDTH = 360
+const TOPBAR_HEIGHT = 56
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
 
@@ -439,9 +440,9 @@ class WebviewTestManager {
       if (view.getVisible()) {
         view.setBounds({
           x: SIDEBAR_WIDTH,
-          y: 0,
+          y: TOPBAR_HEIGHT,
           width: Math.max(200, w - SIDEBAR_WIDTH),
-          height: h
+          height: Math.max(200, h - TOPBAR_HEIGHT)
         })
       }
     }

@@ -1,11 +1,13 @@
 appId: com.quotaflow.desktop
 productName: Quota-Flow
+electronDist: node_modules/electron/dist
 directories:
   output: release
 files:
   - out/**
 asar: true
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:

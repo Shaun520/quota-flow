@@ -17,6 +17,12 @@ export interface DesktopApi {
     node: string
   }
   ping: () => Promise<string>
+  windowControls: {
+    minimize: () => Promise<void>
+    toggleMaximize: () => Promise<void>
+    close: () => Promise<void>
+    onMaximizeChange: (callback: (maximized: boolean) => void) => () => void
+  }
   webviewTest: {
     open: (provider: ProviderId) => Promise<{ ok: boolean; message: string }>
     close: (provider: ProviderId) => Promise<void>
@@ -54,6 +60,19 @@ const api: DesktopApi = {
     node: process.versions.node ?? ''
   },
   ping: () => ipcRenderer.invoke('ping') as Promise<string>,
+  windowControls: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    onMaximizeChange: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, maximized: boolean): void =>
+        callback(maximized)
+      ipcRenderer.on('window:maximize-changed', listener)
+      return () => {
+        ipcRenderer.removeListener('window:maximize-changed', listener)
+      }
+    }
+  },
   webviewTest: {
     open: (provider) => ipcRenderer.invoke('webview-test:open', provider),
     close: (provider) => ipcRenderer.invoke('webview-test:close', provider),
