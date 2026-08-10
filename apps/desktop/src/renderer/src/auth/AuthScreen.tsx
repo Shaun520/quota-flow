@@ -37,6 +37,22 @@ export default function AuthScreen({
   const [showPassword, setShowPassword] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [otpSent, setOtpSent] = useState(false)
+  const [showSuggestions, setShowSuggestions] = useState(false)
+
+  const emailDomains = ['qq.com', '163.com', '126.com', 'gmail.com', 'outlook.com', 'foxmail.com', 'icloud.com', 'yeah.net']
+
+  function getEmailSuggestions(input: string): string[] {
+    const atIndex = input.indexOf('@')
+    if (atIndex === -1) return []
+    const prefix = input.slice(0, atIndex)
+    const typedDomain = input.slice(atIndex + 1).toLowerCase()
+    if (!prefix) return []
+    return emailDomains
+      .filter(d => d.startsWith(typedDomain) && d !== typedDomain)
+      .map(d => `${prefix}@${d}`)
+  }
+
+  const emailSuggestions = getEmailSuggestions(email)
 
   function startCountdown(): void {
     setCountdown(60)
@@ -100,6 +116,8 @@ export default function AuthScreen({
     await onResendOtp(email)
   }
 
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+
   return (
     <div className="auth-shell">
       <TitleBar />
@@ -144,16 +162,31 @@ export default function AuthScreen({
             <form className="auth-form" onSubmit={(e) => void handlePasswordLogin(e)}>
               <label className="auth-field">
                 <span>邮箱</span>
-                <div className="auth-input-wrap">
+                <div className="auth-input-wrap auth-email-wrap">
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                     placeholder="请输入邮箱地址"
                     required
                     autoFocus
                     autoComplete="email"
                   />
+                  {showSuggestions && emailSuggestions.length > 0 && (
+                    <div className="auth-email-suggestions">
+                      {emailSuggestions.map(s => (
+                        <div
+                          key={s}
+                          className="auth-email-suggestion"
+                          onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
+                        >
+                          {s}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </label>
               <label className="auth-field">
@@ -188,16 +221,31 @@ export default function AuthScreen({
             <form className="auth-form" onSubmit={(e) => void (token ? handleOtpVerify(e) : handleOtpSend(e))}>
               <label className="auth-field">
                 <span>邮箱</span>
-                <div className="auth-input-wrap">
+                <div className="auth-input-wrap auth-email-wrap">
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                     placeholder="请输入邮箱地址"
                     required
                     autoFocus
                     autoComplete="email"
                   />
+                  {showSuggestions && emailSuggestions.length > 0 && (
+                    <div className="auth-email-suggestions">
+                      {emailSuggestions.map(s => (
+                        <div
+                          key={s}
+                          className="auth-email-suggestion"
+                          onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
+                        >
+                          {s}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </label>
               <label className="auth-field">
@@ -216,7 +264,7 @@ export default function AuthScreen({
                   <button
                     type="button"
                     className="auth-send-btn"
-                    disabled={countdown > 0}
+                    disabled={countdown > 0 || !isValidEmail}
                     onClick={() => void handleOtpSend({ preventDefault: () => {} } as FormEvent)}
                   >
                     {countdown > 0 ? `${countdown}s` : '发送验证码'}
@@ -248,15 +296,30 @@ export default function AuthScreen({
               </label>
               <label className="auth-field">
                 <span>邮箱</span>
-                <div className="auth-input-wrap">
+                <div className="auth-input-wrap auth-email-wrap">
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                     placeholder="请输入邮箱地址"
                     required
                     autoComplete="email"
                   />
+                  {showSuggestions && emailSuggestions.length > 0 && (
+                    <div className="auth-email-suggestions">
+                      {emailSuggestions.map(s => (
+                        <div
+                          key={s}
+                          className="auth-email-suggestion"
+                          onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
+                        >
+                          {s}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </label>
               <label className="auth-field">
@@ -275,7 +338,7 @@ export default function AuthScreen({
                   <button
                     type="button"
                     className="auth-send-btn"
-                    disabled={countdown > 0 || !email}
+                    disabled={countdown > 0 || !isValidEmail}
                     onClick={() => void handleSendOtpForRegister({ preventDefault: () => {} } as FormEvent)}
                   >
                     {countdown > 0 ? `${countdown}s` : '发送验证码'}

@@ -1849,6 +1849,35 @@ textarea::-webkit-scrollbar {
 .auth-input-wrap input:focus {
   border-color: var(--accent);
 }
+.auth-email-wrap {
+  flex-direction: column;
+  align-items: stretch;
+}
+.auth-email-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  max-height: 160px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.auth-email-suggestion {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 0.9em;
+  color: var(--fg-secondary);
+  transition: background 0.15s ease;
+}
+.auth-email-suggestion:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
 .auth-input-row {
   display: flex;
   gap: 10px;
