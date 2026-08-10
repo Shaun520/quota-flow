@@ -41,14 +41,16 @@ interface MainAppProps {
   user: AuthUser
   team: TeamContext | null
   fresh: boolean
+  bannerVisible: boolean
   setFresh: (v: boolean) => void
   onboardStep: 1 | 2 | 3
   completeStep: (n: 1 | 2 | 3) => void
   onFinishOnboarding: () => void
+  onDismissBanner: () => void
   onSignOut: () => Promise<void>
 }
 
-function MainApp({ user, team, fresh, setFresh, onboardStep, completeStep, onFinishOnboarding, onSignOut }: MainAppProps) {
+function MainApp({ user, team, fresh, bannerVisible, setFresh, onboardStep, completeStep, onFinishOnboarding, onDismissBanner, onSignOut }: MainAppProps) {
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -127,19 +129,21 @@ function MainApp({ user, team, fresh, setFresh, onboardStep, completeStep, onFin
 
       {/* 主体内容 */}
       <main className="main-content">
-        {fresh && (
-          <WelcomeBanner
-            displayName={user.displayName}
-            step={onboardStep}
-            onGoProviders={() => setTab('providers')}
-            onGoDashboard={() => setTab('dispatch')}
-            onStep3Done={onFinishOnboarding}
-          />
-        )}
         <div className="content-inner">
+          {bannerVisible && (
+            <WelcomeBanner
+              displayName={user.displayName}
+              step={onboardStep}
+              onGoProviders={() => setTab('providers')}
+              onGoDashboard={() => setTab('dispatch')}
+              onStep3Done={onFinishOnboarding}
+              onDismiss={onDismissBanner}
+            />
+          )}
           {tab === 'dispatch' && (
             <Dashboard
               fresh={fresh}
+              banner={bannerVisible}
               step={onboardStep}
               onGenerate={() => completeStep(2)}
               onGoHistory={() => setTab('history')}
@@ -227,9 +231,25 @@ export default function App() {
       return 1
     }
   })
+  const [bannerDismissed, setBannerDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('quota-flow:welcome-dismissed') === '1'
+    } catch {
+      return false
+    }
+  })
+  const bannerVisible = fresh && !bannerDismissed
 
   const updateFresh = useCallback((v: boolean) => {
     setFresh(v)
+    if (v) {
+      setBannerDismissed(false)
+      try {
+        localStorage.removeItem('quota-flow:welcome-dismissed')
+      } catch {
+        // ignore
+      }
+    }
     try {
       localStorage.setItem('quota-flow:fresh-user', v ? '1' : '0')
     } catch {
@@ -249,14 +269,27 @@ export default function App() {
     })
   }, [])
 
+  const hideBanner = useCallback(() => {
+    setBannerDismissed(true)
+    try {
+      localStorage.setItem('quota-flow:welcome-dismissed', '1')
+    } catch {
+      // ignore
+    }
+  }, [])
+
   const finishOnboarding = useCallback(() => {
-    updateFresh(false)
+    hideBanner()
     try {
       localStorage.setItem('quota-flow:onboard-step', '3')
     } catch {
       // ignore
     }
-  }, [updateFresh])
+  }, [hideBanner])
+
+  // Hiding the banner (dismiss/close) keeps real user data; only the layout
+  // stays aligned with the demo mode. It does NOT switch to mock data.
+  const dismissBanner = hideBanner
 
   if (loading) return <SplashScreen />
   if (!configured) return <ConfigWarning />
@@ -316,10 +349,12 @@ export default function App() {
       user={user}
       team={team}
       fresh={fresh}
+      bannerVisible={bannerVisible}
       setFresh={updateFresh}
       onboardStep={onboardStep}
       completeStep={completeStep}
       onFinishOnboarding={finishOnboarding}
+      onDismissBanner={dismissBanner}
       onSignOut={signOut}
     />
   )

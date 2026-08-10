@@ -34,7 +34,7 @@ export default function Providers({ fresh, onBound }: ProvidersProps) {
   const pagedRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
-    <>
+    <div className="tab-wrap">
       <div className="page-header">
         <div className="title-group">
           <div>
@@ -141,7 +141,7 @@ export default function Providers({ fresh, onBound }: ProvidersProps) {
           }}
         />
       )}
-    </>
+    </div>
   )
 }
 

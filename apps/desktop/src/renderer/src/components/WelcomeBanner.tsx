@@ -1,7 +1,4 @@
-import { useState } from 'react'
 import { IconClose } from './icons'
-
-const WELCOME_DISMISS_KEY = 'quota-flow:welcome-dismissed'
 
 interface WelcomeBannerProps {
   displayName: string
@@ -9,6 +6,7 @@ interface WelcomeBannerProps {
   onGoProviders: () => void
   onGoDashboard: () => void
   onStep3Done: () => void
+  onDismiss: () => void
 }
 
 const STEP_DEFS = [
@@ -22,27 +20,9 @@ export default function WelcomeBanner({
   step,
   onGoProviders,
   onGoDashboard,
-  onStep3Done
+  onStep3Done,
+  onDismiss
 }: WelcomeBannerProps) {
-  const [dismissed, setDismissed] = useState(() => {
-    try {
-      return localStorage.getItem(WELCOME_DISMISS_KEY) === '1'
-    } catch {
-      return false
-    }
-  })
-
-  if (dismissed) return null
-
-  const dismiss = (): void => {
-    try {
-      localStorage.setItem(WELCOME_DISMISS_KEY, '1')
-    } catch {
-      // ignore
-    }
-    setDismissed(true)
-  }
-
   return (
     <div className="welcome-banner">
       <div className="welcome-main">
@@ -82,12 +62,12 @@ export default function WelcomeBanner({
               完成，开始使用 ✓
             </button>
           )}
-          <button className="btn-sm" onClick={dismiss}>
+          <button className="btn-sm" onClick={onDismiss}>
             稍后再说
           </button>
         </div>
       </div>
-      <button className="welcome-close" onClick={dismiss} aria-label="关闭引导">
+      <button className="welcome-close" onClick={onDismiss} aria-label="关闭引导">
         <IconClose size={14} />
       </button>
     </div>

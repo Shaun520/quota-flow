@@ -28,7 +28,7 @@ export default function History() {
   const pagedRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
-    <>
+    <div className="tab-wrap">
       <div className="page-header">
         <div className="title-group">
           <div>
@@ -124,6 +124,6 @@ export default function History() {
           <Pagination page={page} total={rows.length} pageSize={PAGE_SIZE} onChange={setPage} />
         </div>
       </div>
-    </>
+    </div>
   )
 }

@@ -146,6 +146,15 @@
 [data-theme="dark"] .job-card .job-thumb::after {
   border-left-color: var(--accent);
 }
+[data-theme="dark"] .job-card .job-thumb {
+  background: linear-gradient(135deg, #2a2a2a 0%, #3a3a3a 100%);
+}
+[data-theme="dark"] .job-card:nth-child(2n) .job-thumb {
+  background: linear-gradient(135deg, #33332e 0%, #2a2a2a 100%);
+}
+[data-theme="dark"] .job-card:nth-child(3n) .job-thumb {
+  background: linear-gradient(135deg, #2a2a2a 0%, #383230 100%);
+}
 [data-theme="dark"] .upload-zone:hover {
   border-color: var(--accent);
   color: var(--accent);
@@ -431,9 +440,12 @@ body {
 /* ===== 主体内容区（一屏显示） ===== */
 .main-content {
   flex: 1;
-  padding: 12px 20px;
+  padding: 10px 20px 10px;
   overflow: hidden;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .main-content::before,
 .main-content::after {
@@ -463,10 +475,26 @@ body {
   z-index: 1;
   max-width: 1280px;
   margin: 0 auto;
-  height: 100%;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.dashboard-wrap,
+.tab-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 5px;
+}
+
+/* 窗口高度不足时，「最近生成」不再被裁掉，而是由容器滚动 */
+.dashboard-wrap {
+  overflow-y: auto;
 }
 
 .page-header {
@@ -505,7 +533,21 @@ body {
   grid-template-columns: 1fr 320px;
   grid-template-rows: 1fr;
   gap: 12px;
+  flex-shrink: 0;
+  /* 无 banner（有最近生成）时：固定合适高度，给「最近生成」腾出空间。
+     生成面板与厂商列表压缩后自然高度约 405px，这里留少量余量，
+     超窄屏仍可收缩，不足时由 .dashboard-wrap 滚动。 */
+  flex-basis: 420px;
+  max-height: 420px;
+  min-height: 360px;
+}
+
+/* 有 banner（新用户、无最近生成）时：让 dispatch-grid 主动占满剩余垂直空间，
+   与有 banner 场景下生成面板/厂商状态的"占满感"保持一致。 */
+.dashboard-wrap.has-banner .dispatch-grid {
   flex: 1;
+  flex-basis: 0;
+  max-height: none;
   min-height: 0;
 }
 
@@ -514,13 +556,11 @@ body {
   border: 1px solid var(--border-light);
   border-top-color: rgba(255, 255, 255, 0.6);
   border-radius: var(--radius-lg);
-  padding: 12px 16px;
+  padding: 10px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-height: 0;
+  gap: 4px;
   box-shadow: var(--shadow-card);
-  height: 100%;
 }
 .panel-header {
   display: flex;
@@ -532,6 +572,7 @@ body {
   font-family: var(--font-display);
   font-size: 1.23em;
   font-weight: 600;
+  line-height: 1.3;
 }
 .panel-header .panel-meta {
   font-size: 0.85em;
@@ -542,11 +583,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  flex: 1;
-  min-height: 0;
 }
 .input-group label {
-  font-size: 0.85em;
+  font-size: 0.8em;
   font-weight: 600;
   color: var(--fg-secondary);
   text-transform: uppercase;
@@ -555,8 +594,7 @@ body {
 }
 .input-group textarea {
   width: 100%;
-  height: 100%;
-  min-height: 0;
+  min-height: 84px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -592,7 +630,7 @@ body {
   gap: 4px;
 }
 .param-field label {
-  font-size: 0.85em;
+  font-size: 0.8em;
   font-weight: 600;
   color: var(--fg-secondary);
   text-transform: uppercase;
@@ -600,7 +638,7 @@ body {
 }
 .param-field select {
   width: 100%;
-  height: 32px;
+  height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -640,7 +678,7 @@ body {
 .upload-zone {
   border: 1.5px dashed var(--border);
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  padding: 5px 10px;
   text-align: center;
   color: var(--fg-muted);
   font-size: 0.92em;
@@ -812,7 +850,7 @@ body {
 .provider-status-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
   overflow-y: auto;
   flex: 1;
 }
@@ -830,8 +868,8 @@ body {
 .ps-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 3px 8px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-light);
   background: var(--bg-elevated);
@@ -844,8 +882,8 @@ body {
   transform: translateY(-1px);
 }
 .ps-item .ps-icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-sm);
   background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg-base) 100%);
   border: 1px solid var(--border-light);
@@ -861,19 +899,19 @@ body {
   min-width: 0;
 }
 .ps-item .ps-name {
-  font-size: 1em;
+  font-size: 0.85em;
   font-weight: 600;
-  margin-bottom: 1px;
+  margin-bottom: 0;
 }
 .ps-item .ps-quota {
-  font-size: 0.85em;
+  font-size: 0.75em;
   color: var(--fg-muted);
 }
 .ps-item .ps-state {
   display: flex;
   align-items: center;
   gap: 3px;
-  font-size: 0.77em;
+  font-size: 0.75em;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -903,10 +941,10 @@ body {
 
 .quota-bar {
   width: 100%;
-  height: 4px;
+  height: 3px;
   background: var(--bg-hover);
   border-radius: 2px;
-  margin-top: 3px;
+  margin-top: 1px;
   overflow: hidden;
   box-shadow: var(--shadow-inset);
 }
@@ -921,8 +959,9 @@ body {
 .recent-jobs {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
+  margin-top: 10px;
 }
 .section-header {
   display: flex;
@@ -933,6 +972,7 @@ body {
   font-family: var(--font-display);
   font-size: 1.23em;
   font-weight: 600;
+  line-height: 1.3;
 }
 .section-header .section-link {
   font-size: 0.85em;
@@ -951,7 +991,7 @@ body {
 .job-list {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
+  gap: 8px;
 }
 .job-card {
   background: var(--bg-card);
@@ -972,7 +1012,7 @@ body {
 }
 .job-card .job-thumb {
   width: 100%;
-  height: 64px;
+  height: 72px;
   background: linear-gradient(135deg, var(--bg-hover) 0%, #d9d3c6 100%);
   display: flex;
   align-items: center;
@@ -981,6 +1021,24 @@ body {
   font-size: 0.85em;
   position: relative;
   overflow: hidden;
+}
+.job-card:nth-child(2n) .job-thumb {
+  background: linear-gradient(135deg, #cfd4c8 0%, var(--bg-hover) 100%);
+}
+.job-card:nth-child(3n) .job-thumb {
+  background: linear-gradient(135deg, var(--bg-hover) 0%, #d9cfc2 100%);
+}
+.job-card .job-thumb .job-duration {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.68em;
+  font-weight: 600;
+  z-index: 2;
 }
 .job-card .job-thumb::before {
   content: '';
@@ -1041,7 +1099,7 @@ body {
   color: var(--error);
 }
 .job-card .job-body {
-  padding: 8px 10px;
+  padding: 5px 10px;
   border-top: 1px solid var(--border-light);
   background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
 }
@@ -2009,37 +2067,38 @@ textarea::-webkit-scrollbar {
 /* ===== 欢迎引导卡 ===== */
 .welcome-banner {
   position: relative;
-  margin: 0 6px 16px;
-  padding: 18px 22px;
+  padding: 16px 22px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
   background: var(--accent-bg);
+  flex-shrink: 0;
+  margin-bottom: 0;
 }
 .welcome-title {
-  font-size: 1.05em;
+  font-size: 0.95em;
   font-weight: 700;
   color: var(--accent);
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 .welcome-steps {
   display: flex;
-  gap: 18px;
-  margin-bottom: 14px;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 .welcome-step {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: flex-start;
   flex: 1;
 }
 .welcome-step-num {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 0.75em;
+  font-size: 0.7em;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -2057,14 +2116,14 @@ textarea::-webkit-scrollbar {
 }
 .welcome-step strong {
   display: block;
-  font-size: 0.92em;
-  margin-bottom: 2px;
+  font-size: 0.85em;
+  margin-bottom: 1px;
 }
 .welcome-step p {
   margin: 0;
-  font-size: 0.8em;
+  font-size: 0.75em;
   color: var(--fg-muted);
-  line-height: 1.5;
+  line-height: 1.4;
 }
 .welcome-actions {
   display: flex;
@@ -2072,8 +2131,8 @@ textarea::-webkit-scrollbar {
 }
 .welcome-close {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 6px;
+  right: 6px;
   background: none;
   border: none;
   cursor: pointer;
@@ -2085,6 +2144,7 @@ textarea::-webkit-scrollbar {
 .welcome-close:hover {
   opacity: 1;
   color: var(--fg-primary);
+  background: var(--bg-hover);
 }
 
 /* ===== 空状态 ===== */

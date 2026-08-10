@@ -36,7 +36,7 @@ export default function Team({ fresh }: TeamProps) {
   }
 
   return (
-    <>
+    <div className="tab-wrap">
       <div className="page-header">
         <div className="title-group">
           <div>
@@ -111,6 +111,6 @@ export default function Team({ fresh }: TeamProps) {
           </div>
         </div>
       </div>
-    </>
+    </div>
   )
 }

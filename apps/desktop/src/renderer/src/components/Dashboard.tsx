@@ -14,13 +14,14 @@ const VIP = false
 
 interface DashboardProps {
   fresh: boolean
+  banner: boolean
   step: 1 | 2 | 3
   onGenerate?: () => void
   onGoHistory: () => void
   onGoProviders: () => void
 }
 
-export default function Dashboard({ fresh, step, onGenerate, onGoHistory, onGoProviders }: DashboardProps) {
+export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory, onGoProviders }: DashboardProps) {
   const [provider, setProvider] = useState('auto')
   const [model, setModel] = useState(MODELS.auto[0])
   const [mode, setMode] = useState('t2v')
@@ -73,7 +74,7 @@ export default function Dashboard({ fresh, step, onGenerate, onGoHistory, onGoPr
   const recentJobs = HISTORY_ROWS.slice(0, 5)
 
   return (
-    <>
+    <div className={'dashboard-wrap' + (banner ? ' has-banner' : '')}>
       <div className="page-header">
         <div className="title-group">
           <div>
@@ -322,47 +323,51 @@ export default function Dashboard({ fresh, step, onGenerate, onGoHistory, onGoPr
         </div>
       </div>
 
-      {/* 最近任务 */}
-      <div className="recent-jobs">
-        <div className="section-header">
-          <h2>最近生成</h2>
-          <button className="section-link" onClick={onGoHistory}>
-            查看全部 →
-          </button>
-        </div>
-        {fresh ? (
-          <EmptyState
-            icon={<IconPlay size={18} />}
-            title="还没有生成记录"
-            description="填写描述并开始生成，你的第一条视频将出现在这里"
-          />
-        ) : (
-          <div className="job-list">
-            {recentJobs.map((row, i) => (
-              <div className="job-card" key={i}>
-                <div className="job-thumb">
-                  <span>{row.status === '排队' ? '生成中…' : '视频预览'}</span>
-                  <span
-                    className={
-                      'job-badge ' +
-                      (row.status === '成功' ? 'success' : row.status === '排队' ? 'pending' : 'error')
-                    }
-                  >
-                    {row.status}
-                  </span>
-                </div>
-                <div className="job-body">
-                  <div className="job-prompt">{row.prompt}</div>
-                  <div className="job-meta">
-                    <span>{row.provider} · {row.mode}</span>
-                    <span>{row.cost}</span>
+      {/* 最近任务：无新手提示时展示（样式与演示模式对齐），内容为真实数据，
+         暂无记录时显示空状态，而不是 mock 卡片。 */}
+      {!banner && (
+        <div className="recent-jobs">
+          <div className="section-header">
+            <h2>最近生成</h2>
+            <button className="section-link" onClick={onGoHistory}>
+              查看全部 →
+            </button>
+          </div>
+          {fresh ? (
+            <EmptyState
+              icon={<IconPlay size={18} />}
+              title="还没有生成记录"
+              description="填写描述并开始生成，你的第一条视频将出现在这里"
+            />
+          ) : (
+            <div className="job-list">
+              {recentJobs.map((row, i) => (
+                <div className="job-card" key={i}>
+                  <div className="job-thumb">
+                    <span>{row.status === '排队' ? '生成中…' : '视频预览'}</span>
+                    {row.duration && <span className="job-duration">{row.duration}</span>}
+                    <span
+                      className={
+                        'job-badge ' +
+                        (row.status === '成功' ? 'success' : row.status === '排队' ? 'pending' : 'error')
+                      }
+                    >
+                      {row.status}
+                    </span>
+                  </div>
+                  <div className="job-body">
+                    <div className="job-prompt">{row.prompt}</div>
+                    <div className="job-meta">
+                      <span>{row.provider} · {row.mode}</span>
+                      <span>{row.cost + (row.time ? ' · ' + row.time : '')}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

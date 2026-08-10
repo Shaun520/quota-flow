@@ -129,14 +129,16 @@ export interface HistoryRow {
   mode: string
   cost: string
   quality: string
+  duration?: string
+  time?: string
 }
 
 export const HISTORY_ROWS: HistoryRow[] = [
-  { provider: '豆包', status: '成功', prompt: '一只橘猫在阳光下打盹，微风轻拂窗帘', mode: '文生视频', cost: '1 点', quality: '4.5' },
-  { provider: '即梦', status: '成功', prompt: '赛博朋克风格的城市夜景，霓虹灯闪烁', mode: '文生视频', cost: '80 灵感值', quality: '4.2' },
-  { provider: '可灵', status: '排队', prompt: '古风女子在樱花树下抚琴，花瓣飘落', mode: '文生视频', cost: '10 积分', quality: '-' },
-  { provider: 'MathMind', status: '成功', prompt: '机器人行走在火星表面，背景是巨大的蓝色地球', mode: '图生视频', cost: '1 次', quality: '3.8' },
-  { provider: '海螺', status: '失败', prompt: '海浪拍打礁石，夕阳西下的慢镜头', mode: '文生视频', cost: '1 次', quality: '-' },
+  { provider: '豆包', status: '成功', prompt: '一只橘猫在阳光下打盹，微风轻拂窗帘', mode: '文生视频', cost: '1 点', quality: '4.5', duration: '5s', time: '2 分钟前' },
+  { provider: '即梦', status: '成功', prompt: '赛博朋克风格的城市夜景，霓虹灯闪烁', mode: '文生视频', cost: '80 灵感值', quality: '4.2', duration: '10s', time: '18 分钟前' },
+  { provider: '可灵', status: '排队', prompt: '古风女子在樱花树下抚琴，花瓣飘落', mode: '文生视频', cost: '10 积分', quality: '-', time: '35 分钟前' },
+  { provider: 'MathMind', status: '成功', prompt: '机器人行走在火星表面，背景是巨大的蓝色地球', mode: '图生视频', cost: '1 次', quality: '3.8', duration: '5s', time: '1 小时前' },
+  { provider: '海螺', status: '失败', prompt: '海浪拍打礁石，夕阳西下的慢镜头', mode: '文生视频', cost: '1 次', quality: '-', time: '2 小时前' },
   { provider: '元宝混元', status: '成功', prompt: '未来城市飞行汽车穿梭于摩天大楼之间', mode: '文生视频', cost: '1 次', quality: '4.0' },
   { provider: '豆包', status: '成功', prompt: '水墨画风格的山水动画，云雾缭绕', mode: '文生视频', cost: '2 点', quality: '4.7' },
   { provider: '即梦', status: '成功', prompt: '热带雨林中的瀑布，阳光透过树叶洒落', mode: '图生视频', cost: '80 灵感值', quality: '4.3' },
