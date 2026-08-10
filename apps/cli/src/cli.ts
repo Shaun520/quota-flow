@@ -3,6 +3,9 @@
 import { Command } from "commander";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { config as loadEnv } from "dotenv";
+import { createAuthService } from "@quota-flow/auth";
+import { JobService, type JobStatus } from "@quota-flow/db-supabase";
 import {
   LEDGER_PATH,
   consume,
@@ -16,9 +19,13 @@ import {
 } from "@quota-flow/core";
 import { MathmindDryRunContext, createAllProviders, toProviderMap } from "@quota-flow/providers";
 import { Router, type DispatchOptions } from "@quota-flow/core";
-import type { GenerateOptions, RoutingStrategy, VideoMode } from "@quota-flow/core";
+import type { GenerateOptions, GenerateResult, RoutingStrategy, VideoMode } from "@quota-flow/core";
 
 const JOBS_PATH = path.resolve(__dirname, "..", "..", "..", "data", "jobs.jsonl");
+
+// 加载 CLI 包内 .env（apps/cli/.env）与当前目录 .env（写库凭据 SUPABASE_* / QUOTA_FLOW_* 可选）
+loadEnv({ path: path.resolve(__dirname, "..", ".env"), quiet: true });
+loadEnv({ quiet: true });
 
 const program = new Command();
 program
@@ -160,6 +167,9 @@ program
       /* ignore log failure */
     }
 
+    // 写 Supabase jobs 表（数据库为真相源；未配置凭据时跳过，仅保留本地 JSONL 日志）
+    await writeJobToDb(res, mode, opts);
+
     const ledgerAfter = res.ledgerSnapshot;
     const quotaRows = Object.entries(ledgerAfter.providers).map(([id, e]) => ({
       providerId: id,
@@ -191,6 +201,62 @@ function splitList(s: string): string[] {
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
+}
+
+async function writeJobToDb(
+  res: {
+    result: GenerateResult | null;
+    attempts: Array<{ providerId: string; ok: boolean; errorMessage?: string }>;
+  },
+  mode: VideoMode,
+  opts: GenerateOptions
+): Promise<void> {
+  const url = process.env["SUPABASE_URL"];
+  const anon = process.env["SUPABASE_ANON_KEY"];
+  const email = process.env["QUOTA_FLOW_EMAIL"];
+  const password = process.env["QUOTA_FLOW_PASSWORD"];
+  if (!url || !anon || !email || !password) {
+    process.stderr.write(
+      "[jobs] 未配置 SUPABASE_URL / SUPABASE_ANON_KEY / QUOTA_FLOW_EMAIL / QUOTA_FLOW_PASSWORD，跳过写库（仍写入本地 jobs.jsonl）\n"
+    );
+    return;
+  }
+  try {
+    const auth = createAuthService("hosted", { supabaseUrl: url, supabaseAnonKey: anon });
+    const login = await auth.signIn(email, password);
+    if (login.error || !login.user) {
+      process.stderr.write(`[jobs] 写库登录失败：${login.error ?? "未返回用户"}\n`);
+      return;
+    }
+    const team = await auth.getTeam(login.user.id);
+    const svc = new JobService(auth.getClient());
+    const pid = res.result?.providerId ?? res.attempts[0]?.providerId ?? null;
+    const status: JobStatus = res.result
+      ? res.result.ok
+        ? "success"
+        : "failed"
+      : res.attempts.length > 0
+        ? "pending"
+        : "not_generated";
+    await svc.insertJob(login.user.id, {
+      teamId: team?.id ?? null,
+      providerId: pid,
+      mode,
+      prompt: opts.prompt ?? "",
+      options: maskUris(opts) as unknown as Record<string, unknown>,
+      attempts: res.attempts as unknown as Array<Record<string, unknown>>,
+      status,
+      traceId: res.result?.traceId ?? null,
+      qualityScore: res.result?.qualityScore ?? null,
+      error: res.result?.errorMessage ?? null,
+      costAmount: res.result?.quotaUsed ?? 0,
+      createdAt: new Date().toISOString(),
+      completedAt: res.result ? new Date().toISOString() : null,
+    });
+    process.stderr.write(`[jobs] 已写入 Supabase jobs 表（status=${status}）\n`);
+  } catch (e) {
+    process.stderr.write(`[jobs] 写库失败：${e instanceof Error ? e.message : String(e)}\n`);
+  }
 }
 
 /** 日志脱敏：把 URL 只保留 scheme+host，避免隐私外泄 */

@@ -135,7 +135,7 @@ const api: DesktopApi = {
         ipcRenderer.removeListener('webview-test:event', listener)
       }
     }
-  }
+  },
 }
 
 contextBridge.exposeInMainWorld('api', api)

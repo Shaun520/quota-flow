@@ -130,6 +130,10 @@
   background: rgba(248, 113, 113, 0.15);
   color: #f87171;
 }
+[data-theme="dark"] .badge-muted {
+  background: rgba(161, 161, 170, 0.15);
+  color: #a1a1aa;
+}
 [data-theme="dark"] .job-card .job-thumb .job-badge.success {
   background: rgba(74, 222, 128, 0.15);
 }
@@ -1359,6 +1363,25 @@ body {
 .badge-error {
   background: rgba(196, 77, 77, 0.1);
   color: var(--error);
+}
+.badge-muted {
+  background: rgba(128, 128, 128, 0.12);
+  color: var(--fg-muted);
+}
+.history-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 2px 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(196, 77, 77, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(196, 77, 77, 0.08);
+  color: var(--error);
+  font-size: 0.85em;
+}
+.history-error button {
+  margin-left: auto;
 }
 
 /* ===== 表格底部 + 分页 ===== */

@@ -17,6 +17,7 @@ __pycache__/
 # 敏感配置
 data/*-auth.json
 apps/desktop/.env
+.env
 test.json
 
 # 桌面端构建产物

@@ -235,3 +235,102 @@ export class ProviderService {
     return (created ?? null) as unknown as QuotaLedgerRow
   }
 }
+
+/* ================= 生成任务历史（P2：数据库为真相源） ================= */
+
+export type JobStatus = 'pending' | 'running' | 'success' | 'failed' | 'not_generated'
+
+export interface JobRow {
+  id: string
+  team_id: string | null
+  user_id: string | null
+  provider_id: string | null
+  account_id: string | null
+  mode: string
+  prompt: string | null
+  options: Record<string, unknown> | null
+  attempts: Array<Record<string, unknown>> | null
+  status: JobStatus
+  trace_id: string | null
+  result_url: string | null
+  quality_score: number | null
+  error: string | null
+  cost_unit: string | null
+  cost_amount: number | null
+  cost_breakdown: Record<string, unknown> | null
+  equivalent_count: number | null
+  created_at: string
+  completed_at: string | null
+}
+
+export interface InsertJobInput {
+  teamId?: string | null
+  providerId?: string | null
+  mode: string
+  prompt?: string | null
+  options?: Record<string, unknown> | null
+  attempts?: Array<Record<string, unknown>> | null
+  status: JobStatus
+  traceId?: string | null
+  resultUrl?: string | null
+  qualityScore?: number | null
+  error?: string | null
+  costUnit?: string | null
+  costAmount?: number | null
+  createdAt?: string | null
+  completedAt?: string | null
+}
+
+export class JobService {
+  constructor(private readonly client: SupabaseClient) {}
+
+  /** 列出当前用户可见的任务（RLS 已按本人/团队隔离，无需显式过滤），最新在前 */
+  async listJobs(): Promise<JobRow[]> {
+    const { data, error } = await this.client
+      .from('jobs')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as JobRow[]
+  }
+
+  async insertJob(userId: string, input: InsertJobInput): Promise<JobRow | null> {
+    const payload: Record<string, unknown> = {
+      user_id: userId,
+      mode: input.mode,
+      status: input.status
+    }
+    if (input.teamId) payload.team_id = input.teamId
+    if (input.providerId) payload.provider_id = input.providerId
+    if (input.prompt) payload.prompt = input.prompt
+    if (input.options) payload.options = input.options
+    if (input.attempts) payload.attempts = input.attempts
+    if (input.traceId) payload.trace_id = input.traceId
+    if (input.resultUrl) payload.result_url = input.resultUrl
+    if (input.qualityScore != null) payload.quality_score = input.qualityScore
+    if (input.error) payload.error = input.error
+    if (input.costUnit) payload.cost_unit = input.costUnit
+    if (input.costAmount != null) payload.cost_amount = input.costAmount
+    if (input.createdAt) payload.created_at = input.createdAt
+    if (input.completedAt) payload.completed_at = input.completedAt
+
+    const { data, error } = await this.client
+      .from('jobs')
+      .insert(payload)
+      .select()
+      .single()
+    if (error) throw error
+    return (data ?? null) as unknown as JobRow | null
+  }
+
+  /** 仅本人可删除自己的任务（RLS 同约束） */
+  async deleteJob(userId: string, jobId: string): Promise<boolean> {
+    const { error, count } = await this.client
+      .from('jobs')
+      .delete({ count: 'exact' })
+      .eq('id', jobId)
+      .eq('user_id', userId)
+    if (error) throw error
+    return (count ?? 0) > 0
+  }
+}
