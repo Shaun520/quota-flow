@@ -231,6 +231,7 @@ interface ProviderOption {
   providerId: string
   name: string
   authType: string
+  boundCount?: number
 }
 
 function ProviderSelect({
@@ -341,12 +342,27 @@ export function AddProviderModal({
     setApiKey('')
   }
 
-  const saveEncrypted = async (encrypted: string, authType: 'cookie' | 'apikey', expiresAt: number | null) => {
+  const saveEncrypted = async (
+    encrypted: string,
+    authType: 'cookie' | 'apikey',
+    expiresAt: number | null,
+    accountFingerprint?: string | null
+  ) => {
     setSaving(true)
     setError(null)
     try {
       const svc = getProviderService()
       if (!svc) throw new Error('数据库服务未配置')
+
+      // P2 去重：同一账号指纹已存在则拦截（指纹为 null 时跳过）
+      if (accountFingerprint) {
+        const dup = await svc.findDuplicateFingerprint(userId, providerId, accountFingerprint)
+        if (dup) {
+          setError(`该账号已绑定（「${dup.account_name ?? '未命名账号'}」），如需重新绑定请先解绑旧账号`)
+          setSaving(false)
+          return false
+        }
+      }
 
       // 备注为空时兜底自动命名：<厂商名> 账号 N（按该厂商第 N 个绑定递增）
       const existingKeys = await svc.listProviderKeys(userId)
@@ -360,7 +376,8 @@ export function AddProviderModal({
         encryptedKey: encrypted,
         accountName: name,
         authType,
-        expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null
+        expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+        accountFingerprint
       })
 
       // 绑定即初始化今日额度行（当天已有则跳过）
@@ -392,13 +409,13 @@ export function AddProviderModal({
         return
       }
       setStatus('logging')
-      const enc = await window.api.providers.encrypt(apiKey.trim())
+      const enc = await window.api.providers.encrypt(selected.providerId, apiKey.trim())
       if (!enc.encrypted) {
         setStatus('idle')
         setError('加密失败')
         return
       }
-      const saved = await saveEncrypted(enc.encrypted, 'apikey', null)
+      const saved = await saveEncrypted(enc.encrypted, 'apikey', null, enc.fingerprint ?? null)
       if (saved) setStatus('apikey-ok')
       return
     }
@@ -406,7 +423,7 @@ export function AddProviderModal({
     const res = await window.api.providers.login(selected.providerId)
     if (res.ok && res.encrypted) {
       setCookieCount(res.cookieCount ?? 0)
-      const saved = await saveEncrypted(res.encrypted, 'cookie', res.expiresAt ?? null)
+      const saved = await saveEncrypted(res.encrypted, 'cookie', res.expiresAt ?? null, res.accountFingerprint ?? null)
       if (saved) setStatus('login-ok')
     } else if (res.canceled) {
       setStatus('idle')
@@ -451,6 +468,11 @@ export function AddProviderModal({
             reset()
           }}
         />
+        {(selected?.boundCount ?? 0) > 0 && (
+          <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--accent)' }}>
+            该厂商已绑定 {selected!.boundCount} 个账号，请确认不是重复绑定同一账号
+          </p>
+        )}
       </div>
       <div className="form-group">
         <label>账号备注</label>

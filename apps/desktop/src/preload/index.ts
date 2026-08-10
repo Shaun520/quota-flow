@@ -22,6 +22,7 @@ export interface ProviderLoginResult {
   encrypted?: string
   cookieCount?: number
   expiresAt?: number | null
+  accountFingerprint?: string | null
   error?: string
 }
 
@@ -45,7 +46,7 @@ export interface DesktopApi {
   }
   providers: {
     login: (providerId: string) => Promise<ProviderLoginResult>
-    encrypt: (plain: string) => Promise<{ encrypted: string }>
+    encrypt: (providerId: string, plain: string) => Promise<{ encrypted: string; fingerprint?: string | null }>
     healthCheck: (providerId: string, encrypted: string) => Promise<HealthCheckResult>
     cancelLogin: (providerId: string) => Promise<void>
   }
@@ -99,7 +100,8 @@ const api: DesktopApi = {
   },
   providers: {
     login: (providerId) => ipcRenderer.invoke('provider:login', providerId) as Promise<ProviderLoginResult>,
-    encrypt: (plain) => ipcRenderer.invoke('provider:encrypt', plain) as Promise<{ encrypted: string }>,
+    encrypt: (providerId, plain) =>
+      ipcRenderer.invoke('provider:encrypt', providerId, plain) as Promise<{ encrypted: string; fingerprint?: string | null }>,
     healthCheck: (providerId, encrypted) =>
       ipcRenderer.invoke('provider:health-check', providerId, encrypted) as Promise<HealthCheckResult>,
     cancelLogin: (providerId) => ipcRenderer.invoke('provider:login-cancel', providerId) as Promise<void>

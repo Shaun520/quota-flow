@@ -89,22 +89,44 @@ export function useProviders(): ProvidersResult {
           l.filter((row) => row.date === today).map((row) => row.provider_id)
         )
         const toInit = [...boundProviders].filter((pid) => !existingLedgerProviders.has(pid))
-        if (toInit.length === 0) return
-
-        const providerMap = new Map(p.map((pr) => [pr.id, pr]))
-        Promise.all(
-          toInit.map((pid) => {
-            const meta = providerMap.get(pid)
-            return svc.getOrInitLedger({
-              userId: user.id,
-              providerId: pid,
-              unitName: meta?.unit_name ?? '',
-              dailyTotal: Number(meta?.default_daily_quota ?? 0)
+        if (toInit.length > 0) {
+          const providerMap = new Map(p.map((pr) => [pr.id, pr]))
+          Promise.all(
+            toInit.map((pid) => {
+              const meta = providerMap.get(pid)
+              return svc.getOrInitLedger({
+                userId: user.id,
+                providerId: pid,
+                unitName: meta?.unit_name ?? '',
+                dailyTotal: Number(meta?.default_daily_quota ?? 0)
+              })
             })
+          ).then(() => {
+            if (!cancelled) setReloadKey((k) => k + 1)
           })
-        ).then(() => {
-          if (!cancelled) setReloadKey((k) => k + 1)
-        })
+        }
+
+        // 对 health_status 为 unknown 的绑定自动触发健康检查（更新本地 state，不触发 reload）
+        const unknownKeys = k.filter((key) => key.health_status === 'unknown')
+        if (unknownKeys.length > 0) {
+          void Promise.all(
+            unknownKeys.map(async (key) => {
+              try {
+                const res = await window.api.providers.healthCheck(key.provider_id, key.encrypted_key)
+                const newStatus = res.ok ? res.status : 'unknown'
+                await svc.updateHealth(user.id, key.id, newStatus)
+                // 直接更新本地 state，不触发 reload
+                if (!cancelled) {
+                  setKeys((prev) =>
+                    prev.map((k) => (k.id === key.id ? { ...k, health_status: newStatus } : k))
+                  )
+                }
+              } catch {
+                // 忽略单个健康检查失败，不影响其他
+              }
+            })
+          )
+        }
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(errMsg(e))

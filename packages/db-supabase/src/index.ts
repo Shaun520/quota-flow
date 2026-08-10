@@ -61,6 +61,7 @@ export interface ProviderKey {
   cookie_expires_at: string | null
   last_health_check: string | null
   health_status: string
+  account_fingerprint: string | null
   enabled: boolean
   created_at: string
 }
@@ -87,6 +88,7 @@ export interface AddProviderKeyInput {
   encryptedKey: string
   authType?: 'cookie' | 'apikey'
   expiresAt?: string | null
+  accountFingerprint?: string | null
 }
 
 export class ProviderService {
@@ -113,19 +115,38 @@ export class ProviderService {
   }
 
   async addProviderKey(input: AddProviderKeyInput): Promise<ProviderKey | null> {
+    const payload: Record<string, unknown> = {
+      owner_user_id: input.ownerUserId,
+      provider_id: input.providerId,
+      encrypted_key: input.encryptedKey,
+      auth_type: input.authType ?? 'cookie'
+    }
+    if (input.teamId) payload.team_id = input.teamId
+    if (input.accountName) payload.account_name = input.accountName
+    if (input.expiresAt) payload.cookie_expires_at = input.expiresAt
+    if (input.accountFingerprint) payload.account_fingerprint = input.accountFingerprint
+
     const { data, error } = await this.client
       .from('provider_keys')
-      .insert({
-        team_id: input.teamId ?? null,
-        owner_user_id: input.ownerUserId,
-        provider_id: input.providerId,
-        account_name: input.accountName ?? null,
-        encrypted_key: input.encryptedKey,
-        auth_type: input.authType ?? 'cookie',
-        cookie_expires_at: input.expiresAt ?? null
-      })
+      .insert(payload)
       .select()
       .single()
+    if (error) throw error
+    return (data ?? null) as unknown as ProviderKey | null
+  }
+
+  async findDuplicateFingerprint(
+    userId: string,
+    providerId: string,
+    fingerprint: string
+  ): Promise<ProviderKey | null> {
+    const { data, error } = await this.client
+      .from('provider_keys')
+      .select('*')
+      .eq('owner_user_id', userId)
+      .eq('provider_id', providerId)
+      .eq('account_fingerprint', fingerprint)
+      .maybeSingle()
     if (error) throw error
     return (data ?? null) as unknown as ProviderKey | null
   }
@@ -182,30 +203,32 @@ export class ProviderService {
     }
   ): Promise<QuotaLedgerRow> {
     const today = new Date().toISOString().slice(0, 10)
-    const base = {
-      date: today,
-      team_id: input.teamId ?? null,
-      owner_user_id: input.userId,
-      account_key_id: input.keyId ?? null,
-      provider_id: input.providerId
-    }
     const { data: existing, error: queryError } = await this.client
       .from('quota_ledger')
       .select('*')
-      .match(base)
+      .eq('date', today)
+      .eq('owner_user_id', input.userId)
+      .eq('provider_id', input.providerId)
+      .is('account_key_id', null)
       .maybeSingle()
     if (queryError) throw queryError
     if (existing) return existing as unknown as QuotaLedgerRow
 
+    const insertPayload: Record<string, unknown> = {
+      date: today,
+      owner_user_id: input.userId,
+      provider_id: input.providerId,
+      unit_name: input.unitName,
+      daily_total: input.dailyTotal,
+      used: 0,
+      remaining: input.dailyTotal
+    }
+    if (input.teamId) insertPayload.team_id = input.teamId
+    if (input.keyId) insertPayload.account_key_id = input.keyId
+
     const { data: created, error: insertError } = await this.client
       .from('quota_ledger')
-      .insert({
-        ...base,
-        unit_name: input.unitName,
-        daily_total: input.dailyTotal,
-        used: 0,
-        remaining: input.dailyTotal
-      })
+      .insert(insertPayload)
       .select()
       .single()
     if (insertError) throw insertError

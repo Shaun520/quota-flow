@@ -167,7 +167,7 @@ export default function Providers({ fresh, onBound }: ProvidersProps) {
       </div>
       {showAddModal && user && (
         <AddProviderModal
-          providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, authType: a.authType }))}
+          providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, authType: a.authType, boundCount: a.boundCount }))}
           userId={user.id}
           initialProviderId={addTarget}
           onClose={() => setShowAddModal(false)}
