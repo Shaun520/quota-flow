@@ -243,7 +243,13 @@ function ProviderSelect({ value, onChange }: { value: string; onChange: (id: str
   )
 }
 
-export function AddProviderModal({ onClose }: { onClose: () => void }) {
+export function AddProviderModal({
+  onClose,
+  onDone
+}: {
+  onClose: () => void
+  onDone?: () => void
+}) {
   const [providerId, setProviderId] = useState(PROVIDERS[0]?.id ?? '')
   const [status, setStatus] = useState<'idle' | 'logging-in' | 'done'>('idle')
 
@@ -265,7 +271,10 @@ export function AddProviderModal({ onClose }: { onClose: () => void }) {
           </button>
           <button
             className="btn-sm primary"
-            onClick={onClose}
+            onClick={() => {
+              onClose()
+              onDone?.()
+            }}
             disabled={status !== 'done'}
           >
             完成

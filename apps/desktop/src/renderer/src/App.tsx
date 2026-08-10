@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ComponentType } from 'react'
 import Dashboard from './components/Dashboard'
 import Providers from './components/Providers'
 import History from './components/History'
 import Team from './components/Team'
 import TitleBar from './components/TitleBar'
+import WelcomeBanner from './components/WelcomeBanner'
 import { BrandMark } from './components/Brand'
 import AuthScreen from './auth/AuthScreen'
 import { useAuth } from './hooks/useAuth'
@@ -39,10 +40,15 @@ const TABS: TabDef[] = [
 interface MainAppProps {
   user: AuthUser
   team: TeamContext | null
+  fresh: boolean
+  setFresh: (v: boolean) => void
+  onboardStep: 1 | 2 | 3
+  completeStep: (n: 1 | 2 | 3) => void
+  onFinishOnboarding: () => void
   onSignOut: () => Promise<void>
 }
 
-function MainApp({ user, team, onSignOut }: MainAppProps) {
+function MainApp({ user, team, fresh, setFresh, onboardStep, completeStep, onFinishOnboarding, onSignOut }: MainAppProps) {
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -87,7 +93,7 @@ function MainApp({ user, team, onSignOut }: MainAppProps) {
         <div className="user-area">
           <div className="team-badge">
             <IconUsers size={10} />
-            {team ? '团队 · ' + team.id.slice(0, 8) : '个人模式'}
+            {team ? '团队 · ' + team.id.slice(0, 8) : fresh ? '新用户 · 未绑定' : '个人模式'}
           </div>
           <div className="avatar-wrap">
             <div className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</div>
@@ -99,6 +105,11 @@ function MainApp({ user, team, onSignOut }: MainAppProps) {
               <button className="dropdown-item" onClick={() => setModal('settings')}>
                 <IconGear size={14} />
                 设置
+              </button>
+              <div className="dropdown-divider" />
+              <button className="dropdown-item" onClick={() => setFresh(!fresh)}>
+                <IconMonitor size={14} />
+                {fresh ? '切换为演示数据' : '切换为新用户模式'}
               </button>
               <div className="dropdown-divider" />
               <button
@@ -116,13 +127,30 @@ function MainApp({ user, team, onSignOut }: MainAppProps) {
 
       {/* 主体内容 */}
       <main className="main-content">
+        {fresh && (
+          <WelcomeBanner
+            displayName={user.displayName}
+            step={onboardStep}
+            onGoProviders={() => setTab('providers')}
+            onGoDashboard={() => setTab('dispatch')}
+            onStep3Done={onFinishOnboarding}
+          />
+        )}
         <div className="content-inner">
           {tab === 'dispatch' && (
-            <Dashboard onGoHistory={() => setTab('history')} onGoProviders={() => setTab('providers')} />
+            <Dashboard
+              fresh={fresh}
+              step={onboardStep}
+              onGenerate={() => completeStep(2)}
+              onGoHistory={() => setTab('history')}
+              onGoProviders={() => setTab('providers')}
+            />
           )}
-          {tab === 'providers' && <Providers />}
+          {tab === 'providers' && (
+            <Providers fresh={fresh} onBound={() => completeStep(1)} />
+          )}
           {tab === 'history' && <History />}
-          {tab === 'team' && <Team />}
+          {tab === 'team' && <Team fresh={fresh} />}
         </div>
       </main>
 
@@ -184,6 +212,51 @@ export default function App() {
   const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword } =
     useAuth()
   const [submitting, setSubmitting] = useState(false)
+  const [fresh, setFresh] = useState(() => {
+    try {
+      return localStorage.getItem('quota-flow:fresh-user') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const [onboardStep, setOnboardStep] = useState<1 | 2 | 3>(() => {
+    try {
+      const v = Number(localStorage.getItem('quota-flow:onboard-step'))
+      return (v === 1 || v === 2 || v === 3) ? v : 1
+    } catch {
+      return 1
+    }
+  })
+
+  const updateFresh = useCallback((v: boolean) => {
+    setFresh(v)
+    try {
+      localStorage.setItem('quota-flow:fresh-user', v ? '1' : '0')
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const completeStep = useCallback((n: 1 | 2 | 3) => {
+    setOnboardStep((prev) => {
+      const next = n >= prev ? ((n + 1) as 1 | 2 | 3) : prev
+      try {
+        localStorage.setItem('quota-flow:onboard-step', String(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }, [])
+
+  const finishOnboarding = useCallback(() => {
+    updateFresh(false)
+    try {
+      localStorage.setItem('quota-flow:onboard-step', '3')
+    } catch {
+      // ignore
+    }
+  }, [updateFresh])
 
   if (loading) return <SplashScreen />
   if (!configured) return <ConfigWarning />
@@ -238,5 +311,16 @@ export default function App() {
     )
   }
 
-  return <MainApp user={user} team={team} onSignOut={signOut} />
+  return (
+    <MainApp
+      user={user}
+      team={team}
+      fresh={fresh}
+      setFresh={updateFresh}
+      onboardStep={onboardStep}
+      completeStep={completeStep}
+      onFinishOnboarding={finishOnboarding}
+      onSignOut={signOut}
+    />
+  )
 }

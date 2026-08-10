@@ -1878,6 +1878,10 @@ textarea::-webkit-scrollbar {
   background: var(--accent-bg);
   color: var(--accent);
 }
+.auth-email-suggestion.selected {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
 .auth-input-row {
   display: flex;
   gap: 10px;
@@ -2000,4 +2004,168 @@ textarea::-webkit-scrollbar {
 .auth-footer-link:hover {
   color: var(--accent-hover);
   text-decoration: underline;
+}
+
+/* ===== 欢迎引导卡 ===== */
+.welcome-banner {
+  position: relative;
+  margin: 0 6px 16px;
+  padding: 18px 22px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-bg);
+}
+.welcome-title {
+  font-size: 1.05em;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.welcome-steps {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.welcome-step {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex: 1;
+}
+.welcome-step-num {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.welcome-step.done {
+  opacity: 0.75;
+}
+.welcome-step.done .welcome-step-num {
+  background: var(--success);
+}
+.welcome-step.active .welcome-step-num {
+  box-shadow: 0 0 0 3px rgba(224, 122, 62, 0.25);
+}
+.welcome-step strong {
+  display: block;
+  font-size: 0.92em;
+  margin-bottom: 2px;
+}
+.welcome-step p {
+  margin: 0;
+  font-size: 0.8em;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+.welcome-actions {
+  display: flex;
+  gap: 8px;
+}
+.welcome-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--fg-muted);
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  opacity: 0.7;
+}
+.welcome-close:hover {
+  opacity: 1;
+  color: var(--fg-primary);
+}
+
+/* ===== 空状态 ===== */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 20px;
+  text-align: center;
+}
+.empty-state-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  margin-bottom: 2px;
+}
+.empty-state-title {
+  font-size: 0.95em;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+.empty-state-desc {
+  font-size: 0.82em;
+  color: var(--fg-muted);
+  line-height: 1.6;
+  max-width: 320px;
+}
+.empty-state-action {
+  margin-top: 10px;
+}
+
+/* ===== 调度台 · 未绑定态 ===== */
+.ps-item.unbound {
+  opacity: 0.72;
+  border-style: dashed;
+}
+.ps-item .ps-state.unbound {
+  color: var(--fg-muted);
+}
+.ps-item .ps-state.unbound .dot {
+  background: var(--fg-muted);
+}
+.ps-empty {
+  border-top: 1px dashed var(--border);
+  padding: 18px 10px;
+}
+
+/* ===== 厂商 Tab · 提示条 ===== */
+.providers-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 0.85em;
+}
+.providers-empty-cell {
+  padding: 40px 20px;
+}
+
+/* ===== 团队 Tab · 空状态 ===== */
+.team-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  padding: 60px 20px;
+  margin: 0 6px;
+}
+.team-empty-actions {
+  display: flex;
+  gap: 8px;
 }

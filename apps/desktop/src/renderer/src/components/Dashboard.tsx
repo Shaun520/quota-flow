@@ -8,15 +8,19 @@ import {
   uploadHint
 } from '../spec'
 import { IconInfo, IconPlay, IconUpload, PROVIDER_ICONS } from './icons'
+import { EmptyState } from './EmptyState'
 
 const VIP = false
 
 interface DashboardProps {
+  fresh: boolean
+  step: 1 | 2 | 3
+  onGenerate?: () => void
   onGoHistory: () => void
   onGoProviders: () => void
 }
 
-export default function Dashboard({ onGoHistory, onGoProviders }: DashboardProps) {
+export default function Dashboard({ fresh, step, onGenerate, onGoHistory, onGoProviders }: DashboardProps) {
   const [provider, setProvider] = useState('auto')
   const [model, setModel] = useState(MODELS.auto[0])
   const [mode, setMode] = useState('t2v')
@@ -221,14 +225,27 @@ export default function Dashboard({ onGoHistory, onGoProviders }: DashboardProps
           </div>
 
           <div className="generate-actions">
-            <button className="btn-primary">
+            <button
+              className="btn-primary"
+              onClick={() => {
+                if (fresh && step === 1) {
+                  onGoProviders()
+                  return
+                }
+                onGenerate?.()
+              }}
+            >
               <IconPlay size={14} />
               开始生成
             </button>
             <div className="cost-estimate">
               <IconInfo size={12} />
-              预计 <span className="cost-highlight">{cost.text}</span> ·{' '}
-              <span className="cost-highlight">{cost.who}</span>
+              {fresh ? '绑定账号后可查看预计额度消耗' : (
+                <>
+                  预计 <span className="cost-highlight">{cost.text}</span> ·{' '}
+                  <span className="cost-highlight">{cost.who}</span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -237,34 +254,71 @@ export default function Dashboard({ onGoHistory, onGoProviders }: DashboardProps
         <div className="provider-status-panel">
           <div className="panel-header">
             <h2>厂商实时状态</h2>
-            <span className="panel-meta">7 家接入</span>
+            <span className="panel-meta">{fresh ? '未绑定' : '7 家接入'}</span>
           </div>
-          <div className="provider-status-list">
-            {PROVIDERS.map((p) => {
-              const IconComp = PROVIDER_ICONS[p.id]
-              return (
-                <div className="ps-item" key={p.id}>
-                  <div className="ps-icon">
-                    {IconComp ? <IconComp size={20} /> : p.icon}
-                  </div>
-                  <div className="ps-info">
-                    <div className="ps-name">{p.name}</div>
-                    <div className="ps-quota">{p.remaining} {p.unit}</div>
-                    <div className="quota-bar">
-                      <div className="quota-fill" style={{ width: p.fill + '%' }} />
+          {fresh ? (
+            <>
+              <div className="provider-status-list">
+                {PROVIDERS.map((p) => {
+                  const IconComp = PROVIDER_ICONS[p.id]
+                  return (
+                    <div className="ps-item unbound" key={p.id}>
+                      <div className="ps-icon">
+                        {IconComp ? <IconComp size={20} /> : p.icon}
+                      </div>
+                      <div className="ps-info">
+                        <div className="ps-name">{p.name}</div>
+                        <div className="ps-quota">未绑定</div>
+                      </div>
+                      <div className="ps-state unbound">
+                        <span className="dot" />
+                        未绑定
+                      </div>
                     </div>
-                  </div>
-                  <div className={'ps-state ' + p.state}>
-                    <span className="dot" />
-                    {p.stateLabel}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          <button className="btn-sm primary" style={{ width: '100%' }} onClick={onGoProviders}>
-            管理厂商账号
-          </button>
+                  )
+                })}
+              </div>
+              <EmptyState
+                className="ps-empty"
+                title="还没有绑定任何厂商账号"
+                description="绑定账号后即可自动获取免费额度，由智能调度按可用额度分发任务"
+                action={
+                  <button className="btn-sm primary" onClick={onGoProviders}>
+                    去绑定账号 →
+                  </button>
+                }
+              />
+            </>
+          ) : (
+            <>
+              <div className="provider-status-list">
+                {PROVIDERS.map((p) => {
+                  const IconComp = PROVIDER_ICONS[p.id]
+                  return (
+                    <div className="ps-item" key={p.id}>
+                      <div className="ps-icon">
+                        {IconComp ? <IconComp size={20} /> : p.icon}
+                      </div>
+                      <div className="ps-info">
+                        <div className="ps-name">{p.name}</div>
+                        <div className="ps-quota">{p.remaining} {p.unit}</div>
+                        <div className="quota-bar">
+                          <div className="quota-fill" style={{ width: p.fill + '%' }} />
+                        </div>
+                      </div>
+                      <div className={'ps-state ' + p.state}>
+                        <span className="dot" />
+                        {p.stateLabel}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <button className="btn-sm primary" style={{ width: '100%' }} onClick={onGoProviders}>
+                管理厂商账号
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -276,30 +330,38 @@ export default function Dashboard({ onGoHistory, onGoProviders }: DashboardProps
             查看全部 →
           </button>
         </div>
-        <div className="job-list">
-          {recentJobs.map((row, i) => (
-            <div className="job-card" key={i}>
-              <div className="job-thumb">
-                <span>{row.status === '排队' ? '生成中…' : '视频预览'}</span>
-                <span
-                  className={
-                    'job-badge ' +
-                    (row.status === '成功' ? 'success' : row.status === '排队' ? 'pending' : 'error')
-                  }
-                >
-                  {row.status}
-                </span>
-              </div>
-              <div className="job-body">
-                <div className="job-prompt">{row.prompt}</div>
-                <div className="job-meta">
-                  <span>{row.provider} · {row.mode}</span>
-                  <span>{row.cost}</span>
+        {fresh ? (
+          <EmptyState
+            icon={<IconPlay size={18} />}
+            title="还没有生成记录"
+            description="填写描述并开始生成，你的第一条视频将出现在这里"
+          />
+        ) : (
+          <div className="job-list">
+            {recentJobs.map((row, i) => (
+              <div className="job-card" key={i}>
+                <div className="job-thumb">
+                  <span>{row.status === '排队' ? '生成中…' : '视频预览'}</span>
+                  <span
+                    className={
+                      'job-badge ' +
+                      (row.status === '成功' ? 'success' : row.status === '排队' ? 'pending' : 'error')
+                    }
+                  >
+                    {row.status}
+                  </span>
+                </div>
+                <div className="job-body">
+                  <div className="job-prompt">{row.prompt}</div>
+                  <div className="job-meta">
+                    <span>{row.provider} · {row.mode}</span>
+                    <span>{row.cost}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </>
   )

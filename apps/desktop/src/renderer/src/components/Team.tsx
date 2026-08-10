@@ -1,6 +1,40 @@
 import { TEAM } from '../data'
+import { IconUsers } from './icons'
+import { EmptyState } from './EmptyState'
 
-export default function Team() {
+interface TeamProps {
+  fresh: boolean
+}
+
+export default function Team({ fresh }: TeamProps) {
+  if (fresh) {
+    return (
+      <>
+        <div className="page-header">
+          <div className="title-group">
+            <div>
+              <h1>团队额度池</h1>
+              <div className="divider" />
+            </div>
+            <p>创建团队 · 分享额度 · 集中管理</p>
+          </div>
+        </div>
+        <EmptyState
+          className="team-empty"
+          icon={<IconUsers size={20} />}
+          title="你还没有加入任何团队"
+          description="创建团队后可与队友共享额度池，统一管理成员消耗上限与公共账号"
+          action={
+            <div className="team-empty-actions">
+              <button className="btn-sm primary">+ 创建团队</button>
+              <button className="btn-sm">输入邀请码加入</button>
+            </div>
+          }
+        />
+      </>
+    )
+  }
+
   return (
     <>
       <div className="page-header">

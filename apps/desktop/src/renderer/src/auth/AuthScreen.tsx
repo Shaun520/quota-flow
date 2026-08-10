@@ -38,6 +38,7 @@ export default function AuthScreen({
   const [countdown, setCountdown] = useState(0)
   const [otpSent, setOtpSent] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(-1)
 
   const emailDomains = ['qq.com', '163.com', '126.com', 'gmail.com', 'outlook.com', 'foxmail.com', 'icloud.com', 'yeah.net']
 
@@ -53,6 +54,25 @@ export default function AuthScreen({
   }
 
   const emailSuggestions = getEmailSuggestions(email)
+
+  function handleEmailKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+    if (!showSuggestions || emailSuggestions.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelectedIndex(prev => prev < emailSuggestions.length - 1 ? prev + 1 : 0)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelectedIndex(prev => prev > 0 ? prev - 1 : emailSuggestions.length - 1)
+    } else if (e.key === 'Enter' && selectedIndex >= 0) {
+      e.preventDefault()
+      setEmail(emailSuggestions[selectedIndex])
+      setShowSuggestions(false)
+      setSelectedIndex(-1)
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false)
+      setSelectedIndex(-1)
+    }
+  }
 
   function startCountdown(): void {
     setCountdown(60)
@@ -166,9 +186,10 @@ export default function AuthScreen({
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); setSelectedIndex(-1) }}
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    onKeyDown={handleEmailKeyDown}
                     placeholder="请输入邮箱地址"
                     required
                     autoFocus
@@ -176,10 +197,11 @@ export default function AuthScreen({
                   />
                   {showSuggestions && emailSuggestions.length > 0 && (
                     <div className="auth-email-suggestions">
-                      {emailSuggestions.map(s => (
+                      {emailSuggestions.map((s, i) => (
                         <div
                           key={s}
-                          className="auth-email-suggestion"
+                          className={'auth-email-suggestion' + (i === selectedIndex ? ' selected' : '')}
+                          onMouseEnter={() => setSelectedIndex(i)}
                           onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
                         >
                           {s}
@@ -225,9 +247,10 @@ export default function AuthScreen({
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); setSelectedIndex(-1) }}
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    onKeyDown={handleEmailKeyDown}
                     placeholder="请输入邮箱地址"
                     required
                     autoFocus
@@ -235,10 +258,11 @@ export default function AuthScreen({
                   />
                   {showSuggestions && emailSuggestions.length > 0 && (
                     <div className="auth-email-suggestions">
-                      {emailSuggestions.map(s => (
+                      {emailSuggestions.map((s, i) => (
                         <div
                           key={s}
-                          className="auth-email-suggestion"
+                          className={'auth-email-suggestion' + (i === selectedIndex ? ' selected' : '')}
+                          onMouseEnter={() => setSelectedIndex(i)}
                           onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
                         >
                           {s}
@@ -300,19 +324,21 @@ export default function AuthScreen({
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); setSelectedIndex(-1) }}
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    onKeyDown={handleEmailKeyDown}
                     placeholder="请输入邮箱地址"
                     required
                     autoComplete="email"
                   />
                   {showSuggestions && emailSuggestions.length > 0 && (
                     <div className="auth-email-suggestions">
-                      {emailSuggestions.map(s => (
+                      {emailSuggestions.map((s, i) => (
                         <div
                           key={s}
-                          className="auth-email-suggestion"
+                          className={'auth-email-suggestion' + (i === selectedIndex ? ' selected' : '')}
+                          onMouseEnter={() => setSelectedIndex(i)}
                           onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
                         >
                           {s}

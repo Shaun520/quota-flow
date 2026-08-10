@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { PROVIDERS, type Provider } from '../data'
-import { IconChevron, PROVIDER_ICONS } from './icons'
+import { IconChevron, IconInfo, PROVIDER_ICONS } from './icons'
 import { AddProviderModal } from './Modals'
 import Pagination from './Pagination'
+import { EmptyState } from './EmptyState'
 
 const PAGE_SIZE = 10
 
@@ -12,7 +13,12 @@ function statusBadge(p: Provider): { cls: string; label: string } {
   return { cls: 'badge-success', label: p.stateLabel }
 }
 
-export default function Providers() {
+interface ProvidersProps {
+  fresh: boolean
+  onBound?: () => void
+}
+
+export default function Providers({ fresh, onBound }: ProvidersProps) {
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -56,6 +62,13 @@ export default function Providers() {
         </div>
       </div>
 
+      {fresh && (
+          <div className="providers-hint">
+            <IconInfo size={14} />
+            <span>绑定账号后额度将自动关联到你的账户，智能调度会按可用额度分发任务。</span>
+          </div>
+        )}
+
       <div className="provider-table-wrap">
         <div className="table-scroll">
           <table className="provider-table">
@@ -71,35 +84,63 @@ export default function Providers() {
               </tr>
             </thead>
             <tbody>
-              {pagedRows.map((p) => {
-                const badge = statusBadge(p)
-                const isExpanded = !!expanded[p.id]
-                return (
-                  <ProviderRow
-                    key={p.id}
-                    provider={p}
-                    badge={badge}
-                    expanded={isExpanded}
-                    onToggle={() => setExpanded((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
-                  />
-                )
-              })}
-              {rows.length === 0 && (
+              {fresh ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: '24px' }}>
-                    没有匹配的厂商
+                  <td colSpan={7} className="providers-empty-cell">
+                    <EmptyState
+                      title="还没有绑定任何厂商账号"
+                      description="选择你想使用的厂商，绑定账号后即可获取免费额度"
+                      action={
+                        <button className="btn-sm primary" onClick={() => setShowAddModal(true)}>
+                          + 新增厂商
+                        </button>
+                      }
+                    />
                   </td>
                 </tr>
+              ) : (
+                <>
+                  {pagedRows.map((p) => {
+                    const badge = statusBadge(p)
+                    const isExpanded = !!expanded[p.id]
+                    return (
+                      <ProviderRow
+                        key={p.id}
+                        provider={p}
+                        badge={badge}
+                        expanded={isExpanded}
+                        onToggle={() => setExpanded((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+                      />
+                    )
+                  })}
+                  {rows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: '24px' }}>
+                        没有匹配的厂商
+                      </td>
+                    </tr>
+                  )}
+                </>
               )}
             </tbody>
           </table>
         </div>
-        <div className="table-footer">
-          <span className="table-total">共 {rows.length} 项</span>
-          <Pagination page={page} total={rows.length} pageSize={PAGE_SIZE} onChange={setPage} />
-        </div>
+        {!fresh && (
+          <div className="table-footer">
+            <span className="table-total">共 {rows.length} 项</span>
+            <Pagination page={page} total={rows.length} pageSize={PAGE_SIZE} onChange={setPage} />
+          </div>
+        )}
       </div>
-      {showAddModal && <AddProviderModal onClose={() => setShowAddModal(false)} />}
+      {showAddModal && (
+        <AddProviderModal
+          onClose={() => setShowAddModal(false)}
+          onDone={() => {
+            setShowAddModal(false)
+            onBound?.()
+          }}
+        />
+      )}
     </>
   )
 }
