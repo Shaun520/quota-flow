@@ -32,6 +32,25 @@ export interface HealthCheckResult {
   error?: string
 }
 
+export interface JobEvent {
+  jobId: string
+  status?: string
+  stage?: string
+  message?: string
+  data?: unknown
+}
+
+export interface GenerateRequest {
+  supabaseUrl: string
+  supabaseAnonKey: string
+  accessToken: string
+  refreshToken: string
+  userId: string
+  prompt: string
+  providerId: string
+  durationSec: number
+}
+
 export interface DesktopApi {
   versions: {
     electron: string
@@ -49,6 +68,13 @@ export interface DesktopApi {
     encrypt: (providerId: string, plain: string) => Promise<{ encrypted: string; fingerprint?: string | null }>
     healthCheck: (providerId: string, encrypted: string) => Promise<HealthCheckResult>
     cancelLogin: (providerId: string) => Promise<void>
+  }
+  dispatch: {
+    generate: (input: GenerateRequest) => Promise<{ ok: boolean; jobId?: string; error?: string }>
+    onEvent: (callback: (event: JobEvent) => void) => () => void
+  }
+  media: {
+    getUrl: (name: string) => Promise<string>
   }
   windowControls: {
     minimize: () => Promise<void>
@@ -105,6 +131,19 @@ const api: DesktopApi = {
     healthCheck: (providerId, encrypted) =>
       ipcRenderer.invoke('provider:health-check', providerId, encrypted) as Promise<HealthCheckResult>,
     cancelLogin: (providerId) => ipcRenderer.invoke('provider:login-cancel', providerId) as Promise<void>
+  },
+  dispatch: {
+    generate: (input) => ipcRenderer.invoke('dispatch:generate', input) as Promise<{ ok: boolean; jobId?: string; error?: string }>,
+    onEvent: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, event: JobEvent): void => callback(event)
+      ipcRenderer.on('job:event', listener)
+      return () => {
+        ipcRenderer.removeListener('job:event', listener)
+      }
+    }
+  },
+  media: {
+    getUrl: (name) => ipcRenderer.invoke('media:get-url', name) as Promise<string>
   },
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),

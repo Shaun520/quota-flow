@@ -23,7 +23,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, onBound }: ProvidersProps) {
   const { user } = useAuth()
-  const { loading, error, aggs, reload, testHealth, rename, unbind } = useProviders()
+  const { loading, error, aggs, reload, testHealth, rename, setDefault, unbind } = useProviders()
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -143,6 +143,9 @@ export default function Providers({ fresh, onBound }: ProvidersProps) {
                         onUnbind={async (keyId) => {
                           await unbind(keyId)
                         }}
+                        onSetDefault={async (keyId) => {
+                          await setDefault(p.providerId, keyId)
+                        }}
                       />
                     )
                   })}
@@ -190,6 +193,7 @@ function ProviderRow({
   onBind,
   onTest,
   onRename,
+  onSetDefault,
   onUnbind
 }: {
   agg: ProviderAgg
@@ -199,11 +203,13 @@ function ProviderRow({
   onBind: () => void
   onRename: (keyId: string, name: string) => Promise<void>
   onTest: (keyId: string) => Promise<void>
+  onSetDefault: (keyId: string) => Promise<void>
   onUnbind: (keyId: string) => Promise<void>
 }) {
   const IconComp = PROVIDER_ICONS[agg.providerId]
   const totalUsed = agg.bindings.reduce((s, b) => s + b.used, 0)
   const remaining = agg.bindings.reduce((s, b) => s + b.remaining, 0)
+  const totalQuota = agg.bindings.reduce((s, b) => s + b.dailyTotal, 0)
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [savingName, setSavingName] = useState(false)
@@ -223,7 +229,7 @@ function ProviderRow({
           </span>
         </td>
         <td>{agg.unitName}</td>
-        <td>{remaining} / {agg.defaultDailyQuota}</td>
+        <td>{remaining} / {totalQuota}</td>
         <td className="col-accounts">{agg.boundCount} 个账号</td>
         <td>
           <span className={'badge ' + badge.cls}>{badge.label}</span>
@@ -281,6 +287,19 @@ function ProviderRow({
                         ) : (
                           <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
                             <strong>{acc.accountName}</strong>
+                            {acc.isDefault && (
+                              <span
+                                style={{
+                                  fontSize: 11,
+                                  color: '#e07a3e',
+                                  border: '1px solid currentColor',
+                                  borderRadius: 4,
+                                  padding: '0 5px'
+                                }}
+                              >
+                                默认
+                              </span>
+                            )}
                             <button className="link-btn" onClick={() => { setEditKeyId(acc.keyId); setEditName(acc.accountName) }}>
                               改名
                             </button>
@@ -292,6 +311,14 @@ function ProviderRow({
                         {acc.health === 'healthy' ? '正常' : acc.health === 'expiring' ? '将过期' : acc.health === 'expired' ? '已失效' : '未知'}
                       </td>
                       <td>
+                        <button
+                          className="btn-sm"
+                          disabled={acc.isDefault}
+                          onClick={() => void onSetDefault(acc.keyId)}
+                          title={acc.isDefault ? '已是默认账号' : '设为默认：优先扣减该账号额度'}
+                        >
+                          设为默认
+                        </button>{' '}
                         <button
                           className="btn-sm"
                           onClick={() => void onTest(acc.keyId)}

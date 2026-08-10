@@ -9,6 +9,9 @@ import {
 import { IconInfo, IconPlay, IconUpload, PROVIDER_ICONS } from './icons'
 import { EmptyState } from './EmptyState'
 import { useProviders } from '../hooks/useProviders'
+import { useJobs } from '../hooks/useJobs'
+import { useAuth } from '../hooks/useAuth'
+import { getAuthService, getSupabaseConfig } from '../auth/service'
 
 const VIP = false
 
@@ -23,6 +26,8 @@ interface DashboardProps {
 
 export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory, onGoProviders }: DashboardProps) {
   const { aggs: provAggs } = useProviders()
+  const { user } = useAuth()
+  const { items: jobItems, reload: reloadJobs } = useJobs()
   const [provider, setProvider] = useState('auto')
   const [model, setModel] = useState(MODELS.auto[0])
   const [mode, setMode] = useState('t2v')
@@ -31,6 +36,9 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [audio, setAudio] = useState('on')
   const [ratio, setRatio] = useState('9:16')
   const [images, setImages] = useState<string[]>([])
+  const [prompt, setPrompt] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const durations = durationOptions(provider, model, mode, VIP)
@@ -51,6 +59,56 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       if (last) setResolution(last.value)
     }
   }, [resolutions, resolution])
+
+  // 主进程生成事件（进度/完成）→ 刷新最近生成
+  useEffect(() => {
+    return window.api.dispatch.onEvent(() => {
+      reloadJobs()
+    })
+  }, [reloadJobs])
+
+  const handleGenerate = useCallback(async (): Promise<void> => {
+    if (generating) return
+    if (fresh && step === 1) {
+      onGoProviders()
+      return
+    }
+    if (!prompt.trim()) {
+      setGenError('请先填写 Prompt 描述')
+      return
+    }
+    setGenError(null)
+    setGenerating(true)
+    try {
+      const auth = getAuthService()
+      const session = await auth?.getSession()
+      const cfg = getSupabaseConfig()
+      if (!auth || !session || !user || !cfg) {
+        setGenError('登录态异常，请重新登录')
+        return
+      }
+      const res = await window.api.dispatch.generate({
+        supabaseUrl: cfg.url,
+        supabaseAnonKey: cfg.anonKey,
+        accessToken: session.access_token,
+        refreshToken: session.refresh_token,
+        userId: user.id,
+        prompt: prompt.trim(),
+        providerId: provider === 'auto' ? 'doubao' : provider,
+        durationSec: duration
+      })
+      if (!res.ok) {
+        setGenError(res.error || '生成失败')
+      } else {
+        onGenerate?.()
+        reloadJobs()
+      }
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setGenerating(false)
+    }
+  }, [generating, fresh, step, prompt, provider, duration, user, onGenerate, reloadJobs, onGoProviders])
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
@@ -97,6 +155,8 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             <textarea
               id="prompt"
               placeholder="描述你想生成的视频内容，例如：一只橘猫在阳光下打盹，微风轻拂窗帘..."
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
             />
           </div>
 
@@ -227,17 +287,17 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           <div className="generate-actions">
             <button
               className="btn-primary"
-              onClick={() => {
-                if (fresh && step === 1) {
-                  onGoProviders()
-                  return
-                }
-                onGenerate?.()
-              }}
+              disabled={generating}
+              onClick={() => void handleGenerate()}
             >
               <IconPlay size={14} />
-              开始生成
+              {generating ? '生成中…' : '开始生成'}
             </button>
+            {genError && (
+              <div className="gen-error" style={{ color: 'var(--error)', fontSize: 12, marginTop: 8 }}>
+                {genError}
+              </div>
+            )}
             <div className="cost-estimate">
               <IconInfo size={12} />
               {fresh ? '绑定账号后可查看预计额度消耗' : (
@@ -300,7 +360,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
                   const IconComp = PROVIDER_ICONS[p.providerId]
                   const used = p.bindings.reduce((s, b) => s + b.used, 0)
                   const remaining = p.bindings.reduce((s, b) => s + b.remaining, 0)
-                  const total = p.defaultDailyQuota
+                  const total = p.bindings.reduce((s, b) => s + b.dailyTotal, 0)
                   const fill = total > 0 ? Math.round((remaining / total) * 100) : 0
                   return (
                     <div className="ps-item" key={p.providerId}>
@@ -332,7 +392,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         </div>
       </div>
 
-{/* 最近任务：真实生成记录接入前的空状态（不再展示 mock 数据） */}
+{/* 最近任务：真实生成记录（jobs 表） */}
       {!banner && (
         <div className="recent-jobs">
           <div className="section-header">
@@ -341,11 +401,55 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
               查看全部 →
             </button>
           </div>
-          <EmptyState
-            icon={<IconPlay size={18} />}
-            title="还没有生成记录"
-            description="填写描述并开始生成，你的第一条视频将出现在这里"
-          />
+          {jobItems.length === 0 ? (
+            <EmptyState
+              icon={<IconPlay size={18} />}
+              title="还没有生成记录"
+              description="填写描述并开始生成，你的第一条视频将出现在这里"
+            />
+          ) : (
+            <div className="recent-job-list">
+              {jobItems.slice(0, 5).map((j) => (
+                <div
+                  key={j.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    background: 'var(--panel, rgba(0,0,0,0.03))',
+                    marginBottom: 6
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: 'var(--fg, #1c1c1e)',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                    >
+                      {j.record.prompt || '（无描述）'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--fg-muted, #777)', marginTop: 2 }}>
+                      {j.record.provider} · {j.record.mode} · {j.record.cost}
+                    </div>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      color: j.record.status === '成功' ? '#2e7d32' : j.record.status === '失败' ? 'var(--error, #c62828)' : '#b26a00'
+                    }}
+                  >
+                    {j.record.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

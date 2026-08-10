@@ -10,6 +10,7 @@ export interface BindingView {
   authType: string
   health: 'healthy' | 'expiring' | 'expired' | 'unknown'
   expiresAt: number | null
+  isDefault: boolean
   dailyTotal: number
   used: number
   remaining: number
@@ -36,6 +37,17 @@ const HEALTH_LABEL: Record<ProviderAgg['health'], string> = {
   unbound: '未绑定'
 }
 
+function todayShanghai(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date())
+  const get = (t: string): string => parts.find((p) => p.type === t)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
 function bindHealth(bindings: BindingView[]): ProviderAgg['health'] {
   if (bindings.length === 0) return 'unbound'
   if (bindings.some((b) => b.health === 'expired')) return 'offline'
@@ -52,6 +64,7 @@ export interface ProvidersResult {
   reload: () => void
   testHealth: (providerId: string, keyId: string) => Promise<void>
   rename: (keyId: string, name: string) => Promise<void>
+  setDefault: (providerId: string, keyId: string) => Promise<void>
   unbind: (keyId: string) => Promise<void>
 }
 
@@ -82,23 +95,23 @@ export function useProviders(): ProvidersResult {
         setKeys(k)
         setLedgers(l)
 
-        // 对已绑定但缺今日 ledger 行的厂商自动初始化额度
-        const today = new Date().toISOString().slice(0, 10)
-        const boundProviders = new Set(k.map((key) => key.provider_id))
-        const existingLedgerProviders = new Set(
-          l.filter((row) => row.date === today).map((row) => row.provider_id)
+        // 对已绑定但缺今日 ledger 行的账号自动初始化额度（按账号，每天 0 点重置）
+        const today = todayShanghai()
+        const existingTodayKeys = new Set(
+          l.filter((row) => row.date === today && row.account_key_id != null).map((row) => row.account_key_id)
         )
-        const toInit = [...boundProviders].filter((pid) => !existingLedgerProviders.has(pid))
+        const toInit = k.filter((key) => !existingTodayKeys.has(key.id))
         if (toInit.length > 0) {
           const providerMap = new Map(p.map((pr) => [pr.id, pr]))
           Promise.all(
-            toInit.map((pid) => {
-              const meta = providerMap.get(pid)
+            toInit.map((key) => {
+              const meta = providerMap.get(key.provider_id)
               return svc.getOrInitLedger({
                 userId: user.id,
-                providerId: pid,
+                providerId: key.provider_id,
                 unitName: meta?.unit_name ?? '',
-                dailyTotal: Number(meta?.default_daily_quota ?? 0)
+                dailyTotal: Number(meta?.default_daily_quota ?? 0),
+                keyId: key.id
               })
             })
           ).then(() => {
@@ -143,9 +156,8 @@ export function useProviders(): ProvidersResult {
     const map = new Map<string, BindingView[]>()
     for (const k of keys) {
       const list = map.get(k.provider_id) ?? []
-      const ledger =
-        ledgers.find((l) => l.provider_id === k.provider_id && (l.account_key_id ?? null) === null) ??
-        ledgers.find((l) => l.account_key_id === k.id)
+      // 按账号取今日 ledger 行（listLedger 按日期倒序，首条即今天）
+      const ledger = ledgers.find((l) => l.account_key_id === k.id)
       const dailyTotal = Number(ledger?.daily_total ?? 0)
       const used = Number(ledger?.used ?? 0)
       const defaultTotal = dailyTotal || 0
@@ -155,6 +167,7 @@ export function useProviders(): ProvidersResult {
         authType: k.auth_type,
         health: k.health_status as BindingView['health'],
         expiresAt: k.cookie_expires_at ? new Date(k.cookie_expires_at).getTime() : null,
+        isDefault: !!k.is_default,
         dailyTotal: defaultTotal,
         used,
         remaining: Math.max(defaultTotal - used, 0),
@@ -215,6 +228,20 @@ export function useProviders(): ProvidersResult {
     [user, reload]
   )
 
+  const setDefault = useCallback(
+    async (providerId: string, keyId: string) => {
+      const svc = getProviderService()
+      if (!svc || !user) return
+      try {
+        await svc.setDefaultKey(user.id, providerId, keyId)
+        reload()
+      } catch (e) {
+        setError(errMsg(e))
+      }
+    },
+    [user, reload]
+  )
+
   const unbind = useCallback(
     async (keyId: string) => {
       const svc = getProviderService()
@@ -229,5 +256,5 @@ export function useProviders(): ProvidersResult {
     [user, reload]
   )
 
-  return { loading, error, aggs, anyBound, totalBound, reload, testHealth, rename, unbind }
+  return { loading, error, aggs, anyBound, totalBound, reload, testHealth, rename, setDefault, unbind }
 }

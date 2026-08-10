@@ -1,0 +1,182 @@
+# 豆包（Seedance）API 路 · 调度台接入记录
+
+> 状态：公开逆向资料已核实，真实生成待登录态实测（2026-08-10）
+> 范围：仅调度台模块的豆包执行路径
+> 关联文档：docs/provider-quota-spec.md（豆包额度规格）、docs/qwen-reverse-engineering.md（同模式逆向记录）、调度台完善方案（Phase A/B）
+
+---
+
+## 1. 目标
+
+调度台选择「豆包」时，发起一次真实视频生成并完成回写：
+
+```
+表单参数 → 主进程调度 → 豆包执行（提交 → 轮询 → 取视频 URL）
+          → 写 jobs 记录 → 扣 quota_ledger → UI 刷新（最近生成 / 厂商状态）
+```
+
+## 2. 仓库现状盘点（已核实）
+
+| 项 | 状态 | 位置 |
+|---|---|---|
+| 登录窗口（豆包） | 已实现 | src/main/providers.ts：PROVIDER_SITES.doubao，loginUrl=https://www.doubao.com/chat/，partition=persist:qf-p:doubao |
+| 健康检查 | 已实现 | providers.ts healthCheck()：注入 cookie 后加载 healthUrl，按 HTTP 状态判 healthy/expired |
+| Cookie 加密落库 | 已实现 | provider_keys.encrypted_key（主进程 safeStorage） |
+| 额度展示 | 已实现 | Dashboard 厂商实时状态（quota_ledger） |
+| 计费规格 | 已实现（静态） | spec.ts computeCost：豆包 5s/10s/15s = 1/2/3 点，15s 仅 VIP |
+| 执行适配器 | 未实现 | packages/providers 注册表里 seedance 为 TODO；桌面端尚未依赖 core/providers |
+| 抓包数据 | 无 | data/ 仅有 qwen/yuanbao auth，无 doubao |
+
+## 3. 豆包 API 路（逆向记录）
+
+### 3.1 额度规格（产品确认，见 docs/provider-quota-spec.md）
+
+- 每日免费额度：**10 点 / 天**（北京时间 0 点刷新）
+- 模型：仅 **Seedance 2.0 Mini**
+- 消耗：5s=1 点 / 10s=2 点 / 15s=3 点；**15s 仅豆包 VIP**
+- 无清晰度维度（720p/1080p 不影响消耗）
+
+### 3.2 认证与风控（公开逆向资料，2026-08 检索）
+
+- 核心 cookie：**sessionid**（扫码登录获取）；msToken 可选——空值最安全，伪造值会触发限流
+- 请求安全参数：aid=582478、device_id、web_id、fp（前端指纹）、web_tab_id、samantha_web=1 等；a_bogus/msToken 由前端 JS 动态生成
+- 限流错误码：**710022002 / 710022004**；可能弹出验证码（decision.type=verify）
+
+### 3.3 提交生成（异步）
+
+```
+POST https://www.doubao.com/samantha/chat/completion?{安全参数}
+Headers: Accept: text/event-stream
+         Content-Type: application/json
+         Agw-Js-Conv: str
+         Origin / Referer: https://www.doubao.com
+```
+
+文生视频请求体（关键字段）：
+
+```json
+{
+  "messages": [{
+    "content": "{\"text\":\"海浪拍打沙滩，5秒\",\"ratio\":\"16:9\"}",
+    "content_type": 2020,
+    "attachments": [],
+    "references": [],
+    "skill": {
+      "skill_type": 17,
+      "skill_type_no_default": 17,
+      "skill_id": "17",
+      "skill_id_no_default": "17"
+    }
+  }],
+  "completion_option": {
+    "is_regen": false,
+    "need_create_conversation": true,
+    "launch_stage": 1,
+    "memory_type": 2,
+    "action_bar_skill_id": 17
+  },
+  "local_conversation_id": "<uuid>",
+  "local_message_id": "<uuid>"
+}
+```
+
+要点：
+
+- content_type=2020 = SamanthaVideoGenerationInput；skill_type/skill_id=17 = SkillVideoGeneration
+- content 为 JSON 字符串：text + 可选 ratio（16:9 / 9:16 / 1:1）、camera_movement
+- 图生视频：先经上传接口拿图片 key，再放进 attachments=[{"type":"image","key":...}]
+- 响应为 SSE 流，从 **fin_reason.async_task.id** 提取 task_id（无 task_id 时可能是同步结果或错误）
+
+### 3.4 轮询结果
+
+```
+POST https://www.doubao.com/samantha/chat/async/stream?{安全参数（不含 fp）}
+Body: {"task_id": "<task_id>", "event_id": 0}
+```
+
+SSE 事件解析：
+
+| 条件 | 含义 |
+|---|---|
+| event_type=2005 | 生成错误 |
+| event_type=2001 且 message.content_type=2021 | 视频结果 |
+| content.data[] 的 video_url / url | 视频直链 |
+| video_model.video_list.*.main_url | base64 编码的视频 URL（video_url 缺失时解码） |
+| cover_url / cover.url | 封面 |
+
+### 3.5 与仓库 WebView 方案的关系
+
+- 直连 HTTP 重放需要前端签名（fp/a_bogus/msToken），签名动态过期且易触发限流 → **主路径应走 WebView**（页面内 JS 自带签名），与 qwen/yuanbao 的 webview-test 模式一致
+- HTTP 直连只建议作为后续降级：用 WebView 抓一次真实请求做基准，不承诺长期可用
+- 注意：/samantha/* 协议来自**桌面客户端**逆向，www.doubao.com/chat/ Web 端端点需抓包实测确认是否一致
+
+## 4. 调度台集成实现（2026-08-10 完成）
+
+链路已收敛进桌面端代码：
+
+| 模块 | 文件 | 职责 |
+|---|---|---|
+| 执行引擎 | apps/desktop/src/main/webview-engine.ts | cookie 注入 → 视频生成界面 → 选时长 → 填 prompt（清理 chip）→ 提交 → 轮询「生成好了」→ 点击卡片取 mp4 URL |
+| 调度编排 | apps/desktop/src/main/dispatch.ts | job 生命周期（pending→running→success/failed）、cookie 解析（provider_keys 解密 + 本地 auth 兜底）、额度扣减、视频下载落盘（URL 时效）、事件推送 |
+| IPC / Preload | src/main/index.ts + src/preload/index.ts | dispatch:generate + job:event |
+| 渲染层 | src/renderer/.../Dashboard.tsx | 生成按钮接线、生成中状态、最近生成列表（jobs 表）、事件刷新 |
+| 数据层 | packages/db-supabase/src/index.ts | JobService.updateJob（状态流转/结果回写）、ProviderService.consumeLedger（扣今日额度） |
+
+关键实现点：
+
+- prompt 时长 chip：进入视频界面后先选 5s；填写时先清空 ProseMirror 编辑器再插入 prompt，并校验编辑器内容 === prompt（最多重试 3 次），杜绝「5秒 与 10s 冲突」。
+- URL 时效：生成成功后立即下载到 userData/videos/<jobId>.mp4，jobs.result_url 优先存本地路径，options 里保留 remoteUrl；下载失败才回落远程 URL。
+- 额度：成功按时长扣减（5s=1 / 10s=2 / 15s=3 点），失败不扣。
+
+已知限制：
+
+- 时长选择为 best-effort（选择器 DOM 变化时可能 fallback 到默认 10s；prompt 不含秒数则无冲突）。
+- 限流 710022002/710022004 → failed 不扣额度；验证码弹窗需用户交互（MVP 不支持自动过验证码）。
+
+## 5. 验证状态
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 豆包页面可达 | 已核实 | https://www.doubao.com/chat/ 正常返回 |
+| 登录窗口 / 健康检查 / 额度展示 | 已核实（代码级） | providers.ts + useProviders |
+| API 链路（端点 / 参数 / 解析） | 公开逆向资料 | 来源 doubao2api（2026-08 检索），与本地实测可能存在差异 |
+| 实测 harness | 已构建并跑通 | apps/desktop/scripts/doubao-e2e-test.cjs（Electron 主进程，登录态/Supabase/本地 auth 双通道） |
+| 本机 safeStorage | 已验证可用 | encrypt→decrypt 往返正常（Electron 43.3.0） |
+| 应用登录态 auth.json | 不可用 | safeStorage 解密失败（DPAPI 上下文不匹配，疑似在其它机器/用户写入），无法走 provider_keys 通道 |
+| 登录豆包 | 已验证 | 弹出登录窗口 → 扫码登录 → 40 条 cookie 存 data/doubao-auth.json |
+| 真实提交-生成-取 URL | **已验证（端到端）** | 视频生成界面提交 → 页面「你的视频生成好了」→ 点击视频卡片 → 提取 mp4 URL（douyin CDN，带签名、有时效） |
+| Web 端端点与桌面协议一致性 | 部分确认 | 实测 Web 端提交走 POST /chat/completion（桌面协议为 /samantha/chat/completion，二者安全参数体系相同） |
+
+## 6. 实测结论与下一步
+
+### 6.1 已跑通的完整链路（2026-08-10）
+
+1. 登录：弹出豆包登录窗口，用户扫码后脚本收集 40 条 cookie 存入 `data/doubao-auth.json`（后续复用，无需重复登录）。
+2. 注入：cookie 注入 `persist:qf-p:doubao` 分区，隐藏 WebView 打开 https://www.doubao.com/chat/。
+3. 进入视频界面：点击「视频生成」页签（Seedance 2.0 Mini，默认「自动 · 10s」）。
+4. 提交：向 ProseMirror 编辑器填入 prompt 后回车，触发 `POST /chat/completion`（Web 端统一入口，含 aid=497858、fp、a_bogus、msToken、web_tab_id 等安全参数）。
+5. 等待：页面出现「视频生成已提交…预计等待 5 分钟」→「你的视频生成好了」（约 2-5 分钟）。
+6. 取 URL：点击视频卡片后 `<video>` 挂载，提取到 mp4 URL：
+   - 域名：`v9-default.douyin.com/.../video/tos/...`
+   - 参数：`mime_type=video_mp4`、`lr=video_gen_watermark_unpaid`（免费生成带水印）、`dy_q`/`l` 为签名时效参数（**URL 有时效，生成后需立即落库/下载**）。
+
+### 6.2 遗留事项
+
+- prompt 时长 chip：已在引擎内解决（先清空编辑器再插入、校验内容 === prompt），实测提交内容干净。
+- 视频 URL 提取依赖「生成完成后点击视频卡片」；卡片未点击前 DOM 无 mp4/video 属性（引擎已内置该步骤）。
+- 时长选择为 best-effort：5s 选择器 DOM 不稳定时 fallback 到默认时长；建议后续固化选择器或改为直接带时长参数提交。
+- 额度：10s=2 点、5s=1 点（按 10 点/天的规格），成功才扣。
+
+### 6.3 下一步
+
+已接入调度台（见第 4 节）。待办：
+
+1. 应用内登录态问题（auth.json 无法在本机解密）修复后，在真实 App 里点一次「开始生成」验证整条 UI → dispatch → jobs/ledger 链路。
+2. 固化豆包时长选择器；把其它厂商（qwen/yuanbao/mathmind）按同一引擎框架接入。
+
+## 7. 参考资料
+
+- doubao2api（GitHub wangchuxiaoji-oss/doubao2api，doubao2api/client.py）
+- doubao-free-api（GitHub linuxhsj/doubao-free-api）
+- TRAE 社区《用 SOLO 构建豆包网页版逆向 API 网关》（Playwright + 前端 JS 签名注入思路）
+- 火山引擎 Ark 官方 API（**付费路线**，非本项目免费额度路线）：POST https://ark.cn-beijing.volces.com/api/v3/videos/generations

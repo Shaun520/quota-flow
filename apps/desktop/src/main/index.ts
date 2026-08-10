@@ -1,8 +1,59 @@
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
+import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
+import { runGenerate } from './dispatch'
+import type { DispatchEvent } from './dispatch'
+
+// 本地视频预览服务：127.0.0.1 随机端口，仅提供 userData/videos 下 <uuid>.mp4，支持 Range
+let mediaPortPromise: Promise<number> | null = null
+
+function startMediaServer(): Promise<number> {
+  if (!mediaPortPromise) {
+    mediaPortPromise = new Promise((resolve, reject) => {
+      const videosDir = join(app.getPath('userData'), 'videos')
+      const server = createServer((req, res) => {
+        const name = (req.url || '').split('?')[0].replace(/^\//, '')
+        if (!/^[0-9a-fA-F-]+\.mp4$/.test(name)) {
+          res.writeHead(400)
+          res.end()
+          return
+        }
+        const file = join(videosDir, name)
+        if (!existsSync(file)) {
+          res.writeHead(404)
+          res.end()
+          return
+        }
+        const size = statSync(file).size
+        res.setHeader('Content-Type', 'video/mp4')
+        res.setHeader('Accept-Ranges', 'bytes')
+        const range = req.headers.range
+        if (range) {
+          const m = /bytes=(\d*)-(\d*)/.exec(range)
+          const start = m && m[1] ? parseInt(m[1], 10) : 0
+          const end = m && m[2] ? parseInt(m[2], 10) : size - 1
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${size}`,
+            'Content-Length': end - start + 1
+          })
+          createReadStream(file, { start, end }).pipe(res)
+        } else {
+          res.writeHead(200, { 'Content-Length': size })
+          createReadStream(file).pipe(res)
+        }
+      })
+      server.on('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        resolve((server.address() as AddressInfo).port)
+      })
+    })
+  }
+  return mediaPortPromise
+}
 
 interface StoredSession {
   accessToken: string
@@ -78,6 +129,15 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  void startMediaServer()
+  ipcMain.handle('media:get-url', async (_e, name: unknown) => {
+    if (typeof name !== 'string' || !/^[0-9a-fA-F-]+\.mp4$/.test(name)) {
+      throw new Error('invalid media name')
+    }
+    const port = await startMediaServer()
+    return `http://127.0.0.1:${port}/${name}`
+  })
+
   ipcMain.handle('ping', () => 'pong')
   ipcMain.handle('window:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
   ipcMain.handle('window:toggle-maximize', (e) => {
@@ -99,6 +159,12 @@ app.whenReady().then(() => {
     })
   })
   ipcMain.handle('auth:clear-session', () => clearStoredSession())
+  ipcMain.handle('dispatch:generate', async (e, input: Parameters<typeof runGenerate>[0]) => {
+    const emit = (ev: DispatchEvent): void => {
+      if (!e.sender.isDestroyed()) e.sender.send('job:event', ev)
+    }
+    return runGenerate(input, emit)
+  })
   initProviders()
   createWindow()
 

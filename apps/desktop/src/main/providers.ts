@@ -4,6 +4,8 @@ import type { Cookie } from 'electron'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
 export type ProviderId =
   | 'doubao'
   | 'jimeng'
@@ -77,9 +79,26 @@ function partitionFor(providerId: string): string {
   return 'persist:qf-p:' + providerId
 }
 
-function encryptCookies(cookies: ProviderCookie[]): string {
-  const plain = JSON.stringify(cookies)
+function encryptCookies(
+  cookies: ProviderCookie[],
+  localStorageEntries: Array<{ key: string; value: string }> = []
+): string {
+  const plain = JSON.stringify({ cookies, localStorage: localStorageEntries })
   return safeStorage.encryptString(plain).toString('base64')
+}
+
+/** 兼容新旧格式：新格式 { cookies, localStorage }，旧格式为 ProviderCookie[] */
+function parseStoredCredentials(encrypted: string): {
+  cookies: ProviderCookie[]
+  localStorage: Array<{ key: string; value: string }>
+} {
+  const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+  const parsed = JSON.parse(plain) as unknown
+  if (Array.isArray(parsed)) {
+    return { cookies: parsed as ProviderCookie[], localStorage: [] }
+  }
+  const obj = parsed as { cookies?: ProviderCookie[]; localStorage?: Array<{ key: string; value: string }> }
+  return { cookies: obj.cookies ?? [], localStorage: obj.localStorage ?? [] }
 }
 
 function exportCookies(cookies: Cookie[]): ProviderCookie[] {
@@ -119,6 +138,123 @@ async function injectCookies(
       // 单条失败不阻塞其余注入
     }
   }
+}
+
+/** 登录收集后的决定性校验：把 cookie + localStorage 注入全新临时分区并打开豆包，确认真的能登录（与生成时同用法） */
+async function validateDoubaoCookies(
+  cookies: ProviderCookie[],
+  localStorageEntries: Array<{ key: string; value: string }> = []
+): Promise<boolean> {
+  const partition = 'persist:qf-verify-' + Date.now()
+  const ses = session.fromPartition(partition)
+  for (const c of cookies) {
+    try {
+      await ses.cookies.set({
+        url: `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`,
+        name: c.name,
+        value: c.value,
+        httpOnly: c.httpOnly ?? false,
+        secure: c.secure ?? true,
+        expirationDate: c.expires > 0 ? Math.floor(c.expires / 1000) : undefined
+      })
+    } catch {
+      // 单条失败不阻断
+    }
+  }
+
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      try {
+        void ses.clearStorageData()
+      } catch {}
+      resolve(ok)
+    }
+    const win = new BrowserWindow({
+      show: false,
+      width: 1000,
+      height: 800,
+      webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true }
+    })
+    const timer = setTimeout(() => {
+      try {
+        win.destroy()
+      } catch {}
+      finish(false)
+    }, 25000)
+    win.webContents.on('did-fail-load', () => {
+      clearTimeout(timer)
+      try {
+        win.destroy()
+      } catch {}
+      finish(false)
+    })
+    win.webContents.on('did-finish-load', () => {
+      setTimeout(() => {
+        void (async () => {
+          // 先注入 localStorage（若登录态依赖它），再刷新页面
+          if (localStorageEntries.length > 0) {
+            try {
+              await win.webContents.executeJavaScript(
+                `(() => {
+                  const entries = ${JSON.stringify(localStorageEntries)};
+                  for (const [k, v] of entries) {
+                    try { localStorage.setItem(k, v); } catch {}
+                  }
+                })()`,
+                true
+              )
+            } catch {}
+            try {
+              await win.webContents.executeJavaScript('location.reload()', true)
+            } catch {}
+            await sleep(2500)
+          }
+          // 轮询登录态稳定（最多 ~15s）
+          for (let i = 0; i < 15; i++) {
+            await sleep(1000)
+            try {
+              const state = (await win.webContents.executeJavaScript(
+                `(() => {
+                  const norm = (s) => (s || '').trim();
+                  const btns = [...document.querySelectorAll('button, [role="button"]')]
+                    .filter((b) => b.offsetParent !== null)
+                    .map((b) => norm(b.textContent));
+                  const hasLogin = btns.some((t) => /^(登录|立即登录)$/.test(t));
+                  const hasAvatar = btns.some((t) => /^[A-Za-z0-9_]{4,24}$/.test(t)) ||
+                    !!document.querySelector('[class*="avatar" i] img, [class*="userinfo" i]');
+                  return { hasLogin, hasAvatar };
+                })()`,
+                true
+              )) as { hasLogin?: boolean }
+              if (state && !state.hasLogin) {
+                clearTimeout(timer)
+                try {
+                  win.destroy()
+                } catch {}
+                finish(true)
+                return
+              }
+            } catch {}
+          }
+          clearTimeout(timer)
+          try {
+            win.destroy()
+          } catch {}
+          finish(false)
+        })()
+      }, 4000)
+    })
+    void win.loadURL('https://www.doubao.com/chat/').catch(() => {
+      clearTimeout(timer)
+      try {
+        win.destroy()
+      } catch {}
+      finish(false)
+    })
+  })
 }
 
 /* ============ P2 账号指纹去重（方案 A） ============
@@ -375,8 +511,75 @@ function openLoginWindow(providerId: string): Promise<ProviderLoginResult> {
           if (!flag) return
           void collectPartitionCookies(providerId)
             .then(async (cookies) => {
+              // 等待页面真正进入已登录状态（最多 15s）：过早收集会拿到未落定的不完整 cookie
+              let loggedIn = false
+              for (let i = 0; i < 15; i++) {
+                try {
+                  const state = (await win.webContents.executeJavaScript(
+                    `(() => {
+                      const norm = (s) => (s || '').trim();
+                      const btns = [...document.querySelectorAll('button, [role="button"]')]
+                        .filter((b) => b.offsetParent !== null)
+                        .map((b) => norm(b.textContent));
+                      const hasLogin = btns.some((t) => /^(登录|立即登录)$/.test(t));
+                      const hasAvatar = btns.some((t) => /^[A-Za-z0-9_]{4,24}$/.test(t)) ||
+                        !!document.querySelector('[class*="avatar" i] img, [class*="userinfo" i], [class*="user-info" i]');
+                      return { hasLogin, hasAvatar, url: location.href };
+                    })()`,
+                    true
+                  )) as { hasLogin?: boolean; hasAvatar?: boolean }
+                  if (state && !state.hasLogin) {
+                    loggedIn = true
+                    break
+                  }
+                } catch {}
+                await sleep(1000)
+              }
+              if (!loggedIn) {
+                done({ ok: false, error: '未检测到有效登录状态，请确认已扫码登录后再试' })
+                return
+              }
+              // 等会话 cookie 落定后再收集
+              await sleep(1200)
+              cookies = await collectPartitionCookies(providerId)
               if (cookies.length === 0) {
                 done({ ok: false, error: '未检测到登录 Cookie，请确认已登录后重试' })
+                return
+              }
+              const hasSession = cookies.some((c) => /session|sso|passport|token|uid/i.test(c.name))
+              if (!hasSession) {
+                done({ ok: false, error: '未检测到会话 Cookie（可能登录未完成），请重试' })
+                return
+              }
+              // 收集当前页面 origin 的 localStorage（豆包会话可能依赖其中的 token）
+              let storageEntries: Array<{ key: string; value: string }> = []
+              try {
+                const raw = await win.webContents.executeJavaScript(
+                  'JSON.stringify(Object.entries(localStorage))',
+                  true
+                )
+                const arr = JSON.parse(raw as string) as Array<[string, string]>
+                if (Array.isArray(arr)) {
+                  storageEntries = arr
+                    .filter(([k, v]) => typeof k === 'string' && typeof v === 'string')
+                    .map(([k, v]) => ({ key: k, value: v }))
+                }
+              } catch {}
+              // 记录收集到的 cookie 元信息，便于排查
+              appendFingerprintDebug({
+                type: 'login-collected',
+                providerId,
+                cookieCount: cookies.length,
+                storageCount: storageEntries.length,
+                cookies: cookies.map((c) => ({ name: c.name, domain: c.domain, secure: c.secure, httpOnly: c.httpOnly, expires: c.expires }))
+              })
+              // 决定性校验：cookie 必须在全新分区里真的能登录，否则不保存（避免存无效 cookie）
+              const valid = await validateDoubaoCookies(cookies, storageEntries)
+              if (!valid) {
+                done({
+                  ok: false,
+                  error: '登录态校验失败（cookie + localStorage 未能在干净环境生效），请重试登录'
+                })
                 return
               }
               // 登录成功：在窗口销毁前提取账号指纹（P2 去重）
@@ -385,7 +588,7 @@ function openLoginWindow(providerId: string): Promise<ProviderLoginResult> {
               const viewCookies = cookies.length
               done({
                 ok: true,
-                encrypted: encryptCookies(cookies),
+                encrypted: encryptCookies(cookies, storageEntries),
                 cookieCount: viewCookies,
                 expiresAt: maxExp > 0 ? maxExp : null,
                 accountFingerprint
@@ -411,8 +614,7 @@ async function healthCheck(
 
   let cookies: ProviderCookie[]
   try {
-    const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
-    cookies = JSON.parse(plain) as ProviderCookie[]
+    cookies = parseStoredCredentials(encrypted).cookies
   } catch {
     return { ok: false, status: 'unknown', error: '解密失败' }
   }

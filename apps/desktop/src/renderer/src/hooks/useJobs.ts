@@ -36,17 +36,21 @@ export interface JobItem {
 function toJobItem(row: JobRow): JobItem {
   const pid = row.provider_id ?? ''
   const quotaUsed = Number(row.cost_amount ?? 0)
+  const opts = (row.options ?? {}) as Record<string, unknown>
+  const accountName = typeof opts.accountName === 'string' && opts.accountName ? opts.accountName : null
   return {
     id: row.id,
     record: {
       at: row.created_at,
       provider: PROVIDER_NAME[pid] ?? (pid || '—'),
+      accountName,
       mode: MODE_LABEL[row.mode] ?? row.mode,
       prompt: row.prompt ?? '',
       cost: quotaUsed > 0 ? `${quotaUsed} ${UNIT_MAP[pid] ?? row.cost_unit ?? '次'}` : '-',
       status: STATUS_MAP[row.status] ?? '失败',
       quality: row.quality_score != null ? String(row.quality_score) : '-',
       traceId: row.trace_id ?? null,
+      resultUrl: row.result_url ?? null,
       errorMessage: row.error ?? null
     }
   }

@@ -19,6 +19,10 @@ export function isAuthConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY)
 }
 
+export function getSupabaseConfig(): { url: string; anonKey: string } | null {
+  return SUPABASE_URL && SUPABASE_ANON_KEY ? { url: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY } : null
+}
+
 export function getAuthService(): AuthService | null {
   if (!isAuthConfigured()) return null
   if (!service) {

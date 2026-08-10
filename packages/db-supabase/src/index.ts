@@ -6,6 +6,18 @@ export interface SupabaseConfig {
   supabaseAnonKey: string
 }
 
+/** 按北京时间（Asia/Shanghai）计算日期键，保证每日额度 0 点重置 */
+export function todayKey(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date())
+  const get = (t: string): string => parts.find((p) => p.type === t)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
 export type TeamRole = 'admin' | 'member'
 
 export interface TeamContext {
@@ -63,6 +75,7 @@ export interface ProviderKey {
   health_status: string
   account_fingerprint: string | null
   enabled: boolean
+  is_default: boolean
   created_at: string
 }
 
@@ -135,6 +148,26 @@ export class ProviderService {
     return (data ?? null) as unknown as ProviderKey | null
   }
 
+  /** 重新登录后刷新已有账号的 cookie（保留 keyId，不丢额度归属） */
+  async refreshProviderKey(
+    userId: string,
+    keyId: string,
+    input: { encryptedKey: string; expiresAt?: string | null; healthStatus?: string }
+  ): Promise<void> {
+    const payload: Record<string, unknown> = {
+      encrypted_key: input.encryptedKey,
+      last_health_check: new Date().toISOString()
+    }
+    payload.cookie_expires_at = input.expiresAt ?? null
+    payload.health_status = input.healthStatus ?? 'unknown'
+    const { error } = await this.client
+      .from('provider_keys')
+      .update(payload)
+      .eq('id', keyId)
+      .eq('owner_user_id', userId)
+    if (error) throw error
+  }
+
   async findDuplicateFingerprint(
     userId: string,
     providerId: string,
@@ -181,6 +214,22 @@ export class ProviderService {
     if (error) throw error
   }
 
+  /** 设为默认账号：先把同厂商所有账号置否，再置目标为默认（每厂商至多一个） */
+  async setDefaultKey(userId: string, providerId: string, keyId: string): Promise<void> {
+    const { error: clearError } = await this.client
+      .from('provider_keys')
+      .update({ is_default: false })
+      .eq('owner_user_id', userId)
+      .eq('provider_id', providerId)
+    if (clearError) throw clearError
+    const { error } = await this.client
+      .from('provider_keys')
+      .update({ is_default: true })
+      .eq('id', keyId)
+      .eq('owner_user_id', userId)
+    if (error) throw error
+  }
+
   async listLedger(userId: string): Promise<QuotaLedgerRow[]> {
     // RLS 在服务端隔离数据；按 account_key_id 归属过滤 + 全量个人行
     const { data, error } = await this.client
@@ -202,15 +251,16 @@ export class ProviderService {
       teamId?: string | null
     }
   ): Promise<QuotaLedgerRow> {
-    const today = new Date().toISOString().slice(0, 10)
-    const { data: existing, error: queryError } = await this.client
+    const today = todayKey()
+    let query = this.client
       .from('quota_ledger')
       .select('*')
       .eq('date', today)
       .eq('owner_user_id', input.userId)
       .eq('provider_id', input.providerId)
-      .is('account_key_id', null)
-      .maybeSingle()
+    // 有 keyId 时按账号精确匹配；无 keyId 时才匹配聚合行（IS NULL）
+    query = input.keyId ? query.eq('account_key_id', input.keyId) : query.is('account_key_id', null)
+    const { data: existing, error: queryError } = await query.maybeSingle()
     if (queryError) throw queryError
     if (existing) return existing as unknown as QuotaLedgerRow
 
@@ -233,6 +283,49 @@ export class ProviderService {
       .single()
     if (insertError) throw insertError
     return (created ?? null) as unknown as QuotaLedgerRow
+  }
+
+  /** 扣减今日额度：确保当日 ledger 行存在后累加 used / 扣减 remaining */
+  async consumeLedger(
+    userId: string,
+    providerId: string,
+    amount: number,
+    opts: { unitName?: string; keyId?: string | null; teamId?: string | null } = {}
+  ): Promise<QuotaLedgerRow> {
+    const today = todayKey()
+    let row: QuotaLedgerRow | null = null
+    if (opts.keyId) {
+      const { data, error } = await this.client
+        .from('quota_ledger')
+        .select('*')
+        .eq('date', today)
+        .eq('owner_user_id', userId)
+        .eq('provider_id', providerId)
+        .eq('account_key_id', opts.keyId)
+        .maybeSingle()
+      if (error) throw error
+      row = (data ?? null) as unknown as QuotaLedgerRow | null
+    }
+    if (!row) {
+      row = await this.getOrInitLedger({
+        userId,
+        providerId,
+        unitName: opts.unitName ?? '',
+        dailyTotal: 0,
+        keyId: opts.keyId ?? null,
+        teamId: opts.teamId ?? null
+      })
+    }
+    const used = Number(row.used ?? 0) + amount
+    const remaining = Math.max(Number(row.remaining ?? 0) - amount, 0)
+    const { data, error } = await this.client
+      .from('quota_ledger')
+      .update({ used, remaining })
+      .eq('id', row.id)
+      .select()
+      .single()
+    if (error) throw error
+    return (data ?? null) as unknown as QuotaLedgerRow
   }
 }
 
@@ -266,6 +359,7 @@ export interface JobRow {
 export interface InsertJobInput {
   teamId?: string | null
   providerId?: string | null
+  accountId?: string | null
   mode: string
   prompt?: string | null
   options?: Record<string, unknown> | null
@@ -278,6 +372,23 @@ export interface InsertJobInput {
   costUnit?: string | null
   costAmount?: number | null
   createdAt?: string | null
+  completedAt?: string | null
+}
+
+export interface UpdateJobInput {
+  status?: JobStatus
+  providerId?: string | null
+  accountId?: string | null
+  resultUrl?: string | null
+  qualityScore?: number | null
+  error?: string | null
+  costUnit?: string | null
+  costAmount?: number | null
+  costBreakdown?: Record<string, unknown> | null
+  equivalentCount?: number | null
+  attempts?: Array<Record<string, unknown>> | null
+  traceId?: string | null
+  options?: Record<string, unknown> | null
   completedAt?: string | null
 }
 
@@ -302,6 +413,7 @@ export class JobService {
     }
     if (input.teamId) payload.team_id = input.teamId
     if (input.providerId) payload.provider_id = input.providerId
+    if (input.accountId) payload.account_id = input.accountId
     if (input.prompt) payload.prompt = input.prompt
     if (input.options) payload.options = input.options
     if (input.attempts) payload.attempts = input.attempts
@@ -317,6 +429,35 @@ export class JobService {
     const { data, error } = await this.client
       .from('jobs')
       .insert(payload)
+      .select()
+      .single()
+    if (error) throw error
+    return (data ?? null) as unknown as JobRow | null
+  }
+
+  /** 更新本人任务（RLS 同约束），支持状态流转与结果回写 */
+  async updateJob(userId: string, jobId: string, input: UpdateJobInput): Promise<JobRow | null> {
+    const payload: Record<string, unknown> = {}
+    if (input.status !== undefined) payload.status = input.status
+    if (input.providerId !== undefined) payload.provider_id = input.providerId
+    if (input.accountId !== undefined) payload.account_id = input.accountId
+    if (input.resultUrl !== undefined) payload.result_url = input.resultUrl
+    if (input.qualityScore !== undefined) payload.quality_score = input.qualityScore
+    if (input.error !== undefined) payload.error = input.error
+    if (input.costUnit !== undefined) payload.cost_unit = input.costUnit
+    if (input.costAmount !== undefined) payload.cost_amount = input.costAmount
+    if (input.costBreakdown !== undefined) payload.cost_breakdown = input.costBreakdown
+    if (input.equivalentCount !== undefined) payload.equivalent_count = input.equivalentCount
+    if (input.attempts !== undefined) payload.attempts = input.attempts
+    if (input.traceId !== undefined) payload.trace_id = input.traceId
+    if (input.options !== undefined) payload.options = input.options
+    if (input.completedAt !== undefined) payload.completed_at = input.completedAt
+
+    const { data, error } = await this.client
+      .from('jobs')
+      .update(payload)
+      .eq('id', jobId)
+      .eq('user_id', userId)
       .select()
       .single()
     if (error) throw error

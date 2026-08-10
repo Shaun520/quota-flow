@@ -324,12 +324,21 @@ export function AddProviderModal({
   onDone?: () => void
 }) {
   const [providerId, setProviderId] = useState(initialProviderId ?? providers[0]?.providerId ?? '')
-  const [status, setStatus] = useState<'idle' | 'logging' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
+  const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [cookieCount, setCookieCount] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [existingKeys, setExistingKeys] = useState<Array<{ id: string; accountName: string }>>([])
+  const [refreshTarget, setRefreshTarget] = useState<string>('new')
+  const [pendingLogin, setPendingLogin] = useState<{
+    encrypted: string
+    expiresAt: number | null
+    fingerprint: string | null
+    cookieCount: number
+  } | null>(null)
 
   const selected = providers.find((p) => p.providerId === providerId)
   const isApiKey = selected?.authType === 'apikey'
@@ -338,35 +347,60 @@ export function AddProviderModal({
   const reset = () => {
     setStatus('idle')
     setError(null)
+    setNotice(null)
     setCookieCount(0)
     setApiKey('')
+    setPendingLogin(null)
+    setExistingKeys([])
+    setRefreshTarget('new')
   }
 
   const saveEncrypted = async (
     encrypted: string,
     authType: 'cookie' | 'apikey',
     expiresAt: number | null,
-    accountFingerprint?: string | null
+    accountFingerprint?: string | null,
+    refreshKeyId?: string | null
   ) => {
     setSaving(true)
     setError(null)
+    setNotice(null)
     try {
       const svc = getProviderService()
       if (!svc) throw new Error('数据库服务未配置')
+
+      // 用户明确选择「刷新已有账号」：直接更新该 key 的 cookie（保留 keyId 与额度归属）
+      if (refreshKeyId) {
+        await svc.refreshProviderKey(userId, refreshKeyId, {
+          encryptedKey: encrypted,
+          expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+          healthStatus: 'unknown'
+        })
+        const target = existingKeys.find((k) => k.id === refreshKeyId)
+        setNotice(`已刷新账号「${target?.accountName ?? '未命名账号'}」的登录态（保留原账号记录）`)
+        setSaving(false)
+        return true
+      }
 
       // P2 去重：同一账号指纹已存在则拦截（指纹为 null 时跳过）
       if (accountFingerprint) {
         const dup = await svc.findDuplicateFingerprint(userId, providerId, accountFingerprint)
         if (dup) {
-          setError(`该账号已绑定（「${dup.account_name ?? '未命名账号'}」），如需重新绑定请先解绑旧账号`)
+          // 同一账号重新登录：刷新 cookie，保留 keyId 与额度归属
+          await svc.refreshProviderKey(userId, dup.id, {
+            encryptedKey: encrypted,
+            expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+            healthStatus: 'unknown'
+          })
+          setNotice(`已刷新账号「${dup.account_name ?? '未命名账号'}」的登录态（保留原账号记录）`)
           setSaving(false)
-          return false
+          return true
         }
       }
 
       // 备注为空时兜底自动命名：<厂商名> 账号 N（按该厂商第 N 个绑定递增）
-      const existingKeys = await svc.listProviderKeys(userId)
-      const sameProvider = existingKeys.filter((k) => k.provider_id === providerId)
+      const allKeys = await svc.listProviderKeys(userId)
+      const sameProvider = allKeys.filter((k) => k.provider_id === providerId)
       const seq = sameProvider.length + 1
       const name = accountName.trim() || `${selected?.name ?? providerId} 账号 ${seq}`
 
@@ -415,7 +449,7 @@ export function AddProviderModal({
         setError('加密失败')
         return
       }
-      const saved = await saveEncrypted(enc.encrypted, 'apikey', null, enc.fingerprint ?? null)
+      const saved = await saveEncrypted(enc.encrypted, 'apikey', null, enc.fingerprint ?? null, null)
       if (saved) setStatus('apikey-ok')
       return
     }
@@ -423,8 +457,64 @@ export function AddProviderModal({
     const res = await window.api.providers.login(selected.providerId)
     if (res.ok && res.encrypted) {
       setCookieCount(res.cookieCount ?? 0)
-      const saved = await saveEncrypted(res.encrypted, 'cookie', res.expiresAt ?? null, res.accountFingerprint ?? null)
-      if (saved) setStatus('login-ok')
+      setPendingLogin({
+        encrypted: res.encrypted,
+        expiresAt: res.expiresAt ?? null,
+        fingerprint: res.accountFingerprint ?? null,
+        cookieCount: res.cookieCount ?? 0
+      })
+      const svc = getProviderService()
+      let existing: Array<{ id: string; accountName: string }> = []
+      if (svc) {
+        try {
+          const keys = await svc.listProviderKeys(userId)
+          existing = keys
+            .filter((k) => k.provider_id === selected.providerId)
+            .map((k) => ({ id: k.id, accountName: k.account_name ?? '未命名账号' }))
+        } catch {}
+      }
+
+      // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；指纹能识别且无重复 → 直接新增
+      if (res.accountFingerprint && svc) {
+        try {
+          const dup = await svc.findDuplicateFingerprint(userId, selected.providerId, res.accountFingerprint)
+          if (dup) {
+            await svc.refreshProviderKey(userId, dup.id, {
+              encryptedKey: res.encrypted,
+              expiresAt: res.expiresAt ? new Date(res.expiresAt).toISOString() : null,
+              healthStatus: 'unknown'
+            })
+            setNotice(`已刷新账号「${dup.account_name ?? '未命名账号'}」的登录态（保留原账号记录）`)
+            setStatus('login-ok')
+            return
+          }
+        } catch {}
+        const saved = await saveEncrypted(
+          res.encrypted,
+          'cookie',
+          res.expiresAt ?? null,
+          res.accountFingerprint ?? null,
+          null
+        )
+        if (saved) setStatus('login-ok')
+        return
+      }
+
+      // 指纹为空且已有账号：无法自动识别 → 让用户选择（新增 / 刷新某个已有账号）
+      if (existing.length > 0) {
+        setExistingKeys(existing)
+        setRefreshTarget('new')
+        setStatus('pick-account')
+      } else {
+        const saved = await saveEncrypted(
+          res.encrypted,
+          'cookie',
+          res.expiresAt ?? null,
+          res.accountFingerprint ?? null,
+          null
+        )
+        if (saved) setStatus('login-ok')
+      }
     } else if (res.canceled) {
       setStatus('idle')
       if (res.error) setError(res.error)
@@ -432,6 +522,18 @@ export function AddProviderModal({
       setStatus('login-fail')
       setError(res.error ?? '登录失败，请重试')
     }
+  }
+
+  const confirmSave = async (): Promise<void> => {
+    if (!pendingLogin) return
+    const saved = await saveEncrypted(
+      pendingLogin.encrypted,
+      'cookie',
+      pendingLogin.expiresAt,
+      pendingLogin.fingerprint,
+      refreshTarget === 'new' ? null : refreshTarget
+    )
+    if (saved) setStatus('login-ok')
   }
 
   const handleFinish = () => {
@@ -488,6 +590,14 @@ export function AddProviderModal({
         </p>
       </div>
       {error && <div className="auth-msg auth-msg-error">{error}</div>}
+      {notice && (
+        <div
+          className="auth-msg"
+          style={{ color: '#2e7d32', border: '1px solid rgba(46,125,50,0.35)', borderRadius: 8, padding: '8px 10px', fontSize: 12 }}
+        >
+          {notice}
+        </div>
+      )}
       <div className="form-group" style={{ background: 'var(--bg-elevated)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
         {isApiKey ? (
           <>
@@ -527,6 +637,45 @@ export function AddProviderModal({
                 </p>
                 <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
                   重新登录
+                </button>
+              </div>
+            )}
+            {status === 'pick-account' && pendingLogin && (
+              <div>
+                <p style={{ margin: '0 0 10px', fontSize: '13px', color: 'var(--fg-secondary)' }}>
+                  该厂商已有 {existingKeys.length} 个账号，请选择：
+                </p>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 8 }}>
+                  <input
+                    type="radio"
+                    checked={refreshTarget === 'new'}
+                    onChange={() => setRefreshTarget('new')}
+                  />
+                  新增账号
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 12 }}>
+                  <input
+                    type="radio"
+                    checked={refreshTarget !== 'new'}
+                    onChange={() => setRefreshTarget(existingKeys[0]?.id ?? 'new')}
+                  />
+                  <span>刷新已有账号</span>
+                  {refreshTarget !== 'new' && (
+                    <select
+                      value={refreshTarget}
+                      onChange={(e) => setRefreshTarget(e.target.value)}
+                      style={{ marginLeft: 4 }}
+                    >
+                      {existingKeys.map((k) => (
+                        <option key={k.id} value={k.id}>
+                          {k.accountName}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <button className="btn-sm primary" onClick={() => void confirmSave()} disabled={saving}>
+                  {saving ? '保存中…' : '确认保存'}
                 </button>
               </div>
             )}

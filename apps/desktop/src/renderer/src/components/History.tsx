@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { JobItem } from '../hooks/useJobs'
 import { useJobs } from '../hooks/useJobs'
 import { IconDownload, IconEye, IconTrash } from './icons'
@@ -37,9 +37,77 @@ function timeAgo(iso: string): string {
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`
 }
 
+// 视频缩略图：加载本地/远程视频，取首帧画到 canvas 生成图片，点击触发预览
+function VideoThumb({ src, onClick }: { src: string; onClick: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [thumb, setThumb] = useState<string | null>(null)
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const draw = (): void => {
+      try {
+        if (v.readyState >= 2 && v.videoWidth > 0 && canvasRef.current) {
+          const c = canvasRef.current
+          c.width = 160
+          c.height = Math.max(1, Math.round((160 * v.videoHeight) / v.videoWidth))
+          c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height)
+          setThumb(c.toDataURL('image/jpeg', 0.7))
+        }
+      } catch {
+        // 取帧失败保留 video 元素兜底
+      }
+    }
+    const onLoaded = (): void => {
+      try {
+        v.currentTime = Math.min(0.2, (v.duration || 1) * 0.1)
+      } catch {}
+    }
+    const onSeeked = (): void => draw()
+    v.addEventListener('loadedmetadata', onLoaded)
+    v.addEventListener('seeked', onSeeked)
+    v.addEventListener('loadeddata', draw)
+    return () => {
+      v.removeEventListener('loadedmetadata', onLoaded)
+      v.removeEventListener('seeked', onSeeked)
+      v.removeEventListener('loadeddata', draw)
+    }
+  }, [src])
+
+  return (
+    <button
+      className="preview-thumb-btn"
+      title="点击预览视频"
+      onClick={onClick}
+      style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', display: 'block' }}
+    >
+      {thumb ? (
+        <img
+          src={thumb}
+          alt="预览"
+          style={{ width: 96, height: 54, objectFit: 'cover', borderRadius: 6, display: 'block' }}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          src={src}
+          muted
+          playsInline
+          preload="auto"
+          style={{ width: 96, height: 54, objectFit: 'cover', borderRadius: 6, display: 'block' }}
+        />
+      )}
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
+    </button>
+  )
+}
+
 export default function History() {
   const { loading, error, items, reload, remove } = useJobs()
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
+  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const [text, setText] = useState('')
   const [provider, setProvider] = useState('')
   const [status, setStatus] = useState('')
@@ -53,6 +121,46 @@ export default function History() {
     } finally {
       setDeletingId(null)
     }
+  }
+
+  // 一次性解析每行视频的可播放地址（本地路径 → http://127.0.0.1 服务）
+  useEffect(() => {
+    let cancelled = false
+    const map: Record<string, string> = {}
+    const tasks: Promise<void>[] = []
+    for (const item of items) {
+      const r = item.record
+      if (!r.resultUrl) continue
+      if (/^https?:/i.test(r.resultUrl)) {
+        map[item.id] = r.resultUrl
+      } else {
+        const name = r.resultUrl.replace(/\\/g, '/').split('/').pop() || ''
+        tasks.push(
+          window.api.media
+            .getUrl(name)
+            .then((u) => {
+              map[item.id] = u
+            })
+            .catch(() => {})
+        )
+      }
+    }
+    void Promise.all(tasks).then(() => {
+      if (!cancelled) setMediaUrls(map)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [items])
+
+  const togglePreview = (item: JobItem): void => {
+    if (preview && preview.id === item.id) {
+      setPreview(null)
+      return
+    }
+    const src = mediaUrls[item.id]
+    if (!src) return
+    setPreview({ id: item.id, src })
   }
 
   const providers = Array.from(new Set(items.map((i) => i.record.provider)))
@@ -165,40 +273,63 @@ export default function History() {
               {pagedItems.map((item) => {
                 const r = item.record
                 return (
-                  <tr key={item.id}>
-                    <td className="col-preview">
-                      <div className="preview-thumb">{previewLabel(r.status)}</div>
-                    </td>
-                    <td className="col-prompt">{r.prompt}</td>
-                    <td>{r.provider}</td>
-                    <td>{r.mode}</td>
-                    <td>{r.cost}</td>
-                    <td>
-                      <span className={'badge ' + badgeFor(r.status)}>{r.status}</span>
-                    </td>
-                    <td>{r.quality}</td>
-                    <td className="col-actions">
-                      <div className="action-btns">
-                        <button className="action-btn" title="查看" aria-label="查看">
-                          <IconEye size={12} />
-                        </button>
-                        {r.status !== '失败' && (
-                          <button className="action-btn" title="下载" aria-label="下载">
-                            <IconDownload size={12} />
-                          </button>
+                  <Fragment key={item.id}>
+                    <tr>
+                      <td className="col-preview">
+                        {r.status === '成功' && mediaUrls[item.id] ? (
+                          <VideoThumb src={mediaUrls[item.id]} onClick={() => togglePreview(item)} />
+                        ) : (
+                          <div className="preview-thumb">{previewLabel(r.status)}</div>
                         )}
-                        <button
-                          className="action-btn delete"
-                          title="删除"
-                          aria-label="删除"
-                          disabled={deletingId === item.id}
-                          onClick={() => void removeJob(item)}
-                        >
-                          <IconTrash size={12} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="col-prompt">{r.prompt}</td>
+                      <td>{r.provider}{r.accountName ? ' · ' + r.accountName : ''}</td>
+                      <td>{r.mode}</td>
+                      <td>{r.cost}</td>
+                      <td>
+                        <span className={'badge ' + badgeFor(r.status)}>{r.status}</span>
+                      </td>
+                      <td>{r.quality}</td>
+                      <td className="col-actions">
+                        <div className="action-btns">
+                          <button
+                            className="action-btn"
+                            title="查看"
+                            aria-label="查看"
+                            onClick={() => togglePreview(item)}
+                          >
+                            <IconEye size={12} />
+                          </button>
+                          {r.status !== '失败' && (
+                            <button className="action-btn" title="下载" aria-label="下载">
+                              <IconDownload size={12} />
+                            </button>
+                          )}
+                          <button
+                            className="action-btn delete"
+                            title="删除"
+                            aria-label="删除"
+                            disabled={deletingId === item.id}
+                            onClick={() => void removeJob(item)}
+                          >
+                            <IconTrash size={12} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {preview && preview.id === item.id && (
+                      <tr className="preview-row">
+                        <td colSpan={8} style={{ padding: '8px 12px' }}>
+                          <video
+                            controls
+                            autoPlay
+                            src={preview.src}
+                            style={{ width: '100%', maxHeight: 320, borderRadius: 10, background: '#000' }}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               })}
               {filtered.length === 0 && (
