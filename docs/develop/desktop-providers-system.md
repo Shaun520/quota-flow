@@ -1,0 +1,158 @@
+# 桌面端厂商账号系统方案
+
+> 状态：待实施（P1 设计定稿）
+> 日期：2026-08-10
+> 适用范围：apps/desktop（Electron + Vite + React）+ packages/db-supabase + migrations
+> 关联需求：REQUIREMENTS.md §5.7（表结构）、§5.8（RLS）、§5.9（额度账本）、§5.12（WebView 统一执行引擎）
+> 关联文档：docs/develop/desktop-auth-system.md（§3.7 团队绑定）
+
+## 1. 现状分析
+
+| 项 | 现状 |
+|---|---|
+| 厂商列表 | `data.ts` 静态 7 家（豆包/即梦/通义万相/元宝混元/可灵/海螺/MathMind） |
+| 账号绑定 | AddProviderModal 假登录（setTimeout 2s → done） |
+| 额度展示 | 写死的 remaining / state / accountsDetail |
+| 解绑 / 测试 | 纯 UI 无真实操作 |
+| 数据库 | `team_members` 已可用（登录后 join 出 team 上下文）；厂商相关表未建 |
+
+## 2. 目标
+
+把"绑定账号 → 查看额度 → 管理 Cookie"整条链路接到 Supabase：
+
+| 环节 | 真实化后 |
+|---|---|
+| 厂商列表 | Supabase `providers` 表（admin 可维护，客户端只读） |
+| 账号绑定 | 独立登录窗口 → 提取 cookie → 主进程加密 → 落 `provider_keys` |
+| 额度展示 | `quota_ledger` 账本（按日/团队/厂商/账号），无行按 `default_daily_quota` 初始化 |
+| 解绑 / 测试 | 删行 / 主进程隐藏窗口真实健康检查 |
+| 数据安全 | cookie 主进程 safeStorage 加密落库 + RLS 隔离 |
+
+## 3. 核心设计决策（已确认）
+
+### 3.1 cookie 存储加密：主进程 safeStorage 加密（已确认 ✅）
+
+- renderer → main 只传明文 cookie 一次，main 用 `safeStorage.encryptString()` 加密 base64 后写入 `provider_keys.encrypted_key`
+- 解密仅主进程执行（IPC `provider:decrypt-keys` → 注入 WebView partition），renderer 永不持有明文 cookie
+- 跨机器/团队共享账号的"key 不出云端"走 Edge Function 代调用，属后续阶段，不在本期范围
+
+### 3.2 个人模式可绑定：`team_id` 可空（已确认 ✅）
+
+- 与 auth 方案 §3.7"team=null 仅演示"的冲突**放开**：`provider_keys.team_id` 允许 NULL，个人绑定（`owner_user_id = auth.uid()`）不要求有团队
+- 权限不信任客户端：RLS 用 `auth.uid() ↔ team_members` 与 `owner_user_id` 双路径校验（见 §5.2）
+- 新用户首次绑定即完成新手引导步骤 1（真实绑定事件触发），不再靠 localStorage 假标记
+
+### 3.3 登录分区隔离：`session.fromPartition`（沿用 §5.12.4）
+
+- 每个厂商一个持久 partition：`persist:qf-p:<providerId>`
+- 绑定 = 在该 partition 中打开厂商登录页让用户手动登录 → 主进程读该 partition 的 cookie
+- 后续 WebView 生成引擎复用同一 partition，cookie 天然可用，无需二次注入
+
+## 4. 表结构（迁移 0001）
+
+依据 REQUIREMENTS §5.7，仅建本期所需列（其余列后续阶段补）。迁移含 **团队三张表**（`teams` / `team_members` / `team_invitations`，desktop-auth-system §3.7 依赖，且 provider_keys 团队行策略引用 team_members，必须先建）：
+
+```sql
+providers
+  id TEXT PK,            -- doubao / jimeng / qwen / yuanbao / kling / hailuo / mathmind
+  name TEXT,             -- 显示名
+  logo TEXT,             -- 图标标识（沿用现有 PROVIDER_ICONS 映射）
+  capabilities JSONB,    -- 支持的模型/模式（对齐现有 data.ts MODELS）
+  auth_type TEXT,        -- apikey / cookie / session_token
+  enabled BOOLEAN,
+  unit_name TEXT,        -- 点 / 灵感值 / 额度 / 个 / 积分 / 次
+  default_daily_quota NUMERIC,   -- 每日免费额度（账本初始化用）
+  created_at TIMESTAMPTZ
+
+provider_keys
+  id UUID PK DEFAULT gen_random_uuid(),
+  team_id UUID NULL,             -- 团队公共账号；NULL = 个人绑定（3.2）
+  owner_user_id UUID NOT NULL,   -- 绑定者
+  provider_id TEXT NOT NULL REFERENCES providers(id),
+  account_name TEXT,             -- 账号说明（"账号 1（默认）"）
+  encrypted_key TEXT NOT NULL,   -- safeStorage 加密后的 cookie（3.1）
+  auth_type TEXT DEFAULT 'cookie',
+  cookie_expires_at TIMESTAMPTZ NULL,
+  last_health_check TIMESTAMPTZ,
+  health_status TEXT,            -- healthy / expiring / expired / unknown
+  enabled BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT now()
+
+quota_ledger
+  id UUID PK DEFAULT gen_random_uuid(),
+  date DATE NOT NULL,
+  team_id UUID NULL,
+  account_key_id UUID REFERENCES provider_keys(id),
+  provider_id TEXT NOT NULL,
+  unit_name TEXT,
+  daily_total NUMERIC,
+  used NUMERIC DEFAULT 0,
+  remaining NUMERIC,
+  refreshed_at TIMESTAMPTZ
+  -- UNIQUE(date, team_id, account_key_id, provider_id)
+```
+
+- `quota_ledger` 无行时按 `providers.default_daily_quota` 初始化当日行（服务端查询时兜底，0 点滚动属 P2）
+
+## 5. 安全设计
+
+| 项 | 方案 |
+|---|---|
+| cookie 明文面 | 仅绑定登录窗口会话期存在于主进程内存；落库前 safeStorage 加密（3.1） |
+| renderer 接触面 | 永不收发明文 cookie；列表只展示 health/剩余/过期时间 |
+| 解密注入 | 仅主进程 `provider:decrypt-keys` 解密后注入对应 partition |
+| RLS | `providers` 全员可读；`provider_keys`：个人行 `owner_user_id = auth.uid()` 或团队行经 `team_members`（admin 看公共 key，member 只看自己绑的），沿用 §5.8 |
+| 删除 | 解绑 = 删行（含级联清理 partition cookie） |
+
+## 6. 模块划分（P1 实施清单）
+
+### 6.1 `migrations/0001_providers.sql`
+
+- 建表 + RLS（enforce + policy）+ seed 7 家 providers（含 capabilities / default_daily_quota，对齐现有 data.ts 与 provider-quota-spec.md）
+
+### 6.2 `packages/db-supabase` 扩展
+
+```ts
+// 新增 ProviderKeyService（挂 createSupabaseClient 或独立工厂）
+listProviderKeys(): Promise<ProviderKeyView[]>          // join providers 出展示结构
+addProviderKey(input): Promise<void>                     // team_id 可空（3.2）
+removeProviderKey(id): Promise<void>
+updateHealth(id, status): Promise<void>
+getOrInitLedger(providerId): Promise<QuotaLedgerRow>     // 无行按 default_daily_quota 初始化
+```
+
+### 6.3 主进程扩展（apps/desktop/src/main）
+
+```
+provider:login           → 开 BrowserWindow(partition=persist:qf-p:<id>) → 用户完成返回 → 提取 cookie 返回 renderer（仅此一次明文回传）
+provider:decrypt-keys    → 入参 [{id, encrypted_key}...] → 输出解密后的 [{id, cookie}]（仅注 partition 用）
+provider:health-check    → 隐藏 BrowserWindow 加载厂商 healthCheckUrl → 401 判 expired / 正常判 healthy
+```
+
+### 6.4 renderer
+
+```
+hooks/useProviders.ts    # 列表 / 绑定 / 解绑 / 测试 / 刷新 状态管理
+Providers.tsx             # 表格接真实数据；展开行账号列表真实；测试/解绑真实
+AddProviderModal.tsx      # 重写：真实登录窗口流程（3.3）→ 成功后写库 → onBound 回调
+Dashboard.tsx             # 厂商实时状态面板接 useProviders（unbound ↔ 真实额度）
+App.tsx / useAuth         # fresh 判定 ← 是否有任意 provider keyboard（真实绑定事件）
+data.ts                   # 仅保留 MODELS/HISTORY 演示兜底，PROVIDERS 静态清单由 DB 替代
+```
+
+## 7. 后续阶段（本方案外的路线）
+
+| 阶段 | 内容 |
+|---|---|
+| P2 额度真实化 | WebView 隐藏窗口提取实际剩余回写账本；pg_cron 0 点滚动 + 4h 健康检查；消耗回写 |
+| P3 生成链路 | WebView 统一执行引擎（§5.12 WebProviderConfig）→ 扣账本 + 写 jobs |
+| 团队公共账号 | Edge Function 代调用（key 不出云端），仅团队 admin 可管理公共 key |
+
+## 8. 实施步骤（P1）
+
+1. 写迁移 0001 → 在 Supabase Dashboard 执行（含 RLS + seed）
+2. `packages/db-supabase` 加 ProviderKeyService + ledger 函数，typecheck + build
+3. 主进程加 provider:* 三个 IPC + provider-login 窗口 + partition 管理
+4. preload 暴露 `api.providers` 命名空间
+5. renderer 写 `useProviders` + 改造 AddProviderModal / Providers / Dashboard
+6. fresh 判定切换为真实绑定事件；联调全流程：注册 → 绑定（登录窗口真实登录）→ 额度展示 → 解绑

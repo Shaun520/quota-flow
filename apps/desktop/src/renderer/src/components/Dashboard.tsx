@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { HISTORY_ROWS, PROVIDERS } from '../data'
 import {
   MODELS,
   computeCost,
@@ -9,6 +8,7 @@ import {
 } from '../spec'
 import { IconInfo, IconPlay, IconUpload, PROVIDER_ICONS } from './icons'
 import { EmptyState } from './EmptyState'
+import { useProviders } from '../hooks/useProviders'
 
 const VIP = false
 
@@ -22,6 +22,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory, onGoProviders }: DashboardProps) {
+  const { aggs: provAggs } = useProviders()
   const [provider, setProvider] = useState('auto')
   const [model, setModel] = useState(MODELS.auto[0])
   const [mode, setMode] = useState('t2v')
@@ -70,8 +71,6 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
   }, [])
-
-  const recentJobs = HISTORY_ROWS.slice(0, 5)
 
   return (
     <div className={'dashboard-wrap' + (banner ? ' has-banner' : '')}>
@@ -255,17 +254,21 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         <div className="provider-status-panel">
           <div className="panel-header">
             <h2>厂商实时状态</h2>
-            <span className="panel-meta">{fresh ? '未绑定' : '7 家接入'}</span>
+            <span className="panel-meta">
+              {provAggs.some((a) => a.boundCount > 0)
+                ? provAggs.reduce((s, a) => s + a.boundCount, 0) + ' 个账号'
+                : '未绑定'}
+            </span>
           </div>
-          {fresh ? (
+          {provAggs.every((a) => a.boundCount === 0) ? (
             <>
               <div className="provider-status-list">
-                {PROVIDERS.map((p) => {
-                  const IconComp = PROVIDER_ICONS[p.id]
+                {provAggs.map((p) => {
+                  const IconComp = PROVIDER_ICONS[p.providerId]
                   return (
-                    <div className="ps-item unbound" key={p.id}>
+                    <div className="ps-item unbound" key={p.providerId}>
                       <div className="ps-icon">
-                        {IconComp ? <IconComp size={20} /> : p.icon}
+                        {IconComp ? <IconComp size={20} /> : null}
                       </div>
                       <div className="ps-info">
                         <div className="ps-name">{p.name}</div>
@@ -293,23 +296,29 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           ) : (
             <>
               <div className="provider-status-list">
-                {PROVIDERS.map((p) => {
-                  const IconComp = PROVIDER_ICONS[p.id]
+                {provAggs.map((p) => {
+                  const IconComp = PROVIDER_ICONS[p.providerId]
+                  const used = p.bindings.reduce((s, b) => s + b.used, 0)
+                  const remaining = p.bindings.reduce((s, b) => s + b.remaining, 0)
+                  const total = p.defaultDailyQuota
+                  const fill = total > 0 ? Math.round((remaining / total) * 100) : 0
                   return (
-                    <div className="ps-item" key={p.id}>
+                    <div className="ps-item" key={p.providerId}>
                       <div className="ps-icon">
-                        {IconComp ? <IconComp size={20} /> : p.icon}
+                        {IconComp ? <IconComp size={20} /> : null}
                       </div>
                       <div className="ps-info">
                         <div className="ps-name">{p.name}</div>
-                        <div className="ps-quota">{p.remaining} {p.unit}</div>
-                        <div className="quota-bar">
-                          <div className="quota-fill" style={{ width: p.fill + '%' }} />
-                        </div>
+                        <div className="ps-quota">{remaining} / {total} {p.unitName}</div>
+                        {used > 0 && (
+                          <div className="quota-bar">
+                            <div className="quota-fill" style={{ width: fill + '%' }} />
+                          </div>
+                        )}
                       </div>
-                      <div className={'ps-state ' + p.state}>
+                      <div className={'ps-state ' + (p.health === 'unbound' ? 'unbound' : p.health === 'offline' ? 'offline' : p.health === 'degraded' ? 'degraded' : 'online')}>
                         <span className="dot" />
-                        {p.stateLabel}
+                        {p.healthLabel}
                       </div>
                     </div>
                   )
@@ -323,8 +332,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         </div>
       </div>
 
-      {/* 最近任务：无新手提示时展示（样式与演示模式对齐），内容为真实数据，
-         暂无记录时显示空状态，而不是 mock 卡片。 */}
+{/* 最近任务：真实生成记录接入前的空状态（不再展示 mock 数据） */}
       {!banner && (
         <div className="recent-jobs">
           <div className="section-header">
@@ -333,39 +341,11 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
               查看全部 →
             </button>
           </div>
-          {fresh ? (
-            <EmptyState
-              icon={<IconPlay size={18} />}
-              title="还没有生成记录"
-              description="填写描述并开始生成，你的第一条视频将出现在这里"
-            />
-          ) : (
-            <div className="job-list">
-              {recentJobs.map((row, i) => (
-                <div className="job-card" key={i}>
-                  <div className="job-thumb">
-                    <span>{row.status === '排队' ? '生成中…' : '视频预览'}</span>
-                    {row.duration && <span className="job-duration">{row.duration}</span>}
-                    <span
-                      className={
-                        'job-badge ' +
-                        (row.status === '成功' ? 'success' : row.status === '排队' ? 'pending' : 'error')
-                      }
-                    >
-                      {row.status}
-                    </span>
-                  </div>
-                  <div className="job-body">
-                    <div className="job-prompt">{row.prompt}</div>
-                    <div className="job-meta">
-                      <span>{row.provider} · {row.mode}</span>
-                      <span>{row.cost + (row.time ? ' · ' + row.time : '')}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <EmptyState
+            icon={<IconPlay size={18} />}
+            title="还没有生成记录"
+            description="填写描述并开始生成，你的第一条视频将出现在这里"
+          />
         </div>
       )}
     </div>

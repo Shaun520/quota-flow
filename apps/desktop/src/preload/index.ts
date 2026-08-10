@@ -16,6 +16,21 @@ export interface AuthSessionTokens {
   expiresAt: number
 }
 
+export interface ProviderLoginResult {
+  ok: boolean
+  canceled?: boolean
+  encrypted?: string
+  cookieCount?: number
+  expiresAt?: number | null
+  error?: string
+}
+
+export interface HealthCheckResult {
+  ok: boolean
+  status: string
+  error?: string
+}
+
 export interface DesktopApi {
   versions: {
     electron: string
@@ -27,6 +42,12 @@ export interface DesktopApi {
     getSession: () => Promise<AuthSessionTokens | null>
     setSession: (tokens: AuthSessionTokens) => Promise<void>
     clearSession: () => Promise<void>
+  }
+  providers: {
+    login: (providerId: string) => Promise<ProviderLoginResult>
+    encrypt: (plain: string) => Promise<{ encrypted: string }>
+    healthCheck: (providerId: string, encrypted: string) => Promise<HealthCheckResult>
+    cancelLogin: (providerId: string) => Promise<void>
   }
   windowControls: {
     minimize: () => Promise<void>
@@ -75,6 +96,13 @@ const api: DesktopApi = {
     getSession: () => ipcRenderer.invoke('auth:get-session') as Promise<AuthSessionTokens | null>,
     setSession: (tokens) => ipcRenderer.invoke('auth:set-session', tokens) as Promise<void>,
     clearSession: () => ipcRenderer.invoke('auth:clear-session') as Promise<void>
+  },
+  providers: {
+    login: (providerId) => ipcRenderer.invoke('provider:login', providerId) as Promise<ProviderLoginResult>,
+    encrypt: (plain) => ipcRenderer.invoke('provider:encrypt', plain) as Promise<{ encrypted: string }>,
+    healthCheck: (providerId, encrypted) =>
+      ipcRenderer.invoke('provider:health-check', providerId, encrypted) as Promise<HealthCheckResult>,
+    cancelLogin: (providerId) => ipcRenderer.invoke('provider:login-cancel', providerId) as Promise<void>
   },
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),

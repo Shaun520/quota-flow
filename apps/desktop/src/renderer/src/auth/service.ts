@@ -1,10 +1,12 @@
 import { createAuthService } from '@quota-flow/auth'
 import type { AuthService, AuthTokens } from '@quota-flow/auth'
+import { ProviderService } from '@quota-flow/db-supabase'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 let service: AuthService | null = null
+let providerService: ProviderService | null = null
 
 export interface PlainSession {
   access_token: string
@@ -25,6 +27,15 @@ export function getAuthService(): AuthService | null {
     })
   }
   return service
+}
+
+export function getProviderService(): ProviderService | null {
+  const auth = getAuthService()
+  if (!auth) return null
+  if (!providerService) {
+    providerService = new ProviderService(auth.getClient())
+  }
+  return providerService
 }
 
 export function toTokens(session: PlainSession): AuthTokens {

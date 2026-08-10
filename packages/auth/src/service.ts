@@ -18,6 +18,8 @@ export interface AuthResult {
   user: User | null
   session: Session | null
   error: string | null
+  pendingPassword?: string
+  pendingDisplayName?: string
 }
 
 export class AuthService {
@@ -46,6 +48,13 @@ export class AuthService {
       data: { display_name: displayName }
     })
     return { user: data.user ?? null, session: null, error: error?.message ?? null }
+  }
+
+  async updateProfile(displayName: string): Promise<{ error: string | null }> {
+    const { error } = await this.client.auth.updateUser({
+      data: { display_name: displayName }
+    })
+    return { error: error?.message ?? null }
   }
 
   async sendOtp(email: string): Promise<{ error: string | null }> {

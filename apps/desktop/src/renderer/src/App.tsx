@@ -42,15 +42,15 @@ interface MainAppProps {
   team: TeamContext | null
   fresh: boolean
   bannerVisible: boolean
-  setFresh: (v: boolean) => void
   onboardStep: 1 | 2 | 3
   completeStep: (n: 1 | 2 | 3) => void
   onFinishOnboarding: () => void
   onDismissBanner: () => void
+  onUpdateProfile: (name: string) => Promise<string | null>
   onSignOut: () => Promise<void>
 }
 
-function MainApp({ user, team, fresh, bannerVisible, setFresh, onboardStep, completeStep, onFinishOnboarding, onDismissBanner, onSignOut }: MainAppProps) {
+function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, onFinishOnboarding, onDismissBanner, onUpdateProfile, onSignOut }: MainAppProps) {
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -107,11 +107,6 @@ function MainApp({ user, team, fresh, bannerVisible, setFresh, onboardStep, comp
               <button className="dropdown-item" onClick={() => setModal('settings')}>
                 <IconGear size={14} />
                 设置
-              </button>
-              <div className="dropdown-divider" />
-              <button className="dropdown-item" onClick={() => setFresh(!fresh)}>
-                <IconMonitor size={14} />
-                {fresh ? '切换为演示数据' : '切换为新用户模式'}
               </button>
               <div className="dropdown-divider" />
               <button
@@ -173,7 +168,14 @@ function MainApp({ user, team, fresh, bannerVisible, setFresh, onboardStep, comp
         </div>
       </footer>
 
-      {modal === 'profile' && <ProfileModal onClose={() => setModal(null)} />}
+      {modal === 'profile' && (
+        <ProfileModal
+          user={user}
+          team={team}
+          onClose={() => setModal(null)}
+          onSaveDisplayName={onUpdateProfile}
+        />
+      )}
       {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
     </div>
   )
@@ -213,16 +215,9 @@ function ConfigWarning() {
 }
 
 export default function App() {
-  const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword } =
+  const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile } =
     useAuth()
   const [submitting, setSubmitting] = useState(false)
-  const [fresh, setFresh] = useState(() => {
-    try {
-      return localStorage.getItem('quota-flow:fresh-user') !== '0'
-    } catch {
-      return true
-    }
-  })
   const [onboardStep, setOnboardStep] = useState<1 | 2 | 3>(() => {
     try {
       const v = Number(localStorage.getItem('quota-flow:onboard-step'))
@@ -231,31 +226,10 @@ export default function App() {
       return 1
     }
   })
-  const [bannerDismissed, setBannerDismissed] = useState(() => {
-    try {
-      return localStorage.getItem('quota-flow:welcome-dismissed') === '1'
-    } catch {
-      return false
-    }
-  })
+  const fresh = onboardStep < 3
+  // 关闭引导只对本次会话生效，重启后重新出现（直到完成全部引导）
+  const [bannerDismissed, setBannerDismissed] = useState(false)
   const bannerVisible = fresh && !bannerDismissed
-
-  const updateFresh = useCallback((v: boolean) => {
-    setFresh(v)
-    if (v) {
-      setBannerDismissed(false)
-      try {
-        localStorage.removeItem('quota-flow:welcome-dismissed')
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      localStorage.setItem('quota-flow:fresh-user', v ? '1' : '0')
-    } catch {
-      // ignore
-    }
-  }, [])
 
   const completeStep = useCallback((n: 1 | 2 | 3) => {
     setOnboardStep((prev) => {
@@ -271,11 +245,6 @@ export default function App() {
 
   const hideBanner = useCallback(() => {
     setBannerDismissed(true)
-    try {
-      localStorage.setItem('quota-flow:welcome-dismissed', '1')
-    } catch {
-      // ignore
-    }
   }, [])
 
   const finishOnboarding = useCallback(() => {
@@ -350,11 +319,11 @@ export default function App() {
       team={team}
       fresh={fresh}
       bannerVisible={bannerVisible}
-      setFresh={updateFresh}
       onboardStep={onboardStep}
       completeStep={completeStep}
       onFinishOnboarding={finishOnboarding}
       onDismissBanner={dismissBanner}
+      onUpdateProfile={updateProfile}
       onSignOut={signOut}
     />
   )

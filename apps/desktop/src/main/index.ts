@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { initWebviewTest } from './webview-test'
+import { initProviders } from './providers'
 
 interface StoredSession {
   accessToken: string
@@ -98,6 +99,7 @@ app.whenReady().then(() => {
     })
   })
   ipcMain.handle('auth:clear-session', () => clearStoredSession())
+  initProviders()
   createWindow()
 
   app.on('activate', () => {

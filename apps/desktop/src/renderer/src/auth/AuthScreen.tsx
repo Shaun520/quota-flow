@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import TitleBar from '../components/TitleBar'
 import { BrandMark } from '../components/Brand'
@@ -39,8 +39,42 @@ export default function AuthScreen({
   const [otpSent, setOtpSent] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(-1)
+  const suggestionsTimerRef = useRef<number | null>(null)
 
   const emailDomains = ['qq.com', '163.com', '126.com', 'gmail.com', 'outlook.com', 'foxmail.com', 'icloud.com', 'yeah.net']
+
+  function openSuggestions(): void {
+    if (suggestionsTimerRef.current !== null) {
+      clearTimeout(suggestionsTimerRef.current)
+      suggestionsTimerRef.current = null
+    }
+    setShowSuggestions(true)
+  }
+
+  function closeSuggestionsLater(): void {
+    if (suggestionsTimerRef.current !== null) {
+      clearTimeout(suggestionsTimerRef.current)
+    }
+    suggestionsTimerRef.current = window.setTimeout(() => {
+      suggestionsTimerRef.current = null
+      setShowSuggestions(false)
+    }, 150)
+  }
+
+  function closeSuggestions(): void {
+    if (suggestionsTimerRef.current !== null) {
+      clearTimeout(suggestionsTimerRef.current)
+      suggestionsTimerRef.current = null
+    }
+    setShowSuggestions(false)
+    setSelectedIndex(-1)
+  }
+
+  function onEmailChange(v: string): void {
+    setEmail(v)
+    setSelectedIndex(-1)
+    openSuggestions()
+  }
 
   function getEmailSuggestions(input: string): string[] {
     const atIndex = input.indexOf('@')
@@ -94,6 +128,7 @@ export default function AuthScreen({
     setPassword('')
     setDisplayName('')
     setOtpSent(false)
+    closeSuggestions()
   }
 
   async function handlePasswordLogin(e: FormEvent): Promise<void> {
@@ -118,6 +153,7 @@ export default function AuthScreen({
     setDisplayName('')
     setEmail('')
     setOtpSent(false)
+    closeSuggestions()
   }
 
   async function handleOtpSend(e: FormEvent): Promise<void> {
@@ -160,14 +196,14 @@ export default function AuthScreen({
               <button
                 type="button"
                 className={'auth-tab' + (loginMode === 'password' ? ' active' : '')}
-                onClick={() => { setLoginMode('password'); setToken('') }}
+                onClick={() => { setLoginMode('password'); setToken(''); closeSuggestions() }}
               >
                 密码登录
               </button>
               <button
                 type="button"
                 className={'auth-tab' + (loginMode === 'otp' ? ' active' : '')}
-                onClick={() => { setLoginMode('otp'); setToken('') }}
+                onClick={() => { setLoginMode('otp'); setToken(''); closeSuggestions() }}
               >
                 验证码登录
               </button>
@@ -186,9 +222,9 @@ export default function AuthScreen({
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => { setEmail(e.target.value); setSelectedIndex(-1) }}
-                    onFocus={() => setShowSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    onChange={(e) => onEmailChange(e.target.value)}
+                    onFocus={openSuggestions}
+                    onBlur={closeSuggestionsLater}
                     onKeyDown={handleEmailKeyDown}
                     placeholder="请输入邮箱地址"
                     required
@@ -202,7 +238,7 @@ export default function AuthScreen({
                           key={s}
                           className={'auth-email-suggestion' + (i === selectedIndex ? ' selected' : '')}
                           onMouseEnter={() => setSelectedIndex(i)}
-                          onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
+                          onMouseDown={() => { setEmail(s); closeSuggestions() }}
                         >
                           {s}
                         </div>
@@ -247,9 +283,9 @@ export default function AuthScreen({
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => { setEmail(e.target.value); setSelectedIndex(-1) }}
-                    onFocus={() => setShowSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                    onChange={(e) => onEmailChange(e.target.value)}
+                    onFocus={openSuggestions}
+                    onBlur={closeSuggestionsLater}
                     onKeyDown={handleEmailKeyDown}
                     placeholder="请输入邮箱地址"
                     required
@@ -263,7 +299,7 @@ export default function AuthScreen({
                           key={s}
                           className={'auth-email-suggestion' + (i === selectedIndex ? ' selected' : '')}
                           onMouseEnter={() => setSelectedIndex(i)}
-                          onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
+                          onMouseDown={() => { setEmail(s); closeSuggestions() }}
                         >
                           {s}
                         </div>
@@ -339,7 +375,7 @@ export default function AuthScreen({
                           key={s}
                           className={'auth-email-suggestion' + (i === selectedIndex ? ' selected' : '')}
                           onMouseEnter={() => setSelectedIndex(i)}
-                          onMouseDown={() => { setEmail(s); setShowSuggestions(false) }}
+                          onMouseDown={() => { setEmail(s); closeSuggestions() }}
                         >
                           {s}
                         </div>

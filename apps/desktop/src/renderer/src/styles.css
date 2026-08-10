@@ -1525,6 +1525,33 @@ body {
   box-shadow: 0 2px 6px rgba(224, 122, 62, 0.3);
 }
 
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.82em;
+  color: var(--accent);
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.rename-input {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  font-size: 0.88em;
+  width: 140px;
+}
+.rename-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* ===== 底部状态栏 ===== */
 .status-bar {
   display: flex;
@@ -1862,6 +1889,10 @@ textarea::-webkit-scrollbar {
 .auth-msg-error {
   background: rgba(196, 77, 77, 0.1);
   color: var(--error);
+}
+.auth-msg-success {
+  background: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
 }
 .auth-field-error {
   font-size: 0.82em;

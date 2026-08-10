@@ -31,11 +31,13 @@ export interface AuthUser {
   id: string
   email: string
   displayName: string
+  createdAt: string
 }
 
 interface RawUser {
   id: string
   email?: string | null
+  created_at?: string | null
   user_metadata?: Record<string, unknown>
 }
 
@@ -52,6 +54,7 @@ export interface AuthResult {
   verifyOtp: (email: string, token: string) => Promise<void>
   signOut: () => Promise<void>
   forgotPassword: (email: string) => Promise<void>
+  updateProfile: (displayName: string) => Promise<string | null>
 }
 
 function toAuthUser(raw: RawUser | null): AuthUser | null {
@@ -59,7 +62,12 @@ function toAuthUser(raw: RawUser | null): AuthUser | null {
   const meta = raw.user_metadata ?? {}
   const displayName =
     typeof meta['display_name'] === 'string' ? meta['display_name'] : (raw.email ?? '用户')
-  return { id: raw.id, email: raw.email ?? '', displayName }
+  return {
+    id: raw.id,
+    email: raw.email ?? '',
+    displayName,
+    createdAt: typeof raw.created_at === 'string' ? raw.created_at : ''
+  }
 }
 
 export function useAuth(): AuthResult {
@@ -225,5 +233,16 @@ export function useAuth(): AuthResult {
     else setNotice('密码重置邮件已发送，请查收邮箱')
   }, [])
 
-  return { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword }
+  const updateProfile = useCallback(async (displayName: string): Promise<string | null> => {
+    setError(null)
+    setNotice(null)
+    const auth = getAuthService()
+    if (!auth) return '未配置 Supabase，请检查 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY'
+    const result = await auth.updateProfile(displayName)
+    if (result.error) return translateError(result.error)
+    setUser((prev) => (prev ? { ...prev, displayName } : prev))
+    return null
+  }, [])
+
+  return { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile }
 }
