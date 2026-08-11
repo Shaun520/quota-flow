@@ -8,6 +8,15 @@
 
 import { BrowserWindow, session } from 'electron'
 
+declare global {
+  interface Window {
+    __qfRisk?: { type: string; detail?: string | null; at?: number }
+    __qfRiskProbeHooked?: boolean
+    __qfFetchHooked?: boolean
+    __qfXhrHooked?: boolean
+  }
+}
+
 const PARTITION = 'persist:qf-p:doubao'
 const DOUBAO_URL = 'https://www.doubao.com/chat/'
 /** 统一 UA：必须与登录窗口、校验窗口一致（providers.ts CHROME_UA），避免服务端按设备指纹失效会话 */
@@ -501,6 +510,145 @@ async function applyDoubaoDuration(
   return { ok: true }
 }
 
+/* ---------------- 风控探针（豆包服务端风控/验证码检测，2026-08-12） ----------------
+ * 信号：
+ *   /chat/completion 响应体：verify_scene / decision.type=verify（风控验证）、
+ *     710022002 / 710022004（限流）、async_task（任务已创建）
+ *   DOM：安全验证 / 滑块 / 人机验证 / captcha iframe
+ * 页面脚本写入 window.__qfRisk，主进程每轮询 tick 读取。
+ */
+
+const riskProbeScript = (): unknown => {
+  if (window.__qfRiskProbeHooked) return { ok: true, already: true }
+  window.__qfRisk = { type: 'none', detail: null, at: 0 }
+  const setRisk = (type: string, detail: string | null): void => {
+    window.__qfRisk = { type, detail: detail ? detail.slice(-400) : null, at: Date.now() }
+  }
+  const analyze = (acc: string): void => {
+    if (!acc) return
+    if (/async_task|"task_id"/.test(acc)) {
+      // 任务已创建：若此前不是验证态，则标记 ok（验证解除）
+      if ((window.__qfRisk as { type?: string }).type !== 'verify') setRisk('ok', null)
+      return
+    }
+    if (/710022002|710022004/.test(acc)) {
+      setRisk('limit', acc.slice(-400))
+      return
+    }
+    if (/verify_scene|decision[^}]{0,80}verify/i.test(acc)) {
+      setRisk('verify', acc.slice(-400))
+    }
+  }
+  const grab = (url: string, p: Promise<Response>): void => {
+    p.then((resp) => {
+      try {
+        if (!resp || !resp.body || !resp.clone || !resp.body.getReader) return
+        const clone = resp.clone()
+        if (!clone.body) return
+        const reader = clone.body.getReader()
+        const decoder = new TextDecoder()
+        let acc = ''
+        const pump = (): void => {
+          reader
+            .read()
+            .then(({ done, value }) => {
+              if (done) return
+              acc += decoder.decode(value, { stream: true })
+              if (acc.length > 300000) acc = acc.slice(-200000)
+              analyze(acc)
+              pump()
+            })
+            .catch(() => {})
+        }
+        pump()
+      } catch {}
+    }).catch(() => {})
+  }
+  const origFetch = window.fetch
+  if (origFetch && !window.__qfFetchHooked) {
+    window.fetch = function (...args: unknown[]): Promise<Response> {
+      let u = ''
+      try {
+        u = typeof args[0] === 'string' ? (args[0] as string) : ((args[0] as { url?: string })?.url || '')
+      } catch {}
+      const p = origFetch.apply(this, args as [RequestInfo | URL, RequestInit?])
+      if (/chat\/completion|samantha\/chat/.test(u)) grab(u, p)
+      return p
+    }
+    window.__qfFetchHooked = true
+  }
+  const origOpen = XMLHttpRequest.prototype.open
+  const origSend = XMLHttpRequest.prototype.send
+  if (origOpen && origSend && !window.__qfXhrHooked) {
+    XMLHttpRequest.prototype.open = function (m: string, u: string): void {
+      ;(this as unknown as { __qfUrl: string }).__qfUrl = String(u)
+      return origOpen.apply(this, arguments as unknown as Parameters<typeof XMLHttpRequest.prototype.open>)
+    }
+    XMLHttpRequest.prototype.send = function (...args: unknown[]): void {
+      const x = this as unknown as XMLHttpRequest & { __qfUrl?: string }
+      if (/chat\/completion|samantha\/chat/.test(x.__qfUrl || '')) {
+        x.addEventListener('load', () => {
+          try {
+            analyze(x.responseText || '')
+          } catch {}
+        })
+      }
+      return origSend.apply(this, args as [Document | XMLHttpRequestBodyInit | null | undefined])
+    }
+    window.__qfXhrHooked = true
+  }
+  try {
+    const mo = new MutationObserver(() => {
+      try {
+        const t = document.body ? document.body.innerText : ''
+        if (
+          /安全验证|滑块验证|请完成验证|拖动滑块|人机验证|完成验证|验证码/.test(t) ||
+          document.querySelector('[class*="captcha" i], [class*="verify" i], iframe[src*="captcha" i]')
+        ) {
+          if ((window.__qfRisk as { type?: string }).type !== 'ok') {
+            window.__qfRisk = { type: 'verify', detail: 'dom-verify', at: Date.now() }
+          }
+        }
+      } catch {}
+    })
+    mo.observe(document.body || document.documentElement, { childList: true, subtree: true, characterData: true })
+  } catch {}
+  return { ok: true }
+}
+
+const readRiskScript = (): unknown => {
+  const w = (window.__qfRisk || { type: 'none' }) as { type?: string; detail?: string | null }
+  let domVerify = false
+  try {
+    const t = document.body ? document.body.innerText : ''
+    if (/安全验证|滑块验证|请完成验证|拖动滑块|人机验证|完成验证/.test(t)) domVerify = true
+    if (document.querySelector('[class*="captcha" i], iframe[src*="captcha" i]')) domVerify = true
+  } catch {}
+  const type = w.type === 'verify' || w.type === 'limit' ? w.type : domVerify ? 'verify' : 'none'
+  return { type, detail: w.detail || null, domVerify }
+}
+
+/** 读取风控状态（主进程） */
+async function readDoubaoRisk(win: BrowserWindow): Promise<{ type: string; detail?: string | null }> {
+  try {
+    return (await win.webContents.executeJavaScript(
+      '(' + readRiskScript.toString() + ')()',
+      true
+    )) as { type: string; detail?: string | null }
+  } catch {
+    return { type: 'none' }
+  }
+}
+
+/** 风控/验证时显示窗口交用户处理 */
+function showRiskWindow(win: BrowserWindow): void {
+  try {
+    win.show()
+    win.focus()
+    win.center()
+  } catch {}
+}
+
 /* ---------------- 主流程 ---------------- */
 
 function progress(opts: DoubaoGenerateOptions, stage: string, detail?: unknown): void {
@@ -653,6 +801,11 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     )
   }
 
+  // 风控探针：包装 /chat/completion 响应 + DOM 验证 UI 检测（提交前挂载）
+  try {
+    await win.webContents.executeJavaScript('(' + riskProbeScript.toString() + ')()', true)
+  } catch {}
+
   // 等「视频生成」入口出现（SPA 渲染，最多 ~15s）
   progress(options, 'wait-tab')
   let tabReady = false
@@ -751,6 +904,23 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail(fillResult.reason || '提交失败')
   }
 
+  // 提交后检查风控：verify → 显示窗口交用户；limit → 直接失败
+  await sleep(1500)
+  let risk = await readDoubaoRisk(win)
+  if (risk.type === 'limit') {
+    win.destroy()
+    return fail('豆包风控/限流：' + (risk.detail || '请稍后再试'))
+  }
+  let riskMode = false
+  let riskSince = 0
+  const RISK_TIMEOUT_MS = 300000 // 风控验证等待上限：5 分钟
+  if (risk.type === 'verify') {
+    riskMode = true
+    riskSince = Date.now()
+    showRiskWindow(win)
+    progress(options, 'risk-verify', { message: '豆包要求验证，请在弹出的豆包窗口中完成验证' })
+  }
+
   progress(options, 'waiting')
   const maxWaitMs = (options.maxWaitSec ?? 360) * 1000
   const started = Date.now()
@@ -765,6 +935,35 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
       r = (await win.webContents.executeJavaScript('(' + extractResultScript.toString() + ')()', true)) as typeof r
     } catch {
       r = {}
+    }
+    // 风控处理：verify → 弹窗交用户；limit → 失败；用户解决后恢复/隐藏
+    let riskTick: { type: string; detail?: string | null } = { type: 'none' }
+    try {
+      riskTick = await readDoubaoRisk(win)
+    } catch {}
+    if (riskTick.type === 'verify' && !riskMode) {
+      riskMode = true
+      riskSince = Date.now()
+      showRiskWindow(win)
+      progress(options, 'risk-verify', { message: '豆包要求验证，请在弹出的豆包窗口中完成验证' })
+    }
+    if (riskTick.type === 'limit') {
+      win.destroy()
+      return fail('豆包风控/限流：' + (riskTick.detail || '请稍后再试'))
+    }
+    if (riskMode) {
+      if (riskTick.type !== 'verify') {
+        riskMode = false
+        if (options.showWebview !== true) {
+          try {
+            win.hide()
+          } catch {}
+        }
+        progress(options, 'risk-resolved')
+      } else if (Date.now() - riskSince > RISK_TIMEOUT_MS) {
+        win.destroy()
+        return fail('豆包风控验证未完成，请手动重试')
+      }
     }
     const video = r.vids && r.vids[0]
     const mp4 = r.mp4s && r.mp4s[0]

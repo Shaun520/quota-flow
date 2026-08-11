@@ -18,6 +18,7 @@ const ENGINE = process.env.QF_ENGINE || path.join(process.env.TEMP || '.', 'qf-r
 const PROMPT = process.env.QF_PROMPT || '真实代码跑通测试：一只白猫在窗台晒太阳'
 const DURATION = Number(process.env.QF_DURATION || 5)
 const MAX_WAIT = Number(process.env.QF_MAX_WAIT || 240)
+const SHOW_WEBVIEW = process.env.QF_SHOW_WEBVIEW === '1'
 
 if (process.env.QF_SOFTWARE !== '0') {
   app.disableHardwareAcceleration()
@@ -94,6 +95,7 @@ app.whenReady().then(async () => {
       durationSec: DURATION,
       maxWaitSec: MAX_WAIT,
       keyId: USE_BASE ? undefined : PART_ID,
+      showWebview: SHOW_WEBVIEW,
       onProgress: (stage, detail) =>
         log('progress', { stage, detail: detail !== undefined ? JSON.stringify(detail).slice(0, 300) : null })
     })

@@ -131,6 +131,7 @@ SSE 事件解析：
 已知限制：
 
 - 时长选择已改为真实 UI 滑块（Radix Slider）：JS PointerEvent 打开菜单 + 键盘逐档调值，软件渲染（`disableHardwareAcceleration`）兼容；5s/10s 实测可用（2026-08-11）；15s 仅会员，普通账号设置失败会直接终止任务。
+- 风控：高频自动化提交会触发豆包服务端风控（verify_scene，无 async_task，任务卡「生成中」后超时）；受控验证与显示开关见 `docs/develop/desktop-doubao-risk-control.md`。
 - 限流 710022002/710022004 → failed 不扣额度；验证码弹窗需用户交互（MVP 不支持自动过验证码）。
 
 ## 5. 验证状态
