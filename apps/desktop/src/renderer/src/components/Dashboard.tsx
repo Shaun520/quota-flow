@@ -10,8 +10,10 @@ import { IconInfo, IconPlay, IconUpload, PROVIDER_ICONS } from './icons'
 import { EmptyState } from './EmptyState'
 import { useProviders } from '../hooks/useProviders'
 import { useJobs } from '../hooks/useJobs'
+import type { JobItem } from '../hooks/useJobs'
 import { useAuth } from '../hooks/useAuth'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
+import { VideoThumb } from './VideoThumb'
 
 const VIP = false
 
@@ -39,6 +41,8 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
+  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const durations = durationOptions(provider, model, mode, VIP)
@@ -66,6 +70,56 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       reloadJobs()
     })
   }, [reloadJobs])
+
+  // 解析最近生成视频的可播放地址（本地路径 → http://127.0.0.1 服务）
+  useEffect(() => {
+    let cancelled = false
+    const map: Record<string, string> = {}
+    const tasks: Promise<void>[] = []
+    for (const item of jobItems) {
+      const r = item.record
+      if (!r.resultUrl) continue
+      if (/^https?:/i.test(r.resultUrl)) {
+        map[item.id] = r.resultUrl
+      } else {
+        const name = r.resultUrl.replace(/\\/g, '/').split('/').pop() || ''
+        tasks.push(
+          window.api.media
+            .getUrl(name)
+            .then((u) => {
+              map[item.id] = u
+            })
+            .catch(() => {})
+        )
+      }
+    }
+    void Promise.all(tasks).then(() => {
+      if (!cancelled) setMediaUrls(map)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [jobItems])
+
+  const togglePreview = (item: JobItem): void => {
+    if (preview && preview.id === item.id) {
+      setPreview(null)
+      return
+    }
+    const src = mediaUrls[item.id]
+    if (!src) return
+    setPreview({ id: item.id, src })
+  }
+
+  // 预览浮层：Esc 关闭
+  useEffect(() => {
+    if (!preview) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setPreview(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [preview])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
     if (generating) return
@@ -416,48 +470,86 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
               description="填写描述并开始生成，你的第一条视频将出现在这里"
             />
           ) : (
-            <div className="recent-job-list">
-              {jobItems.slice(0, 5).map((j) => (
-                <div
-                  key={j.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    padding: '10px 12px',
-                    borderRadius: 10,
-                    background: 'var(--panel, rgba(0,0,0,0.03))',
-                    marginBottom: 6
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        color: 'var(--fg, #1c1c1e)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis'
-                      }}
-                    >
-                      {j.record.prompt || '（无描述）'}
+            <div className="job-list">
+              {jobItems.slice(0, 6).map((j) => {
+                const r = j.record
+                const badgeCls = r.status === '成功' ? 'success' : r.status === '失败' ? 'error' : 'pending'
+                return (
+                  <div
+                    key={j.id}
+                    className="job-card"
+                    onClick={() => togglePreview(j)}
+                  >
+                    <div className="job-thumb">
+                      {mediaUrls[j.id] ? (
+                        <VideoThumb
+                          src={mediaUrls[j.id]}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePreview(j)
+                          }}
+                        />
+                      ) : (
+                        <span>{r.status === '成功' ? '已生成' : r.status === '失败' ? '失败' : '排队中'}</span>
+                      )}
+                      <span className={'job-badge ' + badgeCls}>{r.status}</span>
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--fg-muted, #777)', marginTop: 2 }}>
-                      {j.record.provider} · {j.record.mode} · {j.record.cost}
+                    <div className="job-body">
+                      <div className="job-prompt">{r.prompt || '（无描述）'}</div>
+                      <div className="job-meta">
+                        <span>{r.provider}{r.accountName ? ' · ' + r.accountName : ''}</span>
+                        <span>{r.cost}</span>
+                      </div>
                     </div>
                   </div>
-                  <span
-                    style={{
-                      fontSize: 12,
-                      color: j.record.status === '成功' ? '#2e7d32' : j.record.status === '失败' ? 'var(--error, #c62828)' : '#b26a00'
-                    }}
-                  >
-                    {j.record.status}
-                  </span>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 预览浮层：网格不动，仅浮层内播放（避免竖屏视频撑高整行卡片） */}
+      {preview && (
+        <div
+          className="video-preview-overlay"
+          onClick={() => setPreview(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.78)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24
+          }}
+        >
+          <div style={{ position: 'relative', width: 'min(92vw, 860px)' }} onClick={(e) => e.stopPropagation()}>
+            <video
+              controls
+              autoPlay
+              src={preview.src}
+              style={{ width: '100%', maxHeight: '82vh', display: 'block', borderRadius: 10, background: '#000', objectFit: 'contain' }}
+            />
+            <button
+              onClick={() => setPreview(null)}
+              style={{
+                position: 'absolute',
+                top: -40,
+                right: 0,
+                color: '#fff',
+                background: 'rgba(255,255,255,0.16)',
+                border: 'none',
+                borderRadius: 6,
+                padding: '4px 10px',
+                cursor: 'pointer',
+                fontSize: 13
+              }}
+            >
+              ✕ 关闭
+            </button>
+          </div>
         </div>
       )}
     </div>

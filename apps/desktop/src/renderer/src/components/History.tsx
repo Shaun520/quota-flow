@@ -3,6 +3,7 @@ import type { JobItem } from '../hooks/useJobs'
 import { useJobs } from '../hooks/useJobs'
 import { IconEye, IconFolder, IconTrash } from './icons'
 import Pagination from './Pagination'
+import { VideoThumb } from './VideoThumb'
 
 const PAGE_SIZE = 10
 
@@ -35,72 +36,6 @@ function timeAgo(iso: string): string {
   const hh = String(d.getHours()).padStart(2, '0')
   const mi = String(d.getMinutes()).padStart(2, '0')
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`
-}
-
-// 视频缩略图：加载本地/远程视频，取首帧画到 canvas 生成图片，点击触发预览
-function VideoThumb({ src, onClick }: { src: string; onClick: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [thumb, setThumb] = useState<string | null>(null)
-
-  useEffect(() => {
-    const v = videoRef.current
-    if (!v) return
-    const draw = (): void => {
-      try {
-        if (v.readyState >= 2 && v.videoWidth > 0 && canvasRef.current) {
-          const c = canvasRef.current
-          c.width = 160
-          c.height = Math.max(1, Math.round((160 * v.videoHeight) / v.videoWidth))
-          c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height)
-          setThumb(c.toDataURL('image/jpeg', 0.7))
-        }
-      } catch {
-        // 取帧失败保留 video 元素兜底
-      }
-    }
-    const onLoaded = (): void => {
-      try {
-        v.currentTime = Math.min(0.2, (v.duration || 1) * 0.1)
-      } catch {}
-    }
-    const onSeeked = (): void => draw()
-    v.addEventListener('loadedmetadata', onLoaded)
-    v.addEventListener('seeked', onSeeked)
-    v.addEventListener('loadeddata', draw)
-    return () => {
-      v.removeEventListener('loadedmetadata', onLoaded)
-      v.removeEventListener('seeked', onSeeked)
-      v.removeEventListener('loadeddata', draw)
-    }
-  }, [src])
-
-  return (
-    <button
-      className="preview-thumb-btn"
-      title="点击预览视频"
-      onClick={onClick}
-      style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', display: 'block' }}
-    >
-      {thumb ? (
-        <img
-          src={thumb}
-          alt="预览"
-          style={{ width: 96, height: 54, objectFit: 'cover', borderRadius: 6, display: 'block' }}
-        />
-      ) : (
-        <video
-          ref={videoRef}
-          src={src}
-          muted
-          playsInline
-          preload="auto"
-          style={{ width: 96, height: 54, objectFit: 'cover', borderRadius: 6, display: 'block' }}
-        />
-      )}
-      <canvas ref={canvasRef} style={{ display: 'none' }} />
-    </button>
-  )
 }
 
 export default function History() {
@@ -393,7 +328,11 @@ export default function History() {
                       )}
                       <td className="col-preview">
                         {r.status === '成功' && mediaUrls[item.id] ? (
-                          <VideoThumb src={mediaUrls[item.id]} onClick={() => togglePreview(item)} />
+                          <VideoThumb
+                            src={mediaUrls[item.id]}
+                            onClick={() => togglePreview(item)}
+                            style={{ width: 96, height: 54, borderRadius: 6 }}
+                          />
                         ) : (
                           <div className="preview-thumb">{previewLabel(r.status)}</div>
                         )}
