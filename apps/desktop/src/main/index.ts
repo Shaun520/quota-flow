@@ -8,6 +8,11 @@ import { initProviders } from './providers'
 import { runGenerate } from './dispatch'
 import type { DispatchEvent } from './dispatch'
 
+// 禁用 GPU 硬件加速：Windows 上 Chromium 合成器在频繁重绘（如快速点击 tab 切换页面）时
+// 偶发丢帧/显示旧缓冲，导致整窗"时不时闪一下"。切到软件合成可根治。
+// 必须在 app ready 之前调用。
+app.disableHardwareAcceleration()
+
 // 本地视频预览服务：127.0.0.1 随机端口，仅提供 userData/videos 下 <uuid>.mp4，支持 Range
 let mediaPortPromise: Promise<number> | null = null
 
@@ -106,7 +111,9 @@ function createWindow(): void {
     show: false,
     frame: false,
     icon: join(__dirname, '../renderer/icon.png'),
-    backgroundColor: '#f5f1e8',
+    // 与页面默认 dark 主题背景一致（styles.css [data-theme="dark"] --bg-base: #0c0c0c），
+    // 避免点击重绘时露出浅色背景导致整窗闪烁
+    backgroundColor: '#0c0c0c',
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

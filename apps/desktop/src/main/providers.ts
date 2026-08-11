@@ -617,8 +617,11 @@ async function healthCheck(
   return new Promise((resolve) => {
     const win = new BrowserWindow({
       show: false,
+      // 防止 Windows 上隐藏窗口在创建/导航时闪现
+      paintWhenInitiallyHidden: false,
       width: 800,
       height: 600,
+      backgroundColor: '#0c0c0c',
       webPreferences: { partition }
     })
     win.webContents.setUserAgent(CHROME_UA)

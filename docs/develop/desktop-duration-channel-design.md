@@ -1,0 +1,102 @@
+# 视频参数通道设计：豆包 prompt 多出「10s」排查与统一文本方案分析
+
+> 记录日期：2026-08-11
+> 状态：**豆包已按方案 B 实施（2026-08-11）**：点一次「视频生成」页签拿 skill 上下文 + UI 滑块控制时长（4s~15s）+ 参数文本拼接；千问/元宝待接入。分析详见下文，实施变更见 `apps/desktop/src/main/webview-engine.ts`
+> 范围：Quota-Flow 桌面端视频生成链路（豆包 / 千问 / 元宝 的时长、比例、配音等参数传递方式）
+
+---
+
+## 1. 现象
+
+调度台输入提示词「孙悟空大战后室实体」并选择 5 秒，豆包侧实际收到的提交内容为：
+
+```
+生成视频：孙悟空大战后室实体，5秒，9:16，带配音，帧率720p，仅生成1个视频，10s
+```
+
+即：我们主动拼的参数（`5秒，9:16，带配音，帧率720p，仅生成1个视频`）之外，**末尾多了一个「10s」**。「生成视频：」前缀是豆包频道/技能展示名，不是我们拼的。
+
+## 2. 根因（已定位）
+
+`apps/desktop/src/main/webview-engine.ts:472-481` 把参数拼成文本提交：
+
+```
+const durationSec = options.durationSec === 10 ? 10 : options.durationSec === 15 ? 15 : 5
+const parts: string[] = [options.prompt, `${durationSec}秒`]
+if (options.ratio) parts.push(options.ratio)
+if (options.audio === 'on') parts.push('带配音') / else '关闭配音'
+if (options.resolution) parts.push(`帧率${options.resolution}p`)
+parts.push('仅生成1个视频')
+const submitPrompt = parts.join('，')
+```
+
+然后 `fillAndSubmitScript` 把 submitPrompt 填入豆包 ProseMirror 编辑器并回车提交。**「10s」不是我们拼的，是编辑器里残留的时长 chip**。链路如下：
+
+1. **引擎从不点击时长控件**：文件顶部注释写了「选时长」，但全文没有任何点击 5s/10s 按钮的代码。时长只靠「拼成文本」传递，依赖豆包服务端从文本解析。
+2. **豆包视频页默认挂「自动 · 10s」chip**：进入「视频生成」页签时，ProseMirror 编辑器里就带一个 10s chip（`docs/develop/desktop-dispatch-doubao.md:156` 有记录）。
+3. **chip 清理是启发式的、会失败**：`fillAndSubmitScript` 优先用 `findTiptap()`（扫描 window 全局找 TipTap 实例）`setContent` 清状态；找不到就走 DOM 兜底清空——而代码注释自己承认「DOM 清理清不掉状态」。DOM 脚本**校验的是 `editor.innerText === prompt`**（`webview-engine.ts:195`），innerText 看不见 chip，实际提交时 ProseMirror 状态里的 chip 被序列化进了提交内容。
+4. **结果**：提交内容 = 我们的文本 + 残留「10s」chip，豆包展示为「生成视频：…仅生成1个视频，**10s**」。
+
+### 关键结论
+
+- 这是**校验盲区**问题：校验对象（innerText）与真实提交对象（序列化文档）不一致。
+- 与「是否点击时长按钮」无关；即使不点击，也必须保证**提交内容里没有 chip**，否则就会出现「5秒 文本 vs 10s chip」的双时长冲突。
+
+## 3. 各家厂商的时长控制通道（事实盘点）
+
+| 厂商 | 时长真实通道 | 现状 | 问题 |
+|---|---|---|---|
+| 豆包 | ① 编辑器 chip（UI 状态，默认「自动·10s」）② 提交 content 文本（逆向文档 3.3：真实请求 content 含「5秒」文本，服务端从文本解析） | 只写文本「5秒」；chip 靠启发式清理 | chip 残留进提交内容（本次 10s 来源） |
+| 千问 | **API 结构化参数** `biz_data.req.params.duration` + `video_duration`（`packages/providers/src/qwen.ts:216-227`），与 UI/文本无关 | 硬编码 `duration: 5`，从不读 `options.durationSec` | 时长根本没透传，5s/10s/15s 都生成 5s |
+| 元宝 | **无任何控件/参数**，HunyuanVideo 只吃 prompt 文本（`packages/providers/src/yuanbao.ts` 请求体无 duration 字段） | prompt 原样提交 | 时长只能靠文本描述，best-effort；成本固定 1 次不分档 |
+
+## 4. 方案 A：点击 DOM 选择视频参数（已否决）
+
+- 豆包、千问（万相）、元宝的时长控件位置/结构各不相同，逐个维护选择器成本高、易碎（豆包 5s 选择器 DOM 已实测不稳定）。
+- **元宝根本没有可点击的时长控件**，直接堵死。
+- 结论：**纯点击方案不可行**。
+
+## 5. 方案 B：统一用提示词拼接，不点 DOM（本次分析结论）
+
+### 5.1 可行性
+
+- **豆包**：有官方依据——逆向文档 3.3 真实请求 content 就是文本里带「5秒」，与用户手打「帮我生成10秒视频」同一语义。前提：**提交内容里必须无 chip**（把 chip 清空，而不是改 chip 值），且校验必须走序列化层（`getJSON/getHTML`），不能只看 innerText。
+- **元宝**：纯文本本就是唯一通道，把「N秒」拼进 prompt（如「生成5秒视频：…」）即可，成本固定，无损失。
+- **千问**：有结构化参数且是抓包实证（UI 就是通过参数传时长），服务端大概率信任参数而非文本。**纯文本 = 控制力倒退**（从硬编码 5s 变成文本建议、实际看模型）。若坚持统一需先实测「文本 5秒 在万相是否生效」（`webview-test.ts` 抓包 harness 可用），折中方案是**参数权威 + 文本双通道**。
+
+### 5.2 优点
+
+- 单一代码路径、跨厂商一致、不用维护不稳定选择器、元宝唯一可行解。
+
+### 5.3 风险与对策
+
+| 风险 | 对策 |
+|---|---|
+| 文本解析不保证生效（尤其 15s 仅 VIP，非 VIP 文本可能静默回退 10s） | **事后校准闭环**：三家从结果回读真实时长（qwen/yuanbao 已回读 `durationSec`；豆包需补读视频元数据），**按实际时长扣费** |
+| 千问失去精确控制 | 保留参数通道（双通道），或先实测再定 |
+| 「帧率720p」文案把帧率当分辨率，混淆模型解析 | 改为「720p 分辨率」类写法 |
+
+### 5.4 结论
+
+- 可以统一到「**文本为主、不点 DOM**」，但按通道微调：
+  - 元宝 = 纯文本（新拼时长词）
+  - 千问 = 文本兜底 + 参数权威（或实测后放弃参数）
+  - 豆包 = 文本 + **序列化层清 chip**（核心工作量在这）
+- 真正的工程点集中在豆包「序列化校验 + 清理」一处——它是本次 10s 事故的根，与是否点击无关。
+
+### 5.5 落地修正（2026-08-11，豆包实际实施 = 方案 B 折中）
+
+纯文本方案实测发现：不带 skill 上下文的纯文本，豆包只当普通聊天回复（模型要求「确认后直接生成」），不会进入视频生成。因此豆包最终采用：
+
+- **点一次「视频生成」页签**获取 skill 上下文（请求才带 `skill_type/content_type=2020`），不点时长/比例等二级控件；
+- **时长直接操作 UI 滑块**：点击「自动 · 10s」按钮打开下拉面板 → 在「时长」区域找到 4s~15s 滑块 → 拖动圆形手柄到目标秒数。不再靠文本解析时长，避免「5秒 文本 vs 10s 滑块」冲突；
+- 比例/配音/分辨率等参数仍文本拼接（`prompt，比例，带配音，帧率720p，仅生成1个视频`）。
+
+## 6. 代码位置速查
+
+- 引擎拼参数：`apps/desktop/src/main/webview-engine.ts:472-481`
+- 填 prompt + 校验盲区：`apps/desktop/src/main/webview-engine.ts:120-206`（`fillAndSubmitScript`，`finalText !== prompt` 校验）
+- 千问硬编码时长：`packages/providers/src/qwen.ts:216-227`
+- 元宝无时长通道：`packages/providers/src/yuanbao.ts:150-180`（sendPrompt body）
+- 调度入口：`apps/desktop/src/main/dispatch.ts`（`runDoubaoGeneration` 传 durationSec）
+- 豆包逆向依据：`docs/develop/desktop-dispatch-doubao.md`（3.3 节 content 文本、156 行默认 10s、133 行 best-effort 已知限制）

@@ -318,8 +318,11 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
   progress(options, 'open-page')
   const win = new BrowserWindow({
     show: false,
+    // 防止 Windows 上隐藏窗口在创建/导航时闪现
+    paintWhenInitiallyHidden: false,
     width: 1280,
     height: 900,
+    backgroundColor: '#0c0c0c',
     webPreferences: {
       partition,
       contextIsolation: true,
