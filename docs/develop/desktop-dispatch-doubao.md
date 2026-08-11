@@ -130,7 +130,7 @@ SSE 事件解析：
 
 已知限制：
 
-- 时长选择为 best-effort（选择器 DOM 变化时可能 fallback 到默认 10s；prompt 不含秒数则无冲突）。
+- 时长选择已改为真实 UI 滑块（Radix Slider）：JS PointerEvent 打开菜单 + 键盘逐档调值，软件渲染（`disableHardwareAcceleration`）兼容；5s/10s 实测可用（2026-08-11）；15s 仅会员，普通账号设置失败会直接终止任务。
 - 限流 710022002/710022004 → failed 不扣额度；验证码弹窗需用户交互（MVP 不支持自动过验证码）。
 
 ## 5. 验证状态
@@ -164,7 +164,7 @@ SSE 事件解析：
 
 - prompt 时长 chip：已在引擎内解决（先清空编辑器再插入、校验内容 === prompt），实测提交内容干净。
 - 视频 URL 提取依赖「生成完成后点击视频卡片」；卡片未点击前 DOM 无 mp4/video 属性（引擎已内置该步骤）。
-- 时长选择为 best-effort：5s 选择器 DOM 不稳定时 fallback 到默认时长；建议后续固化选择器或改为直接带时长参数提交。
+- 时长选择已固化：真实滑块操作实现于 `applyDoubaoDuration()`，见 `docs/develop/desktop-duration-channel-design.md` 5.6 节（DOM 结构、取值映射、软件渲染约束）。
 - 额度：10s=2 点、5s=1 点（按 10 点/天的规格），成功才扣。
 
 ### 6.3 下一步
@@ -172,7 +172,7 @@ SSE 事件解析：
 已接入调度台（见第 4 节）。待办：
 
 1. 应用内登录态问题（auth.json 无法在本机解密）修复后，在真实 App 里点一次「开始生成」验证整条 UI → dispatch → jobs/ledger 链路。
-2. 固化豆包时长选择器；把其它厂商（qwen/yuanbao/mathmind）按同一引擎框架接入。
+2. 把其它厂商（qwen/yuanbao/mathmind）按同一引擎框架接入。
 
 ## 7. 参考资料
 

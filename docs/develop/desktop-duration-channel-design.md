@@ -1,7 +1,7 @@
 # 视频参数通道设计：豆包 prompt 多出「10s」排查与统一文本方案分析
 
 > 记录日期：2026-08-11
-> 状态：**豆包已按方案 B 实施（2026-08-11）**：点一次「视频生成」页签拿 skill 上下文 + UI 滑块控制时长（4s~15s）+ 参数文本拼接；千问/元宝待接入。分析详见下文，实施变更见 `apps/desktop/src/main/webview-engine.ts`
+> 状态：**豆包已按方案 B 落地（2026-08-11，软件渲染环境下实测通过）**：点一次「视频生成」页签拿 skill 上下文 + **真实 UI 滑块（Radix Slider）控制时长（5s/10s 实测可用，15s 仅会员）** + 参数文本拼接；千问/元宝待接入。分析详见下文，实施变更见 `apps/desktop/src/main/webview-engine.ts`
 > 范围：Quota-Flow 桌面端视频生成链路（豆包 / 千问 / 元宝 的时长、比例、配音等参数传递方式）
 
 ---
@@ -92,9 +92,35 @@ const submitPrompt = parts.join('，')
 - **时长直接操作 UI 滑块**：点击「自动 · 10s」按钮打开下拉面板 → 在「时长」区域找到 4s~15s 滑块 → 拖动圆形手柄到目标秒数。不再靠文本解析时长，避免「5秒 文本 vs 10s 滑块」冲突；
 - 比例/配音/分辨率等参数仍文本拼接（`prompt，比例，带配音，帧率720p，仅生成1个视频`）。
 
+### 5.6 时长滑块 DOM 实测与落地（2026-08-11，真实页面抓取验证）
+
+已用 `data/doubao-auth.json` 登录态在真实豆包页面抓取并操作成功，DOM 结构（2026-08-11 快照）：
+
+| 元素 | 定位 | 说明 |
+|---|---|---|
+| 触发按钮 | `button` 文本「自动 · 10s」（`aria-haspopup="menu"`，Radix DropdownMenu trigger） | 位于输入区上方的 Blueprint `bp5-overflow-list` 内 |
+| 菜单 | `div[role="menu"][data-slot="dropdown-menu-content"]`（`data-state="open"`） | 含「比例」4 列网格 +「时长」滑块区 |
+| 滑块根 | `span[data-slot="slider"]` | Radix Slider 根，点击按比例取值 |
+| 轨道 | `span[data-slot="slider-track"]` | 视觉轨道 |
+| 手柄 | `span[role="slider"][data-slot="slider-thumb"]` | `aria-valuemin=0 / aria-valuemax=11`，`aria-valuenow` 为当前值 |
+
+**取值映射（实测确认）**：`value = 秒数 - 4`，0~11 对应 4s~15s；改值走**键盘**：focus 滑块手柄后按 ArrowLeft/Right 逐档调节（一次一步 + 读 `aria-valuenow` 校验，React 状态批处理下连发 N 次只生效最后一步）。实测 10s→5s：按 5 次 ArrowLeft，`aria-valuenow` 从 6 变 1，按钮文本变「自动 · 5s」，关闭菜单后保持。
+
+**关键约束（踩坑记录）**：
+
+1. **App 全局 `disableHardwareAcceleration()`（软件合成）下，CDP 可信输入不生效**：`Input.dispatchMouseEvent` / `sendInputEvent` 点击会丢失（实测软件渲染 + 12px 露头窗口 3/3 打不开菜单；完全可见窗口也偶发 1/2 失败）。这是「时长菜单未打开」报错的根因。
+2. 解法（当前实现）：**窗口恢复隐藏**（`show: false`，不再依赖可见/露头），菜单用**页面内 JS PointerEvent 序列**打开（Radix 接受非可信事件，隐藏窗口实测可用），滑块用**键盘逐档**调节；全程只走 `executeJavaScript`，与软件渲染兼容。
+3. **菜单检测必须严格**：只认 `[role="menu"][data-state="open"]`；隐藏窗口下菜单关闭动画不完成，closed 内容会残留 DOM，宽松选择器会误判。
+4. **15s 仅会员**：普通账号滑块拖/按到 15s 无效，UI 层 15s 已禁用；引擎对 15s 设置失败会直接终止任务并报错，不扣额度。
+5. 失败策略：打开菜单重试 3 次；调值一次一步 + 校验；最终校验不过（thumb `aria-valuenow` 或按钮文本）任务标记 failed，不扣额度——不再静默生成错误时长。
+
+实现位置：`apps/desktop/src/main/webview-engine.ts` 的 `applyDoubaoDuration()`（JS PointerEvent 打开菜单 → 键盘逐档调值 → 校验 → 关闭菜单）；验证脚本：`apps/desktop/scripts/doubao-submit-diagnose.cjs`（隐藏窗口 + 软件渲染 `QF_SOFTWARE=1` 下 时长设置 + 填 prompt + Enter 提交全链路实测通过，`QF_SUBMIT=1` 会真实提交）。
+
 ## 6. 代码位置速查
 
 - 引擎拼参数：`apps/desktop/src/main/webview-engine.ts:472-481`
+- 时长滑块操作：`apps/desktop/src/main/webview-engine.ts` `applyDoubaoDuration()`（JS PointerEvent 开菜单 + 键盘逐档调值，软件渲染兼容）
+- 时长验证脚本：`apps/desktop/scripts/doubao-submit-diagnose.cjs`（`QF_SOFTWARE=1` 模拟 App 软件渲染；`QF_SUBMIT=1` 全链路含提交）
 - 填 prompt + 校验盲区：`apps/desktop/src/main/webview-engine.ts:120-206`（`fillAndSubmitScript`，`finalText !== prompt` 校验）
 - 千问硬编码时长：`packages/providers/src/qwen.ts:216-227`
 - 元宝无时长通道：`packages/providers/src/yuanbao.ts:150-180`（sendPrompt body）

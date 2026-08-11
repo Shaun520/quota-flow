@@ -1,5 +1,6 @@
 // 豆包（Seedance）WebView 生成执行引擎
-// 链路：cookie 注入 → 打开豆包 → 进入「视频生成」→ 选时长 → 填 prompt（清理 chip）→ 提交
+// 链路：cookie 注入 → 打开豆包 → 进入「视频生成」→ 时长滑块（JS PointerEvent + 键盘）
+//       → 填 prompt（清理 chip）→ 提交
 //       → 轮询「你的视频生成好了」→ 点击视频卡片 → 提取 mp4 URL
 // 由 dispatch.ts 调用，不直接暴露给渲染进程。
 
@@ -263,6 +264,239 @@ const clickVideoCardScript = (): unknown => {
   return { clicked, found: imgs.length }
 }
 
+/* ---------------- 时长滑块 DOM 操作（豆包 Radix Slider，2026-08-11 实测/修正） ----------------
+ * 实测结构：
+ *   trigger: button[aria-haspopup="menu"]，文本「自动 · 10s」
+ *   menu:    div[role="menu"][data-state="open"]（含「比例」网格 +「时长」滑块）
+ *   slider:  span[data-slot="slider"] 根 / span[data-slot="slider-track"] 轨道
+ *            span[role="slider"][data-slot="slider-thumb"]：aria-valuemin=0、aria-valuemax=11
+ *   映射：value = 秒数 - 4（4s→0 ... 15s→11）；手柄支持 ArrowLeft/Right 逐档调节
+ *   15s 仅会员，普通账号滑块拖不动（UI 已禁用 15s）。
+ *
+ * 2026-08-11 修正（App 全局 disableHardwareAcceleration → 软件合成）：
+ *   - CDP Input.dispatchMouseEvent / sendInputEvent 在软件渲染下点击不生效（实测 3/3 丢失）
+ *     → 改用页面内 JS PointerEvent 打开菜单（Radix 接受非可信事件，隐藏窗口也可用）
+ *   - 滑块改值用键盘：focus 手柄后逐次 ArrowLeft/Right，一次一步 + 读值校验
+ *     （React 状态批处理，连发 N 次只生效最后一步，实测 5 连发只动 1 档）
+ *   - 窗口恢复隐藏（不再依赖 12px 露头 + CDP 可信输入）
+ */
+
+/* 读取时长状态：按钮文本 + 菜单是否打开（严格 data-state="open"）+ 滑块手柄值 */
+const readDurationStateScript = (): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const textOf = (b: Element): string =>
+    norm((b as HTMLElement).textContent || '') ||
+    norm(b.getAttribute('aria-label') || '') ||
+    norm(b.getAttribute('title') || '')
+  const btns = [...document.querySelectorAll('button, [role="button"], [role="tab"]')].filter(
+    (b) => (b as HTMLElement).offsetParent !== null
+  )
+  const durBtn =
+    btns.find((b) => /^自动/.test(textOf(b))) ||
+    btns.find((b) => /自动/.test(textOf(b))) ||
+    btns.find((b) => /时长/.test(textOf(b))) ||
+    btns.find((b) => /\d+\s*s/i.test(textOf(b)))
+  // 严格只认 data-state="open"：隐藏窗口下菜单关闭动画不完成，closed 内容会残留 DOM
+  const menu =
+    [...document.querySelectorAll('[role="menu"][data-state="open"]')]
+      .filter((el) => (el as HTMLElement).offsetParent !== null)
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0] || null
+  const thumb = menu
+    ? [...menu.querySelectorAll('[data-slot="slider-thumb"], [role="slider"]')].find(
+        (el) => (el as HTMLElement).offsetParent !== null
+      ) || null
+    : null
+  return {
+    triggerText: durBtn ? textOf(durBtn).slice(0, 40) : '',
+    triggerExpanded: durBtn ? durBtn.getAttribute('aria-expanded') : null,
+    menuOpen: !!menu,
+    thumbValue: thumb ? thumb.getAttribute('aria-valuenow') : null,
+    thumbMin: thumb ? thumb.getAttribute('aria-valuemin') : null,
+    thumbMax: thumb ? thumb.getAttribute('aria-valuemax') : null
+  }
+}
+
+/* 打开时长菜单：JS PointerEvent 序列（软件渲染下 CDP 输入失效，此路可用） */
+const openDurationMenuScript = (): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const textOf = (b: Element): string =>
+    norm((b as HTMLElement).textContent || '') ||
+    norm(b.getAttribute('aria-label') || '') ||
+    norm(b.getAttribute('title') || '')
+  const btns = [...document.querySelectorAll('button, [role="button"], [role="tab"]')].filter(
+    (b) =>
+      (b as HTMLElement).offsetParent !== null &&
+      (b as HTMLButtonElement).disabled !== true &&
+      b.getAttribute('aria-disabled') !== 'true'
+  )
+  const hit =
+    btns.find((b) => /^自动/.test(textOf(b))) ||
+    btns.find((b) => /自动/.test(textOf(b))) ||
+    btns.find((b) => /时长/.test(textOf(b))) ||
+    btns.find((b) => /\d+\s*s/i.test(textOf(b)))
+  if (!hit) return { ok: false, reason: '未找到时长选择器' }
+  // 幂等：菜单已开则不再点击（Radix trigger 点击是 toggle，重复点击会把它关掉）
+  const alreadyOpen =
+    hit.getAttribute('aria-expanded') === 'true' || !!document.querySelector('[role="menu"][data-state="open"]')
+  if (alreadyOpen) return { ok: true, alreadyOpen: true }
+  const r = hit.getBoundingClientRect()
+  const base = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerId: 9,
+    pointerType: 'mouse',
+    isPrimary: true,
+    clientX: r.x + r.width / 2,
+    clientY: r.y + r.height / 2,
+    button: 0,
+    buttons: 1,
+    view: window
+  }
+  hit.dispatchEvent(new PointerEvent('pointerover', { ...base, buttons: 0 }))
+  hit.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }))
+  hit.dispatchEvent(new PointerEvent('pointerdown', base))
+  hit.dispatchEvent(new MouseEvent('mousedown', base))
+  hit.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }))
+  hit.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }))
+  hit.dispatchEvent(new MouseEvent('click', { ...base, buttons: 0 }))
+  return { ok: true, text: textOf(hit).slice(0, 40) }
+}
+
+/* 滑块手柄按一次方向键（React 状态批处理：必须一次一步 + 读值校验） */
+const pressSliderKeyScript = (dir: string): unknown => {
+  const menu =
+    [...document.querySelectorAll('[role="menu"][data-state="open"]')]
+      .filter((el) => (el as HTMLElement).offsetParent !== null)
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0] || null
+  if (!menu) return { ok: false, reason: '时长菜单未打开' }
+  const thumb =
+    [...menu.querySelectorAll('[data-slot="slider-thumb"], [role="slider"]')].find(
+      (el) => (el as HTMLElement).offsetParent !== null
+    ) || null
+  if (!thumb) return { ok: false, reason: '未找到时长滑块手柄' }
+  ;(thumb as HTMLElement).focus()
+  const key = dir === 'left' ? 'ArrowLeft' : 'ArrowRight'
+  const keyCode = dir === 'left' ? 37 : 39
+  thumb.dispatchEvent(
+    new KeyboardEvent('keydown', { key, code: key, keyCode, which: keyCode, bubbles: true, cancelable: true })
+  )
+  thumb.dispatchEvent(new KeyboardEvent('keyup', { key, code: key, keyCode, which: keyCode, bubbles: true }))
+  return { ok: true }
+}
+
+/* 关闭时长菜单：Escape + 外部 pointerdown（不做 trigger 点击，避免把已关的菜单重新打开） */
+const closeDurationMenuScript = (): unknown => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  const outside = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerId: 12,
+    pointerType: 'mouse',
+    isPrimary: true,
+    clientX: 8,
+    clientY: 8,
+    button: 0,
+    buttons: 1,
+    view: window
+  }
+  document.body.dispatchEvent(new PointerEvent('pointerdown', outside))
+  document.body.dispatchEvent(new PointerEvent('pointerup', { ...outside, buttons: 0 }))
+  return { ok: true }
+}
+
+/** 通过豆包真实 UI 设置时长（页面内 JS PointerEvent + 键盘，隐藏窗口可用，无需 CDP）。失败时调用方应终止任务。 */
+async function applyDoubaoDuration(
+  win: BrowserWindow,
+  durationSec: number
+): Promise<{ ok: boolean; reason?: string }> {
+  const exec = (script: string, arg?: string): Promise<unknown> =>
+    win.webContents.executeJavaScript('(' + script + ')(' + (arg !== undefined ? JSON.stringify(arg) : '') + ')', true)
+  const target = durationSec === 10 ? 10 : durationSec === 15 ? 15 : 5
+  const targetValue = Math.max(0, Math.min(11, target - 4))
+
+  // 1) 读取当前按钮文本，已为目标时长则跳过
+  let state: {
+    triggerText?: string
+    menuOpen?: boolean
+    thumbValue?: string | null
+  } = {}
+  try {
+    state = (await exec(readDurationStateScript.toString())) as typeof state
+  } catch {
+    return { ok: false, reason: '读取时长选择器失败' }
+  }
+  const curSec = Number((state.triggerText || '').match(/(\d+)\s*s/i)?.[1] || 0)
+  if (curSec === target) {
+    return { ok: true } // 已为目标时长，无需操作
+  }
+
+  // 2) 打开菜单（JS PointerEvent，幂等：已开则跳过点击；重试 3 次）
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      state = (await exec(readDurationStateScript.toString())) as typeof state
+      if (state.menuOpen) break
+    } catch {}
+    try {
+      const open = (await exec(openDurationMenuScript.toString())) as { ok?: boolean; reason?: string }
+      if (!open.ok) {
+        if (attempt === 2) return { ok: false, reason: open.reason || '未找到时长选择器' }
+        await sleep(600)
+        continue
+      }
+    } catch {
+      if (attempt === 2) return { ok: false, reason: '打开时长菜单失败' }
+      await sleep(600)
+      continue
+    }
+    for (let i = 0; i < 10; i++) {
+      await sleep(500)
+      try {
+        state = (await exec(readDurationStateScript.toString())) as typeof state
+        if (state.menuOpen) break
+      } catch {}
+    }
+    if (state.menuOpen) break
+  }
+  if (!state.menuOpen) {
+    return { ok: false, reason: '时长菜单未打开' }
+  }
+
+  // 3) 键盘逐档调值：一次一步 + 读值校验（React 状态批处理，不能连发）
+  let cur = Number(state.thumbValue ?? 6)
+  for (let i = 0; i < 15 && cur !== targetValue; i++) {
+    const dir = targetValue > cur ? 'right' : 'left'
+    try {
+      await exec(pressSliderKeyScript.toString(), dir)
+    } catch {}
+    await sleep(300)
+    try {
+      state = (await exec(readDurationStateScript.toString())) as typeof state
+      const v = Number(state.thumbValue)
+      if (Number.isFinite(v)) cur = v
+    } catch {}
+  }
+
+  // 4) 校验：thumb aria-valuenow === target-4 或按钮文本含「Ns」
+  let after: { triggerText?: string; thumbValue?: string | null } = {}
+  try {
+    after = (await exec(readDurationStateScript.toString())) as typeof after
+  } catch {}
+  const okByThumb = after.thumbValue !== null && Number(after.thumbValue) === targetValue
+  const okByText = new RegExp(target + '\\s*s', 'i').test(after.triggerText || '')
+  if (!okByThumb && !okByText) {
+    return { ok: false, reason: `时长未生效（当前按钮：${after.triggerText || '未知'}）` }
+  }
+
+  // 5) 关闭菜单（尽力而为；隐藏窗口下关闭动画不完成，残留 closed 内容不影响后续 fill/submit）
+  try {
+    await exec(closeDurationMenuScript.toString())
+  } catch {}
+  await sleep(600)
+  return { ok: true }
+}
+
 /* ---------------- 主流程 ---------------- */
 
 function progress(opts: DoubaoGenerateOptions, stage: string, detail?: unknown): void {
@@ -472,8 +706,16 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail('未进入视频生成界面（页面结构可能有变化）' + (lastView ? JSON.stringify(lastView).slice(0, 300) : ''))
   }
 
-  // 参数统一拼进提示词（豆包会从提示词解析）：时长 + 比例 + 配音
   const durationSec = options.durationSec === 10 ? 10 : options.durationSec === 15 ? 15 : 5
+  // 时长：真实 UI 滑块（Radix Slider），避免「5秒 文本 vs 10s chip」双时长冲突
+  progress(options, 'apply-duration', { durationSec })
+  const durApply = await applyDoubaoDuration(win, durationSec)
+  if (!durApply.ok) {
+    win.destroy()
+    return fail('豆包时长设置失败：' + (durApply.reason || '未知原因'))
+  }
+
+  // 参数统一拼进提示词（豆包会从提示词解析）：时长 + 比例 + 配音
   const parts: string[] = [options.prompt, `${durationSec}秒`]
   if (options.ratio) parts.push(options.ratio)
   if (options.audio === 'on') parts.push('带配音')
