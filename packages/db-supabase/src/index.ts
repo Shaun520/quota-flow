@@ -477,4 +477,16 @@ export class JobService {
     if (error) throw error
     return (count ?? 0) > 0
   }
+
+  /** 批量删除本人任务（RLS 同约束），返回实际删除条数 */
+  async deleteJobs(userId: string, ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0
+    const { error, count } = await this.client
+      .from('jobs')
+      .delete({ count: 'exact' })
+      .eq('user_id', userId)
+      .in('id', ids)
+    if (error) throw error
+    return count ?? 0
+  }
 }

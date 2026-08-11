@@ -14,5 +14,7 @@ export interface JobRecord {
   traceId: string | null
   /** 视频地址：本地路径（app-media:// 可播放）或远程 https URL */
   resultUrl: string | null
+  /** 本地视频文件绝对路径（生成后落盘 userData/videos/<jobId>.mp4），无本地文件时为 null */
+  localPath: string | null
   errorMessage: string | null
 }

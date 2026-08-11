@@ -249,8 +249,8 @@ result=null && attempts 为空           → 未生成（无可用厂商派发�
 
 ### 6.1 删除功能
 
-✅ 已实现：IPC `history:delete` 重写 jobs.jsonl（按 `at` 去掉目标行），
-renderer 删除按钮已接线并在成功后刷新列表；删除前有确认弹窗。
+✅ 已实现：`JobService.deleteJob` / `deleteJobs` 按数据库 id 删除（RLS 仅限本人），
+renderer 支持单条删除与批量删除（行勾选 + 全选/半选当前筛选结果 + 确认弹窗），删除成功后刷新列表。
 
 ### 6.2 团队共享历史
 
@@ -266,7 +266,11 @@ renderer 删除按钮已接线并在成功后刷新列表；删除前有确认�
 - 桌面端 dispatch 落地后可复用 `JobService.insertJob` 写库，无需新增读取链路
 
 ### 6.3 视频预览
-dispatch 结果有 `videoUrl`，写入 jobs.jsonl 时补上此字段，预览列渲染 `<video>` 缩略图或封面帧。
+
+✅ 已实现：桌面端 dispatch 成功后将视频下载落盘到 `userData/videos/<jobId>.mp4`（避免签名 URL 过期），
+`result_url` 记录本地路径、`options.localPath` 记录绝对路径；历史页通过本地媒体服务
+（127.0.0.1 随机端口，支持 Range）渲染首帧缩略图与行内播放。
+操作列不再提供“下载”，改为“打开所在文件夹”（`shell.showItemInFolder`，仅允许访问 videos 目录）。
 
 ### 6.4 实时刷新
 dispatch 完成后主进程发 `webContents.send('history:updated')`，renderer 监听该事件自动调用 `list()` 刷新列表，无需用户手动切换 tab。
@@ -285,4 +289,4 @@ dispatch 完成后主进程发 `webContents.send('history:updated')`，renderer 
   数据库为真相源后，JSONL 仅作 CLI 审计日志，不再参与 UI 展示
 - `providerName` / 单位映射在 renderer（useJobs）中硬编码（已兼容 `qwen`/`qwenwan` 两种 ID），
   后续可改为从 Supabase `providers` 表动态拉取（已有 `listProviders()` API）
-- 预览列 MVP 阶段保持文字占位，等 `videoUrl` 字段补齐后再做缩略图
+- 预览列已支持本地视频缩略图/播放；本地文件在 `userData/videos`，删除历史记录不会自动清理文件（后续可补）

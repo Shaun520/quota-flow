@@ -38,6 +38,12 @@ function toJobItem(row: JobRow): JobItem {
   const quotaUsed = Number(row.cost_amount ?? 0)
   const opts = (row.options ?? {}) as Record<string, unknown>
   const accountName = typeof opts.accountName === 'string' && opts.accountName ? opts.accountName : null
+  const localPath =
+    typeof opts.localPath === 'string' && opts.localPath
+      ? opts.localPath
+      : row.result_url && !/^https?:/i.test(row.result_url)
+        ? row.result_url
+        : null
   return {
     id: row.id,
     record: {
@@ -51,6 +57,7 @@ function toJobItem(row: JobRow): JobItem {
       quality: row.quality_score != null ? String(row.quality_score) : '-',
       traceId: row.trace_id ?? null,
       resultUrl: row.result_url ?? null,
+      localPath,
       errorMessage: row.error ?? null
     }
   }
@@ -62,6 +69,7 @@ export interface JobsResult {
   items: JobItem[]
   reload: () => void
   remove: (jobId: string) => Promise<boolean>
+  removeMany: (ids: string[]) => Promise<number>
 }
 
 export function useJobs(): JobsResult {
@@ -115,5 +123,21 @@ export function useJobs(): JobsResult {
     [reload, user]
   )
 
-  return { loading, error, items, reload, remove }
+  const removeMany = useCallback(
+    async (ids: string[]): Promise<number> => {
+      const svc = getJobService()
+      if (!svc || !user || ids.length === 0) return 0
+      try {
+        const n = await svc.deleteJobs(user.id, ids)
+        if (n > 0) reload()
+        return n
+      } catch (e) {
+        setError(errMsg(e))
+        return 0
+      }
+    },
+    [reload, user]
+  )
+
+  return { loading, error, items, reload, remove, removeMany }
 }

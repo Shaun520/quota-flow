@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { JobItem } from '../hooks/useJobs'
 import { useJobs } from '../hooks/useJobs'
-import { IconDownload, IconEye, IconTrash } from './icons'
+import { IconEye, IconFolder, IconTrash } from './icons'
 import Pagination from './Pagination'
 
 const PAGE_SIZE = 10
@@ -104,8 +104,12 @@ function VideoThumb({ src, onClick }: { src: string; onClick: () => void }) {
 }
 
 export default function History() {
-  const { loading, error, items, reload, remove } = useJobs()
+  const { loading, error, items, reload, remove, removeMany } = useJobs()
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [batchDeleting, setBatchDeleting] = useState(false)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const selectAllRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const [text, setText] = useState('')
@@ -120,6 +124,58 @@ export default function History() {
       await remove(item.id)
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  const toggleSelect = (id: string): void => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = (): void => {
+    const ids = filtered.map((i) => i.id)
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (ids.every((id) => next.has(id))) {
+        for (const id of ids) next.delete(id)
+      } else {
+        for (const id of ids) next.add(id)
+      }
+      return next
+    })
+  }
+
+  const clearSelection = (): void => setSelectedIds(new Set())
+
+  const toggleBatchMode = (): void => {
+    if (batchMode) clearSelection()
+    setBatchMode((m) => !m)
+  }
+
+  const batchDelete = async (): Promise<void> => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!window.confirm(`确定删除选中的 ${ids.length} 条历史记录？该操作会从数据库中移除这些任务。`)) return
+    setBatchDeleting(true)
+    try {
+      const n = await removeMany(ids)
+      if (n > 0) clearSelection()
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
+
+  // 在系统文件管理器中打开该视频所在的文件夹（视频已本地落盘 userData/videos）
+  const openFolder = async (filePath: string): Promise<void> => {
+    try {
+      const res = await window.api.media.showInFolder(filePath)
+      if (!res.ok) window.alert(res.error ?? '打开文件夹失败')
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -175,6 +231,16 @@ export default function History() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const pagedItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const colSpan = batchMode ? 9 : 8
+  const selectedCount = filtered.filter((i) => selectedIds.has(i.id)).length
+  const allSelected = filtered.length > 0 && selectedCount === filtered.length
+
+  // 全选框半选态：当前筛选结果只选了一部分
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedCount > 0 && !allSelected
+    }
+  }, [selectedCount, allSelected])
 
   if (loading) {
     return (
@@ -223,6 +289,14 @@ export default function History() {
           <p>全部生成任务 · 支持筛选与批量操作</p>
         </div>
         <div className="filter-bar">
+          <button
+            className={'btn-sm' + (batchMode ? ' primary' : '')}
+            title="勾选多条记录后批量删除"
+            onClick={toggleBatchMode}
+            disabled={items.length === 0}
+          >
+            批量删除
+          </button>
           <input
             type="text"
             placeholder="搜索提示词..."
@@ -254,11 +328,41 @@ export default function History() {
         </div>
       )}
 
+      {batchMode && (
+        <div className="batch-bar">
+          <span>已选 {selectedIds.size} 项</span>
+          <div className="actions">
+            <button
+              className="btn-sm danger"
+              disabled={batchDeleting || selectedIds.size === 0}
+              onClick={() => void batchDelete()}
+            >
+              {batchDeleting ? '删除中...' : '删除选中'}
+            </button>
+            <button className="btn-sm" disabled={batchDeleting} onClick={toggleBatchMode}>
+              取消选择
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="history-table-wrap">
         <div className="table-scroll">
           <table className="history-table">
             <thead>
               <tr>
+                {batchMode && (
+                  <th className="col-check" style={{ width: '36px' }}>
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      disabled={filtered.length === 0}
+                      aria-label="全选当前筛选结果"
+                    />
+                  </th>
+                )}
                 <th style={{ width: '80px' }}>预览</th>
                 <th>提示词</th>
                 <th>厂商</th>
@@ -272,9 +376,21 @@ export default function History() {
             <tbody>
               {pagedItems.map((item) => {
                 const r = item.record
+                const localPath = r.localPath
                 return (
                   <Fragment key={item.id}>
                     <tr>
+                      {batchMode && (
+                        <td className="col-check">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(item.id)}
+                            onChange={() => toggleSelect(item.id)}
+                            disabled={batchDeleting}
+                            aria-label="选择该记录"
+                          />
+                        </td>
+                      )}
                       <td className="col-preview">
                         {r.status === '成功' && mediaUrls[item.id] ? (
                           <VideoThumb src={mediaUrls[item.id]} onClick={() => togglePreview(item)} />
@@ -300,9 +416,14 @@ export default function History() {
                           >
                             <IconEye size={12} />
                           </button>
-                          {r.status !== '失败' && (
-                            <button className="action-btn" title="下载" aria-label="下载">
-                              <IconDownload size={12} />
+                          {localPath && (
+                            <button
+                              className="action-btn"
+                              title="打开所在文件夹"
+                              aria-label="打开所在文件夹"
+                              onClick={() => void openFolder(localPath)}
+                            >
+                              <IconFolder size={12} />
                             </button>
                           )}
                           <button
@@ -319,7 +440,7 @@ export default function History() {
                     </tr>
                     {preview && preview.id === item.id && (
                       <tr className="preview-row">
-                        <td colSpan={8} style={{ padding: '8px 12px' }}>
+                        <td colSpan={colSpan} style={{ padding: '8px 12px' }}>
                           <video
                             controls
                             autoPlay
@@ -334,7 +455,7 @@ export default function History() {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: '24px' }}>
+                  <td colSpan={colSpan} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: '24px' }}>
                     没有匹配的记录
                   </td>
                 </tr>

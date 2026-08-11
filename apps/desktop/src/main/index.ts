@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
@@ -136,6 +136,21 @@ app.whenReady().then(() => {
     }
     const port = await startMediaServer()
     return `http://127.0.0.1:${port}/${name}`
+  })
+
+  ipcMain.handle('media:show-in-folder', (_e, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('invalid path')
+    // 只允许打开 userData/videos 下的文件，避免 renderer 被诱导打开任意路径
+    const videosDir = join(app.getPath('userData'), 'videos')
+    const resolved = resolve(filePath)
+    const dir = videosDir.toLowerCase()
+    const target = resolved.toLowerCase()
+    const inVideos =
+      target === dir || target.startsWith(dir + '\\') || target.startsWith(dir + '/')
+    if (!inVideos) throw new Error('path outside videos directory')
+    if (!existsSync(resolved)) return { ok: false, error: '视频文件不存在' }
+    shell.showItemInFolder(resolved)
+    return { ok: true }
   })
 
   ipcMain.handle('ping', () => 'pong')

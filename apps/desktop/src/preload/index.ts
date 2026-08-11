@@ -96,6 +96,7 @@ export interface DesktopApi {
   }
   media: {
     getUrl: (name: string) => Promise<string>
+    showInFolder: (filePath: string) => Promise<{ ok: boolean; error?: string }>
   }
   windowControls: {
     minimize: () => Promise<void>
@@ -168,7 +169,9 @@ const api: DesktopApi = {
     }
   },
   media: {
-    getUrl: (name) => ipcRenderer.invoke('media:get-url', name) as Promise<string>
+    getUrl: (name) => ipcRenderer.invoke('media:get-url', name) as Promise<string>,
+    showInFolder: (filePath) =>
+      ipcRenderer.invoke('media:show-in-folder', filePath) as Promise<{ ok: boolean; error?: string }>
   },
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),

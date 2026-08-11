@@ -1383,6 +1383,87 @@ body {
 .history-error button {
   margin-left: auto;
 }
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 2px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-size: 0.85em;
+}
+.batch-bar .actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.btn-sm.danger {
+  color: var(--error);
+  border-color: rgba(196, 77, 77, 0.35);
+}
+.btn-sm.danger:hover {
+  background: rgba(196, 77, 77, 0.1);
+}
+.history-table .col-check {
+  width: 36px;
+  text-align: center;
+}
+.history-table input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-inset);
+  cursor: pointer;
+  vertical-align: middle;
+  position: relative;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.history-table input[type='checkbox']:hover {
+  border-color: var(--accent);
+}
+.history-table input[type='checkbox']:checked,
+.history-table input[type='checkbox']:indeterminate {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
+}
+.history-table input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.history-table input[type='checkbox']:indeterminate::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  width: 8px;
+  height: 2px;
+  background: #fff;
+  border-radius: 1px;
+}
+.history-table input[type='checkbox']:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-inset), 0 0 0 3px rgba(224, 122, 62, 0.12);
+}
+.history-table input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* ===== 表格底部 + 分页 ===== */
 .table-footer {
