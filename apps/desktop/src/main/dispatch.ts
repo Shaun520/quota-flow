@@ -22,6 +22,8 @@ export interface GenerateInput {
   resolution?: string
   audio?: string
   ratio?: string
+  /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
+  showWebview?: boolean
 }
 
 /**
@@ -279,6 +281,7 @@ export async function runGenerate(
           audio: input.audio,
           ratio: input.ratio,
           keyId: cand.id,
+          showWebview: input.showWebview,
           onProgress: (stage, detail) =>
             emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
         })

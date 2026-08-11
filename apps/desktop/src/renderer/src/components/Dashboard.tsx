@@ -14,6 +14,7 @@ import type { JobItem } from '../hooks/useJobs'
 import { useAuth } from '../hooks/useAuth'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
 import { VideoThumb } from './VideoThumb'
+import { getInitialShowWebview } from './Modals'
 
 const VIP = false
 
@@ -157,7 +158,8 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         mode: mode === 't2v' ? 'text2video' : mode,
         resolution,
         audio,
-        ratio
+        ratio,
+        showWebview: getInitialShowWebview()
       })
       if (!res.ok) {
         setGenError(res.error || '生成失败')

@@ -1,8 +1,10 @@
 // 豆包（Seedance）WebView 生成执行引擎
-// 链路：cookie 注入 → 打开豆包 → 进入「视频生成」→ 时长滑块（JS PointerEvent + 键盘）
+// 链路：cookie 注入 → 显示豆包窗口 → 进入「视频生成」→ 时长滑块（JS PointerEvent + 键盘）
 //       → 填 prompt（清理 chip）→ 提交
 //       → 轮询「你的视频生成好了」→ 点击视频卡片 → 提取 mp4 URL
 // 由 dispatch.ts 调用，不直接暴露给渲染进程。
+// 窗口策略：默认隐藏；设置「显示豆包窗口」（showWebview=true，本地缓存，用于测试/观察）时可见。
+//   注意：隐藏窗口下豆包发送事件可能不触发（Enter/点击在无焦点页面失效），测试时可开启显示。
 
 import { BrowserWindow, session } from 'electron'
 
@@ -48,6 +50,8 @@ export interface DoubaoGenerateOptions {
   keyId?: string
   /** 5 / 10 / 15，默认 5（1 点/次） */
   durationSec?: number
+  /** 测试开关：true 时显示豆包 WebView 窗口（默认隐藏） */
+  showWebview?: boolean
   /** 最长等待秒数，默认 360 */
   maxWaitSec?: number
   onProgress?: (stage: string, detail?: unknown) => void
@@ -551,11 +555,12 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
 
   progress(options, 'open-page')
   const win = new BrowserWindow({
-    show: false,
-    // 防止 Windows 上隐藏窗口在创建/导航时闪现
-    paintWhenInitiallyHidden: false,
+    // 默认隐藏；设置里开启「显示豆包窗口」后可见（用于测试/观察/处理验证码）
+    show: options.showWebview === true,
     width: 1280,
     height: 900,
+    title: '豆包生成 - Quota-Flow',
+    autoHideMenuBar: true,
     backgroundColor: '#0c0c0c',
     webPreferences: {
       partition,
@@ -564,6 +569,11 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
       sandbox: true
     }
   })
+  if (options.showWebview === true) {
+    try {
+      win.center()
+    } catch {}
+  }
   // 候选 B：webContents 也统一 UA（与登录/校验一致）
   win.webContents.setUserAgent(UA)
   win.webContents.setWindowOpenHandler(({ url }) => {

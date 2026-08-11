@@ -31,6 +31,15 @@ export function getInitialFontSize(): FontSize {
   return '13'
 }
 
+/** 调试开关：生成时是否显示豆包 WebView 窗口（默认隐藏，本地缓存） */
+export function applyShowWebview(show: boolean): void {
+  localStorage.setItem('qf-show-webview', show ? '1' : '0')
+}
+
+export function getInitialShowWebview(): boolean {
+  return localStorage.getItem('qf-show-webview') === '1'
+}
+
 interface ModalProps {
   title: string
   onClose: () => void
@@ -145,6 +154,7 @@ export function ProfileModal({
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [fontSize, setFontSize] = useState<FontSize>(getInitialFontSize)
+  const [showWebview, setShowWebview] = useState<boolean>(getInitialShowWebview)
 
   const handleThemeChange = (value: Theme) => {
     setTheme(value)
@@ -154,6 +164,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const handleFontSizeChange = (value: FontSize) => {
     setFontSize(value)
     applyFontSize(value)
+  }
+
+  const handleShowWebviewChange = (value: boolean) => {
+    setShowWebview(value)
+    applyShowWebview(value)
   }
 
   return (
@@ -187,6 +202,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <option value="15">特大 (15px)</option>
           <option value="16">超大 (16px)</option>
         </select>
+      </div>
+      <div className="form-group">
+        <label>调试：显示豆包窗口</label>
+        <select value={showWebview ? '1' : '0'} onChange={(e) => handleShowWebviewChange(e.target.value === '1')}>
+          <option value="0">隐藏（默认）</option>
+          <option value="1">显示（测试用）</option>
+        </select>
+        <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--fg-muted)' }}>
+          生成时显示豆包 WebView 窗口，便于观察生成过程或处理验证码；默认隐藏。
+        </p>
       </div>
       <div className="form-group">
         <label>调度策略</label>

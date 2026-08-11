@@ -53,6 +53,8 @@ export interface GenerateRequest {
   resolution?: string
   audio?: string
   ratio?: string
+  /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
+  showWebview?: boolean
 }
 
 export interface DesktopApi {
