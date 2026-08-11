@@ -49,6 +49,10 @@ export interface GenerateRequest {
   prompt: string
   providerId: string
   durationSec: number
+  mode?: string
+  resolution?: string
+  audio?: string
+  ratio?: string
 }
 
 export interface DesktopApi {

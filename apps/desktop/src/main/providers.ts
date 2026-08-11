@@ -111,18 +111,13 @@ interface StoredV2 {
 
 function encryptCookies(
   cookies: ProviderCookie[],
-  storages: OriginStorage[] = [],
-  legacyLocalStorage: Array<{ key: string; value: string }> = []
+  storages: OriginStorage[] = []
 ): string {
   const payload: StoredV2 = { cookies }
   if (storages.length > 0) payload.storages = storages
   // 兼容 v1 字段，供老代码读取
-  if (legacyLocalStorage.length > 0 && !storages.some((s) => s.localStorage.length > 0)) {
-    payload.localStorage = legacyLocalStorage
-  } else if (storages.length > 0) {
-    const main = storages.find((s) => s.origin.includes('doubao.com')) || storages[0]
-    if (main?.localStorage.length) payload.localStorage = main.localStorage
-  }
+  const main = storages.find((s) => s.origin.includes('doubao.com')) || storages[0]
+  if (main?.localStorage.length) payload.localStorage = main.localStorage
   const plain = JSON.stringify(payload)
   return safeStorage.encryptString(plain).toString('base64')
 }
@@ -196,150 +191,6 @@ async function injectCookies(
       // 单条失败不阻塞其余注入
     }
   }
-}
-
-/** 登录收集后的决定性校验：把 cookie + 多 origin storages 注入全新临时分区并打开豆包，确认真的能登录（与生成时同用法） */
-async function validateDoubaoCookies(
-  cookies: ProviderCookie[],
-  storages: OriginStorage[] = [],
-  legacyLocalStorage: Array<{ key: string; value: string }> = []
-): Promise<boolean> {
-  const partition = 'persist:qf-verify-' + Date.now()
-  const ses = session.fromPartition(partition)
-  // 候选 B：统一校验 UA，与会话生成时一致
-  ses.setUserAgent(CHROME_UA)
-  for (const c of cookies) {
-    try {
-      await ses.cookies.set({
-        url: `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '') || 'www.doubao.com'}${c.path || '/'}`,
-        domain: c.domain || undefined,
-        name: c.name,
-        value: c.value,
-        httpOnly: c.httpOnly ?? false,
-        secure: c.secure ?? true,
-        expirationDate: c.expires > 0 ? Math.floor(c.expires / 1000) : undefined
-      })
-    } catch {
-      // 单条失败不阻断
-    }
-  }
-
-  // 归一化：调用方可能传 legacy localStorage 或 storages，优先用 storages
-  const effectiveStorages: OriginStorage[] = storages.length > 0 ? storages : []
-  if (legacyLocalStorage.length > 0 && !effectiveStorages.some((s) => s.origin === 'https://www.doubao.com')) {
-    effectiveStorages.push({
-      origin: 'https://www.doubao.com',
-      localStorage: legacyLocalStorage
-    })
-  }
-
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (ok: boolean): void => {
-      if (settled) return
-      settled = true
-      try {
-        void ses.clearStorageData()
-      } catch {}
-      resolve(ok)
-    }
-    const win = new BrowserWindow({
-      show: false,
-      width: 1000,
-      height: 800,
-      webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true }
-    })
-    // 候选 B：窗口 webContents 也设置 UA
-    win.webContents.setUserAgent(CHROME_UA)
-    const timer = setTimeout(() => {
-      try {
-        win.destroy()
-      } catch {}
-      finish(false)
-    }, 30000)
-    win.webContents.on('did-fail-load', () => {
-      clearTimeout(timer)
-      try {
-        win.destroy()
-      } catch {}
-      finish(false)
-    })
-    let reloadedWithStorage = false
-    win.webContents.on('did-finish-load', () => {
-      setTimeout(() => {
-        void (async () => {
-          // 注入当前页面 origin 的 localStorage + sessionStorage
-          if (effectiveStorages.length > 0 && !reloadedWithStorage) {
-            reloadedWithStorage = true
-            try {
-              await win.webContents.executeJavaScript(
-                `(() => {
-                  const all = ${JSON.stringify(effectiveStorages)};
-                  const main = all.find((s) => location.origin === s.origin) || all.find((s) => (s.origin || '').includes('doubao.com'));
-                  if (main && main.localStorage) {
-                    for (const { key, value } of main.localStorage) {
-                      try { localStorage.setItem(key, value); } catch {}
-                    }
-                    if (main.sessionStorage) {
-                      for (const { key, value } of main.sessionStorage) {
-                        try { sessionStorage.setItem(key, value); } catch {}
-                      }
-                    }
-                  }
-                })()`,
-                true
-              )
-            } catch {}
-            try {
-              await win.webContents.executeJavaScript('location.reload()', true)
-            } catch {}
-            await sleep(3500)
-          }
-          // 轮询登录态稳定（最多 ~18s）
-          for (let i = 0; i < 18; i++) {
-            await sleep(1000)
-            try {
-              const state = (await win.webContents.executeJavaScript(
-                `(() => {
-                  const norm = (s) => (s || '').trim();
-                  const btns = [...document.querySelectorAll('button, [role="button"]')]
-                    .filter((b) => b.offsetParent !== null)
-                    .map((b) => norm(b.textContent));
-                  // 登录墙特征：大号按钮「扫码登录/立即登录/手机号登录」
-                  const hasLoginWall = btns.some((t) => /^(扫码登录|立即登录|手机号登录|短信登录)$/.test(t));
-                  // 用户信息：头像/昵称存在
-                  const hasAvatar = !!document.querySelector('[class*="avatar" i], [class*="userinfo" i], [class*="user-info" i]');
-                  return { hasLoginWall, hasAvatar, url: location.href };
-                })()`,
-                true
-              )) as { hasLoginWall?: boolean; hasAvatar?: boolean }
-              // 已登录判定：没有登录墙 AND 有用户信息（或等待足够时间后兜底）
-              if (state && !state.hasLoginWall && (state.hasAvatar || i > 6)) {
-                clearTimeout(timer)
-                try {
-                  win.destroy()
-                } catch {}
-                finish(true)
-                return
-              }
-            } catch {}
-          }
-          clearTimeout(timer)
-          try {
-            win.destroy()
-          } catch {}
-          finish(false)
-        })()
-      }, 4000)
-    })
-    void win.loadURL('https://www.doubao.com/chat/').catch(() => {
-      clearTimeout(timer)
-      try {
-        win.destroy()
-      } catch {}
-      finish(false)
-    })
-  })
 }
 
 /* ============ P2 账号指纹去重（方案 A） ============
@@ -700,12 +551,6 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                   )
                 }
               } catch {}
-              // 兼容老字段：取 www.doubao.com localStorage 作为 legacy localStorage（用于 v1 兼容）
-              const legacyEntries =
-                storages.find((s) => s.origin === 'https://www.doubao.com')?.localStorage ||
-                storages[0]?.localStorage ||
-                []
-
               // 4) 记录收集元信息
               appendFingerprintDebug({
                 type: 'login-collected',
@@ -715,20 +560,6 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                 cookieCount: cookies.length,
                 storageOrigins: storages.map((s) => ({ origin: s.origin, ls: s.localStorage.length, ss: (s.sessionStorage || []).length })),
                 cookies: cookies.map((c) => ({ name: c.name, domain: c.domain, secure: c.secure, httpOnly: c.httpOnly, expires: c.expires }))
-              })
-
-              // 5) 非阻断式校验：跨分区校验本身不可靠（豆包会话可能绑定 IndexedDB / Service Worker / 指纹），
-              //    不应作为登录成功的硬性条件。校验结果仅记录到日志，不影响登录流程。
-              //    真正的登录态检查由生成引擎在生成分区里实际打开页面时完成。
-              let validateOk = false
-              try {
-                validateOk = await validateDoubaoCookies(cookies, storages, legacyEntries)
-              } catch {}
-              appendFingerprintDebug({
-                type: 'validate-result',
-                providerId,
-                keyId: keyId || null,
-                validateOk
               })
 
               // 6) 登录成功：在窗口销毁前提取账号指纹（P2 去重）
@@ -746,7 +577,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
 
               done({
                 ok: true,
-                encrypted: encryptCookies(cookies, storages, legacyEntries),
+                encrypted: encryptCookies(cookies, storages),
                 cookieCount: viewCookies,
                 expiresAt: maxExp > 0 ? maxExp : null,
                 accountFingerprint

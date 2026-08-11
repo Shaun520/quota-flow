@@ -3,9 +3,7 @@
 //       → 轮询「你的视频生成好了」→ 点击视频卡片 → 提取 mp4 URL
 // 由 dispatch.ts 调用，不直接暴露给渲染进程。
 
-import { app, BrowserWindow, session } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { BrowserWindow, session } from 'electron'
 
 const PARTITION = 'persist:qf-p:doubao'
 const DOUBAO_URL = 'https://www.doubao.com/chat/'
@@ -37,6 +35,14 @@ export interface DoubaoGenerateOptions {
   /** 新 v2 格式：多 origin storage（候选 A）。存在时优先于 localStorage */
   storages?: OriginStorage[]
   prompt: string
+  /** 生成模式：text2video（当前仅支持） / img2video 等 */
+  mode?: string
+  /** 清晰度：豆包规格无清晰度维度，仅透传记录 */
+  resolution?: string
+  /** 配音：on / off（尽力注入） */
+  audio?: string
+  /** 画面比例：9:16 / 16:9 / 1:1（尽力注入） */
+  ratio?: string
   /** 账号 id：用于隔离 WebView 分区（persist:qf-p:doubao:<keyId>），防多账号串号；登录窗口也共用该分区（候选 C） */
   keyId?: string
   /** 5 / 10 / 15，默认 5（1 点/次） */
@@ -111,29 +117,6 @@ const openVideoTabScript = (): unknown => {
   return { ok: true, text: textOf(hit).slice(0, 20) }
 }
 
-const clickDurationScript = (): unknown => {
-  const norm = (s: string): string => (s || '').trim()
-  const btn = [...document.querySelectorAll('button, [role="button"]')].find(
-    (b) => (b as HTMLElement).offsetParent !== null && /自动|10s|15s|5s/.test(norm((b as HTMLElement).textContent || ''))
-  )
-  if (!btn) return { ok: false, reason: '未找到时长按钮' }
-  ;(btn as HTMLElement).click()
-  return { ok: true }
-}
-
-const pickDurationScript = (sec: number): unknown => {
-  const norm = (s: string): string => (s || '').trim()
-  const label = String(sec) + 's'
-  const els = [...document.querySelectorAll('div, li, span, button, [role="option"], [class*="option" i]')]
-  const exact = els.filter((el) => (el as HTMLElement).offsetParent !== null && norm((el as HTMLElement).textContent || '') === label)
-  const hit =
-    exact[exact.length - 1] ||
-    els.find((el) => (el as HTMLElement).offsetParent !== null && norm((el as HTMLElement).textContent || '').includes(label) && norm((el as HTMLElement).textContent || '').length <= 12)
-  if (!hit) return { ok: false, reason: '未找到 ' + label + ' 选项' }
-  ;(hit as HTMLElement).click()
-  return { ok: true }
-}
-
 // 填入 prompt：先清空编辑器（ProseMirror 可能含时长 chip），再插入干净文本，校验后回车提交
 const fillAndSubmitScript = (prompt: string): unknown => {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -146,11 +129,36 @@ const fillAndSubmitScript = (prompt: string): unknown => {
     }
     return null
   }
+  const findTiptap = (): { commands?: { setContent?: (c: string, emit?: boolean) => void }; getText?: () => string } | null => {
+    try {
+      for (const k of Object.keys(window)) {
+        try {
+          const v = (window as unknown as Record<string, unknown>)[k]
+          if (
+            v &&
+            typeof v === 'object' &&
+            (v as { commands?: unknown }).commands &&
+            typeof (v as { commands?: { setContent?: unknown } }).commands?.setContent === 'function'
+          ) {
+            return v as { commands?: { setContent?: (c: string, emit?: boolean) => void }; getText?: () => string }
+          }
+        } catch {}
+      }
+    } catch {}
+    return null
+  }
   const setText = (el: HTMLElement, text: string): void => {
     el.focus()
     try {
       document.execCommand('selectAll', false)
       document.execCommand('delete', false)
+    } catch {}
+    // 强清理：selectAll 可能选不中 ProseMirror 的 chip 节点，直接清空 DOM 内容兜底
+    try {
+      const cur = norm(el.innerText || el.textContent || '')
+      if (cur !== '' && !cur.includes(text.slice(0, 8))) {
+        el.innerHTML = ''
+      }
     } catch {}
     try {
       document.execCommand('insertText', false, text)
@@ -161,18 +169,33 @@ const fillAndSubmitScript = (prompt: string): unknown => {
   return (async () => {
     const editor = findEditor()
     if (!editor) return { ok: false, reason: '未找到输入框，可能未登录或页面结构不同' }
-    // 最多重试 3 次：清空 → 插入 → 校验（去掉 UI 自动附加的时长 chip）
-    for (let i = 0; i < 3; i++) {
+    // 1) 优先用 TipTap 编辑器 API 设置内容：能真正清掉 ProseMirror 状态里的时长 chip（DOM 清理清不掉状态）
+    let contentOk = false
+    try {
+      const tiptap = findTiptap()
+      if (tiptap && tiptap.commands && typeof tiptap.commands.setContent === 'function') {
+        tiptap.commands.setContent(prompt, false)
+        await sleep(400)
+        const t = norm(tiptap.getText ? tiptap.getText() : '')
+        if (t === prompt) contentOk = true
+      }
+    } catch {}
+    // 2) DOM 兜底：清空 → 插入 → 校验（UI 可能自动附加时长 chip，反复清理）
+    if (!contentOk) {
+      for (let i = 0; i < 5; i++) {
+        setText(editor, prompt)
+        await sleep(350)
+        const text = norm(editor.innerText || editor.textContent || '')
+        if (text === prompt) break
+      }
+      editor.focus()
       setText(editor, prompt)
-      await sleep(400)
-      const text = norm(editor.innerText || editor.textContent || '')
-      if (text === prompt) break
+      await sleep(350)
     }
     const finalText = norm(editor.innerText || editor.textContent || '')
     if (finalText !== prompt) {
       return { ok: false, reason: '编辑器内容未清理干净: ' + finalText.slice(0, 60) }
     }
-    editor.focus()
     const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
     editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts))
     editor.dispatchEvent(new KeyboardEvent('keypress', enterOpts))
@@ -281,6 +304,10 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return { ok: false, providerId: 'doubao', error, attempts }
   }
 
+  if (options.mode && options.mode !== 'text2video' && options.mode !== 't2v') {
+    return fail('暂仅支持文生视频（豆包），当前模式：' + options.mode)
+  }
+
   progress(options, 'inject-cookies')
   const injected = await injectCookies(options.cookies, partition)
   if (injected === 0) {
@@ -372,19 +399,10 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail(loadError ? `页面加载失败 (${loadError.code}: ${loadError.desc})` : '豆包页面未找到输入框（可能未登录或页面结构变化）')
   }
   if (inspect.hasLogin) {
-    let shot = ''
-    try {
-      const dir = join(app.getPath('userData'), 'debug')
-      mkdirSync(dir, { recursive: true })
-      const file = join(dir, `login-wall-${Date.now()}.png`)
-      writeFileSync(file, (await win.capturePage()).toPNG())
-      shot = ' | 截图:' + file
-    } catch {}
     win.destroy()
     return fail(
       '豆包账号未登录（cookie 可能已失效），请在厂商页重新登录后重试' +
-        JSON.stringify(inspect).slice(0, 300) +
-        shot
+        ` (loginWall=${inspect.hasLoginWall}, userInfo=${inspect.hasUserInfo})`
     )
   }
 
@@ -451,27 +469,23 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail('未进入视频生成界面（页面结构可能有变化）' + (lastView ? JSON.stringify(lastView).slice(0, 300) : ''))
   }
 
-  // 时长：先展开选择器，再选目标秒数（默认 5s），避免 prompt 与 chip 冲突
+  // 参数统一拼进提示词（豆包会从提示词解析）：时长 + 比例 + 配音
   const durationSec = options.durationSec === 10 ? 10 : options.durationSec === 15 ? 15 : 5
-  progress(options, 'select-duration', { durationSec })
-  try {
-    await win.webContents.executeJavaScript('(' + clickDurationScript.toString() + ')()', true)
-    await sleep(900)
-    const picked = await win.webContents.executeJavaScript('(' + pickDurationScript.toString() + ')(' + durationSec + ')', true)
-    if (!picked || !picked.ok) {
-      // 选择失败不致命：继续，由编辑器清理逻辑处理 chip
-      progress(options, 'select-duration-fallback')
-    }
-  } catch {
-    progress(options, 'select-duration-fallback')
-  }
-  await sleep(600)
+  const parts: string[] = [options.prompt, `${durationSec}秒`]
+  if (options.ratio) parts.push(options.ratio)
+  if (options.audio === 'on') parts.push('带配音')
+  else if (options.audio === 'off') parts.push('关闭配音')
+  if (options.resolution) parts.push(`帧率${options.resolution}p`)
+  // 单视频约束：置于最后，作为最明确的指令，覆盖 prompt 里列举多个实体导致的「生成多个视频」
+  parts.push('仅生成1个视频')
+  const submitPrompt = parts.join('，')
+  progress(options, 'apply-params', { durationSec, ratio: options.ratio, audio: options.audio, submitPrompt })
 
   progress(options, 'submit')
   let fillResult: { ok?: boolean; reason?: string } = {}
   try {
     fillResult = (await win.webContents.executeJavaScript(
-      '(' + fillAndSubmitScript.toString() + ')(' + JSON.stringify(options.prompt) + ')',
+      '(' + fillAndSubmitScript.toString() + ')(' + JSON.stringify(submitPrompt) + ')',
       true
     )) as typeof fillResult
   } catch (e) {

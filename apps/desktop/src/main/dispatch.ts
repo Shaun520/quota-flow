@@ -2,7 +2,7 @@
 // + 豆包执行（webview-engine）+ 额度扣减（quota_ledger）+ 视频下载落盘（URL 时效）
 
 import { app, safeStorage } from 'electron'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { createWriteStream, mkdirSync, renameSync } from 'node:fs'
 import { get as httpsGet } from 'node:https'
 import { join } from 'node:path'
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
@@ -18,6 +18,10 @@ export interface GenerateInput {
   prompt: string
   providerId: string
   durationSec: number
+  mode?: string
+  resolution?: string
+  audio?: string
+  ratio?: string
 }
 
 /**
@@ -70,31 +74,6 @@ function doubaoCost(durationSec: number): number {
   if (durationSec <= 5) return 1
   if (durationSec <= 10) return 2
   return 3
-}
-
-/** 本地 data/doubao-auth.json 兜底（与 qwen/yuanbao 同款格式） */
-function loadLocalDoubaoCookies(): ProviderCookie[] | null {
-  try {
-    const file = join(app.getAppPath(), '..', '..', 'data', 'doubao-auth.json')
-    if (!existsSync(file)) return null
-    const raw = readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
-    const auth = JSON.parse(raw) as { cookie?: string }
-    if (!auth.cookie) return null
-    const cookies: ProviderCookie[] = []
-    for (const part of auth.cookie.split(';')) {
-      const p = part.trim()
-      const idx = p.indexOf('=')
-      if (idx <= 0) continue
-      const name = p.slice(0, idx).trim()
-      const value = p.slice(idx + 1).trim()
-      if (name && value) {
-        cookies.push({ name, value, domain: '.doubao.com', path: '/', httpOnly: false, secure: true, expires: 0 })
-      }
-    }
-    return cookies.length ? cookies : null
-  } catch {
-    return null
-  }
 }
 
 /** 下载视频到 userData/videos/<jobId>.mp4（生成后立即落盘，避免签名 URL 过期） */
@@ -186,7 +165,7 @@ export async function runGenerate(
   let job
   try {
     job = await jobSvc.insertJob(input.userId, {
-      mode: 'text2video',
+      mode: input.mode === 'img2video' ? 'img2video' : 'text2video',
       prompt: input.prompt,
       status: 'pending',
       providerId: input.providerId
@@ -203,35 +182,18 @@ export async function runGenerate(
   const doubaoKeys = keys.filter((k) => k.provider_id === 'doubao' && k.enabled !== false)
 
   let selectedKey: { id: string; accountName: string | null } | null = null
-  let cookies: ProviderCookie[] | null = null
-  let storageEntries: Array<{ key: string; value: string }> = []
   let result: Awaited<ReturnType<typeof runDoubaoGeneration>> | null = null
   let lastError = ''
 
   if (doubaoKeys.length === 0) {
-    // 未绑定账号：本地 auth 文件兜底（开发用）
-    cookies = loadLocalDoubaoCookies()
-    if (!cookies || cookies.length === 0) {
-      const err = '未绑定豆包账号（请在厂商页绑定后重试）'
-      await jobSvc.updateJob(input.userId, job.id, {
-        status: 'failed',
-        error: err,
-        completedAt: new Date().toISOString()
-      })
-      emit({ jobId: job.id, status: 'failed', message: err })
-      return { ok: false, jobId: job.id, error: err }
-    }
-    result = await runDoubaoGeneration({
-      cookies,
-      localStorage: storageEntries,
-      storages: storageEntries.length
-        ? [{ origin: 'https://www.doubao.com', localStorage: storageEntries }]
-        : [],
-      prompt: input.prompt,
-      durationSec: input.durationSec,
-      onProgress: (stage, detail) => emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
+    const err = '未绑定豆包账号（请在厂商页绑定后重试）'
+    await jobSvc.updateJob(input.userId, job.id, {
+      status: 'failed',
+      error: err,
+      completedAt: new Date().toISOString()
     })
-    lastError = result.ok ? '' : result.error || '生成失败'
+    emit({ jobId: job.id, status: 'failed', message: err })
+    return { ok: false, jobId: job.id, error: err }
   } else {
     try {
       const providers = await providerSvc.listProviders()
@@ -293,8 +255,6 @@ export async function runGenerate(
           lastError = `账号「${cand.account_name || '未命名'}」cookie 解密失败`
           continue
         }
-        cookies = c
-        storageEntries = s
         selectedKey = { id: cand.id, accountName: cand.account_name }
         emit({
           jobId: job.id,
@@ -314,6 +274,10 @@ export async function runGenerate(
           storages,
           prompt: input.prompt,
           durationSec: input.durationSec,
+          mode: input.mode,
+          resolution: input.resolution,
+          audio: input.audio,
+          ratio: input.ratio,
           keyId: cand.id,
           onProgress: (stage, detail) =>
             emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })

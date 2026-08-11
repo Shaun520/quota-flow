@@ -77,6 +77,10 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       setGenError('请先填写 Prompt 描述')
       return
     }
+    if (mode !== 't2v') {
+      setGenError('暂仅支持文生视频（图生视频/多参考待接入）')
+      return
+    }
     setGenError(null)
     setGenerating(true)
     try {
@@ -95,7 +99,11 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         userId: user.id,
         prompt: prompt.trim(),
         providerId: provider === 'auto' ? 'doubao' : provider,
-        durationSec: duration
+        durationSec: duration,
+        mode: mode === 't2v' ? 'text2video' : mode,
+        resolution,
+        audio,
+        ratio
       })
       if (!res.ok) {
         setGenError(res.error || '生成失败')
@@ -108,7 +116,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     } finally {
       setGenerating(false)
     }
-  }, [generating, fresh, step, prompt, provider, duration, user, onGenerate, reloadJobs, onGoProviders])
+  }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, user, onGenerate, reloadJobs, onGoProviders])
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
