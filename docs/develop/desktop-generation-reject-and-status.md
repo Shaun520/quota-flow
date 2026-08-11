@@ -1,7 +1,7 @@
 # 调度台：豆包拒绝生成检测 + 生成状态进度（方案）
 
 > 记录日期：2026-08-12
-> 状态：**功能 1（拒绝检测 + 展示 + 重新生成）已实现（2026-08-12）**；功能 2（状态进度）待实现
+> 状态：**功能 1（拒绝检测 + 展示 + 重新生成）已实现（2026-08-12）**；**功能 2（状态进度）已实现（2026-08-12）**
 > 关联：[desktop-doubao-risk-control.md](desktop-doubao-risk-control.md)、[desktop-dispatch-doubao.md](desktop-dispatch-doubao.md)
 
 ---
@@ -55,6 +55,8 @@
 - 若失败原因是风控/限流，按钮旁提示“账号可能被风控，建议稍后再试”，避免连续重试加重风控。
 
 ## 2. 生成状态进度显示
+
+> **已实现（2026-08-12）**：`apps/desktop/src/renderer/src/components/Dashboard.tsx` 增加 `genStage` 状态与 `STAGE_LABEL` 映射；`job:event` 的 `running+stage` 更新状态，成功/失败清空；生成按钮下方显示「spinner + 当前阶段文案」，未收到阶段前显示「正在准备…」。样式 `.gen-status` / `.gen-status-spinner` 在 `styles.css`。
 
 ### 2.1 现状
 

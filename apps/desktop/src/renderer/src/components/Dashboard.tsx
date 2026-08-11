@@ -18,6 +18,23 @@ import { getInitialShowWebview } from './Modals'
 
 const VIP = false
 
+/** 生成阶段 → 用户可见文案 */
+const STAGE_LABEL: Record<string, string> = {
+  'select-account': '选择账号中…',
+  'inject-cookies': '注入登录态…',
+  'open-page': '打开豆包页面…',
+  'wait-tab': '进入视频生成…',
+  'open-video-tab': '进入视频生成…',
+  'apply-duration': '设置时长…',
+  'apply-params': '发送 prompt 中…',
+  submit: '发送 prompt 中…',
+  waiting: '视频开始生成中…（排队中）',
+  'risk-verify': '需要验证，请在弹窗完成…',
+  'risk-resolved': '验证完成，继续生成…',
+  'account-failed': '当前账号失败，尝试切换…',
+  blocked: '豆包拒绝了本次生成（见左侧错误）'
+}
+
 interface DashboardProps {
   fresh: boolean
   banner: boolean
@@ -43,6 +60,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [genFailed, setGenFailed] = useState(false)
+  const [genStage, setGenStage] = useState<string | null>(null)
   const activeJobIdRef = useRef<string | null>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
@@ -69,15 +87,19 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
 
   // 主进程生成事件（进度/完成）→ 刷新最近生成
   useEffect(() => {
-    return window.api.dispatch.onEvent((ev: { jobId?: string; status?: string; message?: string }) => {
+    return window.api.dispatch.onEvent((ev: { jobId?: string; status?: string; stage?: string; message?: string }) => {
       reloadJobs()
       // 只处理当前任务的事件，避免历史任务事件误伤
       if (activeJobIdRef.current && ev.jobId && ev.jobId !== activeJobIdRef.current) return
-      if (ev.status === 'failed') {
+      if (ev.status === 'running' && ev.stage) {
+        setGenStage(ev.stage)
+      } else if (ev.status === 'failed') {
         setGenError(ev.message || '生成失败')
         setGenFailed(true)
+        setGenStage(null)
       } else if (ev.status === 'success') {
         setGenFailed(false)
+        setGenStage(null)
       }
     })
   }, [reloadJobs])
@@ -148,6 +170,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     }
     setGenError(null)
     setGenFailed(false)
+    setGenStage(null)
     setGenerating(true)
     try {
       const auth = getAuthService()
@@ -369,6 +392,12 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
                 style={{ flex: 1, minWidth: 0, color: 'var(--error)', fontSize: 12, textAlign: 'left' }}
               >
                 {genError}
+              </div>
+            )}
+            {generating && (
+              <div className="gen-status">
+                <span className="gen-status-spinner" />
+                <span>{genStage ? (STAGE_LABEL[genStage] ?? genStage) : '正在准备…'}</span>
               </div>
             )}
             <button
