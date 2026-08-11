@@ -64,10 +64,27 @@ export interface DesktopApi {
     clearSession: () => Promise<void>
   }
   providers: {
-    login: (providerId: string) => Promise<ProviderLoginResult>
+    /**
+     * 打开登录窗口
+     * @param providerId 厂商 id（doubao / jimeng 等）
+     * @param keyId 可选：账号 key id。传入后登录分区与生成分区共用（persist:qf-p:<provider>:<keyId>），避免跨分区迁移会话
+     */
+    login: (providerId: string, keyId?: string) => Promise<ProviderLoginResult>
     encrypt: (providerId: string, plain: string) => Promise<{ encrypted: string; fingerprint?: string | null }>
-    healthCheck: (providerId: string, encrypted: string) => Promise<HealthCheckResult>
-    cancelLogin: (providerId: string) => Promise<void>
+    /**
+     * 健康检查
+     * @param keyId 可选：账号级 partition（与生成分区一致），用于在生成分区直接检查健康状态
+     */
+    healthCheck: (providerId: string, encrypted: string, keyId?: string) => Promise<HealthCheckResult>
+    /**
+     * 取消登录窗口
+     * @param keyId 可选：对应 login 传入的 keyId，关闭同一账号的登录窗口
+     */
+    cancelLogin: (providerId: string, keyId?: string) => Promise<void>
+    /**
+     * 迁移分区：把 src 分区的 cookie 复制到 dst 分区（用于刷新已有账号时把临时分区登录态迁移到目标分区）
+     */
+    migratePartition: (providerId: string, srcKeyId: string, dstKeyId: string) => Promise<{ ok: boolean; cookieCount?: number; error?: string }>
   }
   dispatch: {
     generate: (input: GenerateRequest) => Promise<{ ok: boolean; jobId?: string; error?: string }>
@@ -125,12 +142,16 @@ const api: DesktopApi = {
     clearSession: () => ipcRenderer.invoke('auth:clear-session') as Promise<void>
   },
   providers: {
-    login: (providerId) => ipcRenderer.invoke('provider:login', providerId) as Promise<ProviderLoginResult>,
+    login: (providerId, keyId) =>
+      ipcRenderer.invoke('provider:login', providerId, keyId) as Promise<ProviderLoginResult>,
     encrypt: (providerId, plain) =>
       ipcRenderer.invoke('provider:encrypt', providerId, plain) as Promise<{ encrypted: string; fingerprint?: string | null }>,
-    healthCheck: (providerId, encrypted) =>
-      ipcRenderer.invoke('provider:health-check', providerId, encrypted) as Promise<HealthCheckResult>,
-    cancelLogin: (providerId) => ipcRenderer.invoke('provider:login-cancel', providerId) as Promise<void>
+    healthCheck: (providerId, encrypted, keyId) =>
+      ipcRenderer.invoke('provider:health-check', providerId, encrypted, keyId) as Promise<HealthCheckResult>,
+    cancelLogin: (providerId, keyId) =>
+      ipcRenderer.invoke('provider:login-cancel', providerId, keyId) as Promise<void>,
+    migratePartition: (providerId, srcKeyId, dstKeyId) =>
+      ipcRenderer.invoke('provider:migrate-partition', providerId, srcKeyId, dstKeyId) as Promise<{ ok: boolean; cookieCount?: number; error?: string }>
   },
   dispatch: {
     generate: (input) => ipcRenderer.invoke('dispatch:generate', input) as Promise<{ ok: boolean; jobId?: string; error?: string }>,

@@ -9,6 +9,7 @@ import { join } from 'node:path'
 
 const PARTITION = 'persist:qf-p:doubao'
 const DOUBAO_URL = 'https://www.doubao.com/chat/'
+/** 统一 UA：必须与登录窗口、校验窗口一致（providers.ts CHROME_UA），避免服务端按设备指纹失效会话 */
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
 
@@ -22,12 +23,21 @@ export interface ProviderCookie {
   expires?: number
 }
 
+/** 多 origin 存储（与 providers.ts OriginStorage 保持一致） */
+export interface OriginStorage {
+  origin: string
+  localStorage: Array<{ key: string; value: string }>
+  sessionStorage?: Array<{ key: string; value: string }>
+}
+
 export interface DoubaoGenerateOptions {
   cookies: ProviderCookie[]
-  /** 豆包会话可能依赖 localStorage 中的 token，需随 cookie 一起注入 */
+  /** 兼容旧：仅 www.doubao.com 单 origin localStorage。优先使用 storages 字段 */
   localStorage?: Array<{ key: string; value: string }>
+  /** 新 v2 格式：多 origin storage（候选 A）。存在时优先于 localStorage */
+  storages?: OriginStorage[]
   prompt: string
-  /** 账号 id：用于隔离 WebView 分区（persist:qf-p:doubao:<keyId>），防多账号串号 */
+  /** 账号 id：用于隔离 WebView 分区（persist:qf-p:doubao:<keyId>），防多账号串号；登录窗口也共用该分区（候选 C） */
   keyId?: string
   /** 5 / 10 / 15，默认 5（1 点/次） */
   durationSec?: number
@@ -59,13 +69,27 @@ const inspectScript = (): unknown => {
     .map((b) => norm((b as HTMLElement).textContent || ''))
     .filter(Boolean)
     .slice(0, 20)
-  const hasLogin = /登录|扫码|手机号|验证码/.test(btns.join(' '))
+
+  // 登录检测：豆包导航栏始终有「登录」按钮，不能单靠它判断
+  // 真正未登录的特征：
+  //   1) 登录墙出现：页面中央有大号按钮「扫码登录 / 立即登录 / 手机号登录」
+  //   2) 没有任何用户头像/昵称元素
+  const hasLoginWall = btns.some((t) => /^(扫码登录|立即登录|手机号登录|短信登录|验证码登录)$/.test(t))
+  // 检测用户头像/昵称：已登录时导航栏显示用户信息
+  const hasUserInfo = !!(
+    document.querySelector('[class*="user-info" i], [class*="userinfo" i], [class*="avatar" i]') ||
+    document.querySelector('img[class*="avatar" i], img[src*="avatar" i]')
+  )
+  const hasLogin = hasLoginWall || !hasUserInfo
+
   return {
     url: location.href,
     title: document.title,
     inputFound: !!input,
     inputTag: input ? input.tagName.toLowerCase() : '',
     hasLogin,
+    hasLoginWall,
+    hasUserInfo,
     buttons: btns.slice(0, 12)
   }
 }
@@ -228,8 +252,13 @@ async function injectCookies(cookies: ProviderCookie[], partition: string): Prom
   let injected = 0
   for (const c of cookies) {
     try {
+      const cleanDomain = (c.domain || '').replace(/^\./, '') || 'www.doubao.com'
+      const cookieUrl = `${c.secure === false ? 'http' : 'https'}://${cleanDomain}${c.path || '/'}`
+      // 显式设置 domain：保留原始域 cookie 语义（如 .doubao.com），
+      // 否则 Electron 会将其设为 host-only cookie，www.doubao.com 收不到
       await ses.cookies.set({
-        url: `${c.secure === false ? 'http' : 'https'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`,
+        url: cookieUrl,
+        domain: c.domain || undefined,
         name: c.name,
         value: c.value,
         httpOnly: !!c.httpOnly,
@@ -254,7 +283,10 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
 
   progress(options, 'inject-cookies')
   const injected = await injectCookies(options.cookies, partition)
-  if (injected === 0) return fail('豆包 cookie 注入失败')
+  if (injected === 0) {
+    // 候选 C 兜底：若分区已存在登录态（登录窗口=生成分区），注入失败但可能仍可使用
+    // 继续往下走，由 inspect 登录态检查决定
+  }
 
   progress(options, 'open-page')
   const win = new BrowserWindow({
@@ -268,6 +300,8 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
       sandbox: true
     }
   })
+  // 候选 B：webContents 也统一 UA（与登录/校验一致）
+  win.webContents.setUserAgent(UA)
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http')) return { action: 'allow', overrideBrowserWindowOptions: { width: 560, height: 720 } }
     return { action: 'deny' }
@@ -289,26 +323,45 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
   }
   await sleep(4000)
 
-  // 注入 localStorage（若登录态依赖它），然后刷新页面
-  if (options.localStorage && options.localStorage.length > 0) {
+  // 归一化 effectiveStorages：优先用 storages（v2 多 origin），否则 fallback localStorage（v1）
+  const effectiveStorages: OriginStorage[] = []
+  if (Array.isArray(options.storages) && options.storages.length > 0) {
+    effectiveStorages.push(...options.storages)
+  } else if (Array.isArray(options.localStorage) && options.localStorage.length > 0) {
+    effectiveStorages.push({
+      origin: 'https://www.doubao.com',
+      localStorage: options.localStorage
+    })
+  }
+
+  // 注入当前页面 origin 的 storage，然后刷新页面
+  if (effectiveStorages.length > 0) {
     try {
       await win.webContents.executeJavaScript(
         `(() => {
-          const entries = ${JSON.stringify(options.localStorage)};
-          for (const [k, v] of entries) {
-            try { localStorage.setItem(k, v); } catch {}
+          const all = ${JSON.stringify(effectiveStorages)};
+          const main = all.find((s) => location.origin === s.origin) || all.find((s) => (s.origin || '').includes('doubao.com'));
+          if (main && main.localStorage) {
+            for (const { key, value } of main.localStorage) {
+              try { localStorage.setItem(key, value); } catch {}
+            }
+            if (main.sessionStorage) {
+              for (const { key, value } of main.sessionStorage) {
+                try { sessionStorage.setItem(key, value); } catch {}
+              }
+            }
           }
         })()`,
         true
       )
       await win.webContents.executeJavaScript('location.reload()', true)
-      await sleep(3000)
+      await sleep(3500)
     } catch {
-      // localStorage 注入失败不阻断，页面可能仅依赖 cookie
+      // storage 注入失败不阻断，页面可能仅依赖 cookie
     }
   }
 
-  let inspect: { inputFound?: boolean; inputTag?: string; hasLogin?: boolean; url?: string } = {}
+  let inspect: { inputFound?: boolean; inputTag?: string; hasLogin?: boolean; hasLoginWall?: boolean; hasUserInfo?: boolean; url?: string } = {}
   try {
     inspect = (await win.webContents.executeJavaScript('(' + inspectScript.toString() + ')()', true)) as typeof inspect
   } catch {

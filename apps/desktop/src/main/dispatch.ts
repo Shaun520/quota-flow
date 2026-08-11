@@ -7,7 +7,7 @@ import { get as httpsGet } from 'node:https'
 import { join } from 'node:path'
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
 import { runDoubaoGeneration } from './webview-engine'
-import type { ProviderCookie } from './webview-engine'
+import type { ProviderCookie, OriginStorage } from './webview-engine'
 
 export interface GenerateInput {
   supabaseUrl: string
@@ -18,6 +18,41 @@ export interface GenerateInput {
   prompt: string
   providerId: string
   durationSec: number
+}
+
+/**
+ * 兼容 v0/v1/v2 三种存储格式（与 providers.ts parseStoredCredentials 逻辑一致）
+ *  - v0 (最旧): ProviderCookie[]
+ *  - v1 (旧):   { cookies: ProviderCookie[], localStorage: {key,value}[] }
+ *  - v2 (新):   { cookies: ProviderCookie[], storages: OriginStorage[], localStorage?: legacy }
+ */
+function parseProviderCredentials(encrypted: string): {
+  cookies: ProviderCookie[]
+  storages: OriginStorage[]
+  localStorage: Array<{ key: string; value: string }>
+} {
+  const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+  const parsed = JSON.parse(plain) as unknown
+  if (Array.isArray(parsed)) {
+    return { cookies: parsed as ProviderCookie[], storages: [], localStorage: [] }
+  }
+  const obj = parsed as {
+    cookies?: ProviderCookie[]
+    storages?: OriginStorage[]
+    localStorage?: Array<{ key: string; value: string }>
+  }
+  const cookies = obj.cookies ?? []
+  const storages: OriginStorage[] = Array.isArray(obj.storages) ? obj.storages : []
+  if (obj.localStorage?.length && !storages.length) {
+    storages.push({
+      origin: 'https://www.doubao.com',
+      localStorage: obj.localStorage,
+      sessionStorage: []
+    })
+  }
+  const mainStorage = storages.find((s) => s.origin === 'https://www.doubao.com') || storages[0]
+  const localStorage = mainStorage?.localStorage ?? []
+  return { cookies, storages, localStorage }
 }
 
 export interface DispatchEvent {
@@ -189,6 +224,9 @@ export async function runGenerate(
     result = await runDoubaoGeneration({
       cookies,
       localStorage: storageEntries,
+      storages: storageEntries.length
+        ? [{ origin: 'https://www.doubao.com', localStorage: storageEntries }]
+        : [],
       prompt: input.prompt,
       durationSec: input.durationSec,
       onProgress: (stage, detail) => emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
@@ -240,20 +278,13 @@ export async function runGenerate(
         tried.add(cand.id)
         let c: ProviderCookie[] | null = null
         let s: Array<{ key: string; value: string }> = []
+        let storages: OriginStorage[] = []
         try {
           if (safeStorage.isEncryptionAvailable()) {
-            const plain = safeStorage.decryptString(Buffer.from(cand.encrypted_key, 'base64'))
-            const parsed = JSON.parse(plain) as unknown
-            if (Array.isArray(parsed)) {
-              c = parsed as ProviderCookie[]
-            } else {
-              const obj = parsed as {
-                cookies?: ProviderCookie[]
-                localStorage?: Array<{ key: string; value: string }>
-              }
-              c = obj.cookies ?? []
-              s = obj.localStorage ?? []
-            }
+            const parsed = parseProviderCredentials(cand.encrypted_key)
+            c = parsed.cookies
+            s = parsed.localStorage
+            storages = parsed.storages
           }
         } catch {
           c = null
@@ -280,6 +311,7 @@ export async function runGenerate(
         result = await runDoubaoGeneration({
           cookies: c,
           localStorage: s,
+          storages,
           prompt: input.prompt,
           durationSec: input.durationSec,
           keyId: cand.id,

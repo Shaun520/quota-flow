@@ -339,6 +339,10 @@ export function AddProviderModal({
     fingerprint: string | null
     cookieCount: number
   } | null>(null)
+  // 登录时生成的临时 keyId：让登录窗口在 persist:qf-p:<provider>:<tempId> 分区进行
+  // 新建账号时 tempId 会作为 DB 记录 id，使「登录分区 = 生成分区」
+  // 刷新已有账号时，登录后通过 migratePartition 把 cookie 迁移到目标分区
+  const [loginTempId, setLoginTempId] = useState<string | null>(null)
 
   const selected = providers.find((p) => p.providerId === providerId)
   const isApiKey = selected?.authType === 'apikey'
@@ -353,6 +357,7 @@ export function AddProviderModal({
     setPendingLogin(null)
     setExistingKeys([])
     setRefreshTarget('new')
+    setLoginTempId(null)
   }
 
   const saveEncrypted = async (
@@ -376,6 +381,12 @@ export function AddProviderModal({
           expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
           healthStatus: 'unknown'
         })
+        // 把临时分区的 cookie 迁移到目标账号分区（登录分区 = 生成分区）
+        if (loginTempId) {
+          try {
+            await window.api.providers.migratePartition(providerId, loginTempId, refreshKeyId)
+          } catch {}
+        }
         const target = existingKeys.find((k) => k.id === refreshKeyId)
         setNotice(`已刷新账号「${target?.accountName ?? '未命名账号'}」的登录态（保留原账号记录）`)
         setSaving(false)
@@ -392,6 +403,12 @@ export function AddProviderModal({
             expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
             healthStatus: 'unknown'
           })
+          // 把临时分区的 cookie 迁移到已有账号分区
+          if (loginTempId) {
+            try {
+              await window.api.providers.migratePartition(providerId, loginTempId, dup.id)
+            } catch {}
+          }
           setNotice(`已刷新账号「${dup.account_name ?? '未命名账号'}」的登录态（保留原账号记录）`)
           setSaving(false)
           return true
@@ -404,6 +421,7 @@ export function AddProviderModal({
       const seq = sameProvider.length + 1
       const name = accountName.trim() || `${selected?.name ?? providerId} 账号 ${seq}`
 
+      // 新建账号：用 loginTempId 作为 DB 记录 id，使「登录分区 = 生成分区」
       const saved = await svc.addProviderKey({
         providerId,
         ownerUserId: userId,
@@ -411,7 +429,8 @@ export function AddProviderModal({
         accountName: name,
         authType,
         expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-        accountFingerprint
+        accountFingerprint,
+        id: loginTempId || undefined
       })
 
       // 绑定即初始化今日额度行（当天已有则跳过）
@@ -454,7 +473,11 @@ export function AddProviderModal({
       return
     }
     setStatus('logging')
-    const res = await window.api.providers.login(selected.providerId)
+    // 生成临时 keyId：让登录窗口在 persist:qf-p:<provider>:<tempId> 分区进行
+    // 新建账号时 tempId 会作为 DB 记录 id，使「登录分区 = 生成分区」（候选 C）
+    const tempId = crypto.randomUUID()
+    setLoginTempId(tempId)
+    const res = await window.api.providers.login(selected.providerId, tempId)
     if (res.ok && res.encrypted) {
       setCookieCount(res.cookieCount ?? 0)
       setPendingLogin({

@@ -102,6 +102,8 @@ export interface AddProviderKeyInput {
   authType?: 'cookie' | 'apikey'
   expiresAt?: string | null
   accountFingerprint?: string | null
+  /** 自定义记录 id（UUID）：用于「登录分区 = 生成分区」方案，让 DB id 与登录时的 partition keyId 一致 */
+  id?: string
 }
 
 export class ProviderService {
@@ -134,6 +136,7 @@ export class ProviderService {
       encrypted_key: input.encryptedKey,
       auth_type: input.authType ?? 'cookie'
     }
+    if (input.id) payload.id = input.id
     if (input.teamId) payload.team_id = input.teamId
     if (input.accountName) payload.account_name = input.accountName
     if (input.expiresAt) payload.cookie_expires_at = input.expiresAt
