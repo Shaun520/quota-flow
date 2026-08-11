@@ -1,0 +1,90 @@
+# 调度台：豆包拒绝生成检测 + 生成状态进度（方案）
+
+> 记录日期：2026-08-12
+> 状态：**功能 1（拒绝检测 + 展示 + 重新生成）已实现（2026-08-12）**；功能 2（状态进度）待实现
+> 关联：[desktop-doubao-risk-control.md](desktop-doubao-risk-control.md)、[desktop-dispatch-doubao.md](desktop-dispatch-doubao.md)
+
+---
+
+## 1. 豆包拒绝生成内容 → 判定失败 + 展示 + 重新生成
+
+> **已实现（2026-08-12）**，实现位置：
+> - 引擎检测：`apps/desktop/src/main/webview-engine.ts`（`extractResultScript` 的 `blockedText` + 提交后检查 + 轮询每 tick）
+> - UI：`apps/desktop/src/renderer/src/components/Dashboard.tsx`（`job:event` failed → `genError` 展示 + `genFailed` → 按钮「重新生成」）
+> - 检测正则已对三类真实文案验证命中，正常/排队文案不误报
+
+**行为细化（2026-08-12 修订）**：
+- **不切换账号**：内容政策拒绝与账号无关（换号同 prompt 也会被拒），`dispatch.ts` 检测 `result.blocked` 后直接终止换号循环、任务失败；
+- **错误原文照搬豆包回复**：`blockedText` 提取命中文案所在的整句（≤120 字符），如 `出于肖像保护考虑，Seedance 2.0 仅支持完成分身认证的人像生成视频；`，不再加「豆包拒绝生成：」前缀；
+- **展示位置**：报错红字显示在**生成按钮左侧**（`generate-actions` 内 `flex:1` 占左位）。
+
+### 1.1 现象
+
+豆包页面在提交后可能返回**助手回复文案**（不是视频结果），代表本次生成被拒绝、额度未扣：
+
+- 侵权/违规：`生成内容中疑似包含侵权/违规内容，无法返回该内容，换个主题再试试，生成额度未扣除；`
+- 肖像：`出于肖像保护考虑，Seedance 2.0 仅支持完成分身认证的人像生成视频；`
+- 版权：`抱歉，由于版权相关限制，暂时无法创作对应的内容，换其他主题试试吧。`
+
+### 1.2 检测（引擎侧 `apps/desktop/src/main/webview-engine.ts`）
+
+1. `extractResultScript` 增加 `blockedText` 检测，正则匹配上述文案，并带兜底：
+   - `/生成内容中疑似包含侵权[^，。\n]{0,80}|无法返回该内容|换个主题/`
+   - `/出于肖像保护考虑[^，。\n]{0,80}|分身认证/`
+   - `/由于版权相关限制[^，。\n]{0,80}/`
+   - 兜底：`/侵权|违规|肖像保护|分身认证|版权相关限制/`（防文案微调）
+   - 返回 `blockedText: string | null`
+2. 两个检查点：
+   - **提交后 ~1.5s**（与风控检查同一处，这类拒绝一般立即回）；
+   - **轮询每 tick**（可能稍后才出现）。
+3. 命中 → `win.destroy()` + `fail('豆包拒绝生成：' + blockedText)` → 任务 failed、错误原文入库、不扣额度。
+
+> 注意：这是**内容政策拒绝**（直接判失败），与风控 `verify`（弹窗验证）不同，不要混入弹窗逻辑。
+
+### 1.3 展示（调度台 UI）
+
+- 错误已随 `jobs.error` 落库，`useJobs` 已映射 `errorMessage`；
+- 生成面板 `genError` 区域目前只显示 `dispatch.generate` 的**立即失败**；轮询期的异步失败需要订阅 `job:event` 的 `failed` 事件，把 `ev.message`（dispatch 已传错误原文）写入 `genError`；
+- 效果：`豆包拒绝生成：出于肖像保护考虑…` 红字显示在按钮下方。
+
+### 1.4 重新生成按钮
+
+- 状态机：`generating` / 成功 / 失败；
+- 失败后按钮文案：`生成中…/开始生成` → **`重新生成`**；
+- 点击重新调 `handleGenerate`（表单值仍在，等于重发同一条 prompt，新建 job）；
+- 若失败原因是风控/限流，按钮旁提示“账号可能被风控，建议稍后再试”，避免连续重试加重风控。
+
+## 2. 生成状态进度显示
+
+### 2.1 现状
+
+stage 已经通过 `job:event` 推到渲染层（dispatch `emit({ status, stage, message })`），但 [Dashboard.tsx](../../apps/desktop/src/renderer/src/components/Dashboard.tsx) 的 `onEvent` 只用来 `reloadJobs()`，把 stage 丢弃。**纯 UI 改造，引擎不用动。**
+
+### 2.2 设计
+
+- Dashboard 增加 `genStage` 状态，在 `onEvent` 里：
+  - `status === 'running' && stage` → `setGenStage(stage)`
+  - `success / failed` → 清空
+- 渲染层 stage → 中文文案映射：
+
+| 事件 stage | 显示 |
+|---|---|
+| `select-account` | 选择账号中… |
+| `inject-cookies` | 注入登录态… |
+| `open-page` | 打开豆包页面… |
+| `wait-tab` / `open-video-tab` | 进入视频生成… |
+| `apply-duration` | 设置时长… |
+| `apply-params` / `submit` | 发送 prompt 中… |
+| `waiting` | 视频开始生成中…（排队中） |
+| `risk-verify` | 需要验证，请在弹窗完成… |
+| `account-failed` | 当前账号失败，尝试切换… |
+
+- 展示位置：生成按钮下方一行**状态文字 + 小 spinner**，仅 `generating` 时显示；
+- 多账号切换时 `account-failed → select-account` 自然流转；成功/失败清空状态。
+
+## 3. 实施顺序建议
+
+1. **先做功能 1**（引擎检测 + failed 事件展示 + 重新生成按钮）——解决“失败但用户不知道为什么”；
+2. **再做功能 2**（状态进度）——纯 UI，低风险。
+
+预期效果：点生成 → “选择账号中 → 发送 prompt 中 → 视频开始生成中”；若被豆包拒绝 → 红字显示原文 + 按钮变「重新生成」。

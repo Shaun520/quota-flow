@@ -42,6 +42,8 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [genFailed, setGenFailed] = useState(false)
+  const activeJobIdRef = useRef<string | null>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -67,8 +69,16 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
 
   // 主进程生成事件（进度/完成）→ 刷新最近生成
   useEffect(() => {
-    return window.api.dispatch.onEvent(() => {
+    return window.api.dispatch.onEvent((ev: { jobId?: string; status?: string; message?: string }) => {
       reloadJobs()
+      // 只处理当前任务的事件，避免历史任务事件误伤
+      if (activeJobIdRef.current && ev.jobId && ev.jobId !== activeJobIdRef.current) return
+      if (ev.status === 'failed') {
+        setGenError(ev.message || '生成失败')
+        setGenFailed(true)
+      } else if (ev.status === 'success') {
+        setGenFailed(false)
+      }
     })
   }, [reloadJobs])
 
@@ -137,6 +147,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       return
     }
     setGenError(null)
+    setGenFailed(false)
     setGenerating(true)
     try {
       const auth = getAuthService()
@@ -161,14 +172,17 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         ratio,
         showWebview: getInitialShowWebview()
       })
+      activeJobIdRef.current = res.jobId ?? null
       if (!res.ok) {
         setGenError(res.error || '生成失败')
+        setGenFailed(true)
       } else {
         onGenerate?.()
         reloadJobs()
       }
     } catch (e) {
       setGenError(e instanceof Error ? e.message : String(e))
+      setGenFailed(true)
     } finally {
       setGenerating(false)
     }
@@ -349,19 +363,22 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           </div>
 
           <div className="generate-actions">
+            {genError && (
+              <div
+                className="gen-error"
+                style={{ flex: 1, minWidth: 0, color: 'var(--error)', fontSize: 12, textAlign: 'left' }}
+              >
+                {genError}
+              </div>
+            )}
             <button
               className="btn-primary"
               disabled={generating}
               onClick={() => void handleGenerate()}
             >
               <IconPlay size={14} />
-              {generating ? '生成中…' : '开始生成'}
+              {generating ? '生成中…' : genFailed ? '重新生成' : '开始生成'}
             </button>
-            {genError && (
-              <div className="gen-error" style={{ color: 'var(--error)', fontSize: 12, marginTop: 8 }}>
-                {genError}
-              </div>
-            )}
             <div className="cost-estimate">
               <IconInfo size={12} />
               {fresh ? '绑定账号后可查看预计额度消耗' : (

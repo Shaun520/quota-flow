@@ -287,6 +287,16 @@ export async function runGenerate(
         })
         if (result.ok && result.videoUrl) break
         lastError = result.error || '生成失败'
+        // 内容政策拒绝（侵权/肖像/版权）：与账号无关，不再切换账号重试
+        if (result.blocked) {
+          emit({
+            jobId: job.id,
+            status: 'running',
+            stage: 'blocked',
+            message: lastError
+          })
+          break
+        }
         if (/未登录|登录/.test(lastError)) {
           try {
             await providerSvc.updateHealth(input.userId, cand.id, 'expired')

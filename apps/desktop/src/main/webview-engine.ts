@@ -72,6 +72,8 @@ export interface DoubaoGenerateResult {
   videoUrl?: string
   posterUrl?: string | null
   error?: string
+  /** 内容政策拒绝（侵权/肖像/版权）：与账号无关，不应切换账号重试 */
+  blocked?: boolean
   attempts: Array<{ providerId: string; ok: boolean; errorMessage?: string }>
 }
 
@@ -237,10 +239,23 @@ const extractResultScript = (): unknown => {
     }
   } catch {}
   const text = document.body ? document.body.innerText : ''
+  // 豆包内容政策拒绝：侵权/肖像/版权等拒绝文案（非视频结果）→ 直接判失败
+  const blockedMatch = text.match(
+    /生成内容中疑似包含侵权[^，。\n]{0,80}|出于肖像保护考虑[^，。\n]{0,80}|由于版权相关限制[^，。\n]{0,80}|无法返回该内容|换个主题|分身认证|侵权|违规|肖像保护|版权相关限制/
+  )
+  let blockedText: string | null = null
+  if (blockedMatch) {
+    const idx = blockedMatch.index ?? 0
+    const lineStart = text.lastIndexOf('\n', idx) + 1
+    let lineEnd = text.indexOf('\n', idx)
+    if (lineEnd === -1) lineEnd = text.length
+    blockedText = text.slice(lineStart, lineEnd).trim().slice(0, 120) || blockedMatch[0].slice(0, 80)
+  }
   return {
     vids,
     mp4s: mp4s.slice(0, 8),
     hasDone: /你的视频生成好了|生成完成|生成成功|生成完毕/.test(text),
+    blockedText,
     textTail: text.slice(-240)
   }
 }
@@ -689,6 +704,11 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     attempts.push({ providerId: 'doubao', ok: false, errorMessage: error })
     return { ok: false, providerId: 'doubao', error, attempts }
   }
+  /** 内容政策拒绝：错误原文照搬豆包回复，标记 blocked（调用方不再切换账号重试） */
+  const failBlocked = (blockedText: string): DoubaoGenerateResult => {
+    const r = fail(blockedText)
+    return { ...r, blocked: true }
+  }
 
   if (options.mode && options.mode !== 'text2video' && options.mode !== 't2v') {
     return fail('暂仅支持文生视频（豆包），当前模式：' + options.mode)
@@ -921,6 +941,19 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     progress(options, 'risk-verify', { message: '豆包要求验证，请在弹出的豆包窗口中完成验证' })
   }
 
+  // 内容政策拒绝：豆包返回侵权/肖像/版权等拒绝文案 → 直接失败（不扣额度）
+  let submitCheck: { blockedText?: string | null } = {}
+  try {
+    submitCheck = (await win.webContents.executeJavaScript(
+      '(' + extractResultScript.toString() + ')()',
+      true
+    )) as typeof submitCheck
+  } catch {}
+  if (submitCheck.blockedText) {
+    win.destroy()
+    return failBlocked(submitCheck.blockedText)
+  }
+
   progress(options, 'waiting')
   const maxWaitMs = (options.maxWaitSec ?? 360) * 1000
   const started = Date.now()
@@ -930,7 +963,13 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
 
   while (Date.now() - started < maxWaitMs) {
     await sleep(5000)
-    let r: { vids?: Array<{ src: string; poster?: string }>; mp4s?: string[]; hasDone?: boolean; textTail?: string } = {}
+    let r: {
+      vids?: Array<{ src: string; poster?: string }>
+      mp4s?: string[]
+      hasDone?: boolean
+      blockedText?: string | null
+      textTail?: string
+    } = {}
     try {
       r = (await win.webContents.executeJavaScript('(' + extractResultScript.toString() + ')()', true)) as typeof r
     } catch {
@@ -964,6 +1003,11 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
         win.destroy()
         return fail('豆包风控验证未完成，请手动重试')
       }
+    }
+    // 内容政策拒绝：侵权/肖像/版权 → 直接失败
+    if (r.blockedText) {
+      win.destroy()
+      return failBlocked(r.blockedText)
     }
     const video = r.vids && r.vids[0]
     const mp4 = r.mp4s && r.mp4s[0]
