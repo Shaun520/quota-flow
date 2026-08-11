@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getProviderService } from '../auth/service'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
-import type { ProviderKey, ProviderMeta, QuotaLedgerRow } from '@quota-flow/db-supabase'
+import type {
+  ProviderKey,
+  ProviderMeta,
+  ProviderService,
+  QuotaLedgerRow
+} from '@quota-flow/db-supabase'
 
 export interface BindingView {
   keyId: string
@@ -53,6 +58,55 @@ function bindHealth(bindings: BindingView[]): ProviderAgg['health'] {
   if (bindings.some((b) => b.health === 'expired')) return 'offline'
   if (bindings.some((b) => b.health === 'expiring' || b.health === 'unknown')) return 'degraded'
   return 'online'
+}
+
+/* ================= 健康检查（自动但节流）：与数据加载解耦，避免每次切页开窗口风暴 ================= */
+
+const HEALTH_CHECK_INTERVAL_MS = 10 * 60 * 1000 // 同一账号两次自动检查至少间隔 10 分钟
+const HEALTH_CHECK_CONCURRENCY = 2 // 同时最多 2 个隐藏窗口
+
+/** keyId -> 本会话最近一次检查尝试时间戳（防并发重复 + 会话内节流） */
+const healthCheckAt = new Map<string, number>()
+
+async function runHealthChecks(
+  svc: ProviderService,
+  userId: string,
+  keys: ProviderKey[],
+  onResult: (keyId: string, status: string) => void
+): Promise<void> {
+  const now = Date.now()
+  const due = keys.filter((key) => {
+    if (key.health_status !== 'unknown') return false
+    const lastAttempt = healthCheckAt.get(key.id) ?? 0
+    if (now - lastAttempt < HEALTH_CHECK_INTERVAL_MS) return false
+    if (key.last_health_check) {
+      const last = new Date(key.last_health_check).getTime()
+      if (now - last < HEALTH_CHECK_INTERVAL_MS) return false
+    }
+    return true
+  })
+  if (due.length === 0) return
+  // 先标记再执行，防止并发 effect / 双实例重复触发同一批检查
+  for (const key of due) healthCheckAt.set(key.id, now)
+
+  let i = 0
+  const workers = Array.from(
+    { length: Math.min(HEALTH_CHECK_CONCURRENCY, due.length) },
+    async () => {
+      while (i < due.length) {
+        const key = due[i++]
+        try {
+          const res = await window.api.providers.healthCheck(key.provider_id, key.encrypted_key)
+          const newStatus = res.ok ? res.status : 'unknown'
+          await svc.updateHealth(userId, key.id, newStatus)
+          onResult(key.id, newStatus)
+        } catch {
+          // 单个检查失败忽略，不影响其他账号
+        }
+      }
+    }
+  )
+  await Promise.all(workers)
 }
 
 export interface ProvidersResult {
@@ -119,27 +173,6 @@ export function useProviders(): ProvidersResult {
           })
         }
 
-        // 对 health_status 为 unknown 的绑定自动触发健康检查（更新本地 state，不触发 reload）
-        const unknownKeys = k.filter((key) => key.health_status === 'unknown')
-        if (unknownKeys.length > 0) {
-          void Promise.all(
-            unknownKeys.map(async (key) => {
-              try {
-                const res = await window.api.providers.healthCheck(key.provider_id, key.encrypted_key)
-                const newStatus = res.ok ? res.status : 'unknown'
-                await svc.updateHealth(user.id, key.id, newStatus)
-                // 直接更新本地 state，不触发 reload
-                if (!cancelled) {
-                  setKeys((prev) =>
-                    prev.map((k) => (k.id === key.id ? { ...k, health_status: newStatus } : k))
-                  )
-                }
-              } catch {
-                // 忽略单个健康检查失败，不影响其他
-              }
-            })
-          )
-        }
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(errMsg(e))
@@ -151,6 +184,22 @@ export function useProviders(): ProvidersResult {
       cancelled = true
     }
   }, [user, reloadKey])
+
+  // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
+  useEffect(() => {
+    if (!user || keys.length === 0) return
+    let cancelled = false
+    const svc = getProviderService()
+    if (!svc) return
+    void runHealthChecks(svc, user.id, keys, (keyId, status) => {
+      if (!cancelled) {
+        setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, health_status: status } : k)))
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [user, keys])
 
   const aggs = useMemo<ProviderAgg[]>(() => {
     const map = new Map<string, BindingView[]>()
@@ -206,6 +255,8 @@ export function useProviders(): ProvidersResult {
       try {
         const res = await window.api.providers.healthCheck(providerId, key.encrypted_key)
         await svc.updateHealth(user.id, keyId, res.ok ? res.status : 'unknown')
+        // 手动测试同样计入节流窗口，避免随后自动检查重复触发
+        healthCheckAt.set(keyId, Date.now())
         reload()
       } catch (e) {
         setError(errMsg(e))

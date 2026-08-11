@@ -637,7 +637,8 @@ async function healthCheck(
       resolve({ ok: status !== 'unknown', status, error })
     }
 
-    const timeout = setTimeout(() => settle('unknown', '健康检查超时'), 20000)
+    // 8 秒未加载完成视为异常（后台检查，不阻塞列表展示；失败写回 unknown，由节流逻辑控制重查节奏）
+    const timeout = setTimeout(() => settle('unknown', '健康检查超时'), 8000)
 
     ses.webRequest.onResponseStarted((details) => {
       if (details.resourceType === 'mainFrame') {
