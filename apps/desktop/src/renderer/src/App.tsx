@@ -135,7 +135,8 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
               onDismiss={onDismissBanner}
             />
           )}
-          {tab === 'dispatch' && (
+          {/* 各 tab 常驻挂载，仅用 display 切换：保留表单/筛选等本地状态，避免切 tab 丢失 */}
+          <div className="tab-pane" style={{ display: tab === 'dispatch' ? 'block' : 'none' }}>
             <Dashboard
               fresh={fresh}
               banner={bannerVisible}
@@ -144,12 +145,16 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
               onGoHistory={() => setTab('history')}
               onGoProviders={() => setTab('providers')}
             />
-          )}
-          {tab === 'providers' && (
+          </div>
+          <div className="tab-pane" style={{ display: tab === 'providers' ? 'block' : 'none' }}>
             <Providers fresh={fresh} onBound={() => completeStep(1)} />
-          )}
-          {tab === 'history' && <History />}
-          {tab === 'team' && <Team fresh={fresh} />}
+          </div>
+          <div className="tab-pane" style={{ display: tab === 'history' ? 'block' : 'none' }}>
+            <History />
+          </div>
+          <div className="tab-pane" style={{ display: tab === 'team' ? 'block' : 'none' }}>
+            <Team fresh={fresh} />
+          </div>
         </div>
       </main>
 

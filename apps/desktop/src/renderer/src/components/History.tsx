@@ -42,6 +42,7 @@ export default function History() {
   const { loading, error, items, reload, remove, removeMany } = useJobs()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [batchDeleting, setBatchDeleting] = useState(false)
+  const [confirm, setConfirm] = useState<{ kind: 'one'; item: JobItem } | { kind: 'many'; ids: string[] } | null>(null)
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const selectAllRef = useRef<HTMLInputElement>(null)
@@ -51,15 +52,10 @@ export default function History() {
   const [provider, setProvider] = useState('')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const removeJob = async (item: JobItem): Promise<void> => {
-    if (!window.confirm('确定删除这条历史记录？该任务会从数据库中移除。')) return
-    setDeletingId(item.id)
-    try {
-      await remove(item.id)
-    } finally {
-      setDeletingId(null)
-    }
+    setConfirm({ kind: 'one', item })
   }
 
   const toggleSelect = (id: string): void => {
@@ -94,24 +90,39 @@ export default function History() {
   const batchDelete = async (): Promise<void> => {
     const ids = [...selectedIds]
     if (ids.length === 0) return
-    if (!window.confirm(`确定删除选中的 ${ids.length} 条历史记录？该操作会从数据库中移除这些任务。`)) return
-    setBatchDeleting(true)
-    try {
-      const n = await removeMany(ids)
-      if (n > 0) clearSelection()
-    } finally {
-      setBatchDeleting(false)
-    }
+    setConfirm({ kind: 'many', ids })
   }
 
   // 在系统文件管理器中打开该视频所在的文件夹（视频已本地落盘 userData/videos）
   const openFolder = async (filePath: string): Promise<void> => {
     try {
       const res = await window.api.media.showInFolder(filePath)
-      if (!res.ok) window.alert(res.error ?? '打开文件夹失败')
+      if (!res.ok) setNotice(res.error ?? '打开文件夹失败')
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : String(e))
+      setNotice(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  // 确认弹层：确认后执行删除（应用内弹层，避免 window.confirm 原生对话框导致窗口丢焦点/输入框不可编辑）
+  const doDelete = async (): Promise<void> => {
+    if (!confirm) return
+    if (confirm.kind === 'one') {
+      setDeletingId(confirm.item.id)
+      try {
+        await remove(confirm.item.id)
+      } finally {
+        setDeletingId(null)
+      }
+    } else {
+      setBatchDeleting(true)
+      try {
+        const n = await removeMany(confirm.ids)
+        if (n > 0) clearSelection()
+      } finally {
+        setBatchDeleting(false)
+      }
+    }
+    setConfirm(null)
   }
 
   // 一次性解析每行视频的可播放地址（本地路径 → http://127.0.0.1 服务）
@@ -407,6 +418,42 @@ export default function History() {
           <Pagination page={safePage} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} />
         </div>
       </div>
+
+      {notice && (
+        <div className="history-error" style={{ marginTop: 8 }}>
+          <span>{notice}</span>
+          <button className="btn-sm primary" onClick={() => setNotice(null)}>关闭</button>
+        </div>
+      )}
+
+      {confirm && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 300 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setConfirm(null) }}
+        >
+          <div className="modal-card" style={{ maxWidth: 400, padding: '18px 20px' }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>
+              {confirm.kind === 'one' ? '删除历史记录' : '批量删除历史记录'}
+            </div>
+            <p style={{ color: 'var(--fg-secondary)', margin: '0 0 16px', lineHeight: 1.7 }}>
+              {confirm.kind === 'one'
+                ? `确定删除这条历史记录？该任务会从数据库中移除。\n「${confirm.item.record.prompt}」`
+                : `确定删除选中的 ${confirm.ids.length} 条历史记录？该操作会从数据库中移除这些任务。`}
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn-sm" onClick={() => setConfirm(null)}>取消</button>
+              <button
+                className="btn-sm danger"
+                disabled={deletingId !== null || batchDeleting}
+                onClick={() => void doDelete()}
+              >
+                {deletingId !== null || batchDeleting ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
