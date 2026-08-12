@@ -29,7 +29,10 @@ const STAGE_LABEL: Record<string, string> = {
   'open-video-tab': '进入视频生成…',
   'apply-duration': '设置时长…',
   'apply-params': '发送 prompt 中…',
+  'upload-images': '上传图片中…',
+  'upload-images-result': '上传图片中…',
   submit: '发送 prompt 中…',
+  'submit-img2video': '发送 prompt 中…',
   waiting: '视频开始生成中…（排队中）',
   'risk-verify': '需要验证，请在弹窗完成…',
   'risk-resolved': '验证完成，继续生成…',
@@ -60,11 +63,13 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [audio, setAudio] = useState('on')
   const [ratio, setRatio] = useState('9:16')
   const [images, setImages] = useState<string[]>([])
+  const [imageFiles, setImageFiles] = useState<File[]>([])
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [genFailed, setGenFailed] = useState(false)
   const [genStage, setGenStage] = useState<string | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
   const activeJobIdRef = useRef<string | null>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
@@ -168,13 +173,16 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
 
   // 预览浮层：Esc 关闭
   useEffect(() => {
-    if (!preview) return
+    if (!preview && !imagePreview) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setPreview(null)
+      if (e.key === 'Escape') {
+        setPreview(null)
+        setImagePreview(null)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [preview])
+  }, [preview, imagePreview])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
     if (generating) return
@@ -186,8 +194,12 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       setGenError('请先填写 Prompt 描述')
       return
     }
-    if (mode !== 't2v') {
-      setGenError('暂仅支持文生视频（图生视频/多参考待接入）')
+    if (mode === 'multi_ref' || mode === 'first_last') {
+      setGenError('多参考/首尾帧暂未接入，请先用文生或图生视频')
+      return
+    }
+    if (mode === 'img' && imageFiles.length === 0) {
+      setGenError('图生视频需要先上传图片')
       return
     }
     if (providerOptions.length === 0) {
@@ -198,6 +210,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     setGenError(null)
     setGenFailed(false)
     setGenStage(null)
+    activeJobIdRef.current = null // 上一轮残留的任务 id 会过滤掉本轮进度事件，必须重置
     setGenerating(true)
     try {
       const auth = getAuthService()
@@ -226,10 +239,11 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         prompt: prompt.trim(),
         providerId: provider === 'auto' ? 'doubao' : provider,
         durationSec: duration,
-        mode: mode === 't2v' ? 'text2video' : mode,
+        mode: mode === 't2v' ? 'text2video' : mode === 'img' ? 'img2video' : mode,
         resolution,
         audio,
         ratio,
+        images: imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -246,7 +260,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     } finally {
       setGenerating(false)
     }
-  }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
@@ -261,11 +275,13 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     const files = Array.from(e.target.files ?? [])
     const urls = files.map((f) => URL.createObjectURL(f))
     setImages((prev) => [...prev, ...urls].slice(0, 4))
+    setImageFiles((prev) => [...prev, ...files].slice(0, 4))
     e.target.value = ''
   }, [])
 
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
+    setImageFiles((prev) => prev.filter((_, i) => i !== idx))
   }, [])
 
   return (
@@ -393,7 +409,16 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             {images.length > 0 ? (
               <div className="thumb-strip">
                 {images.map((src, idx) => (
-                  <div className="thumb-item" key={idx}>
+                  <div
+                    className="thumb-item"
+                    key={idx}
+                    title="点击预览图片"
+                    style={{ cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setImagePreview(src)
+                    }}
+                  >
                     <img src={src} alt="" />
                     <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveImage(idx) }}>×</button>
                   </div>
@@ -615,6 +640,49 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             />
             <button
               onClick={() => setPreview(null)}
+              style={{
+                position: 'absolute',
+                top: -40,
+                right: 0,
+                color: '#fff',
+                background: 'rgba(255,255,255,0.16)',
+                border: 'none',
+                borderRadius: 6,
+                padding: '4px 10px',
+                cursor: 'pointer',
+                fontSize: 13
+              }}
+            >
+              ✕ 关闭
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 上传图片预览浮层 */}
+      {imagePreview && (
+        <div
+          className="video-preview-overlay"
+          onClick={() => setImagePreview(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.78)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24
+          }}
+        >
+          <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+            <img
+              src={imagePreview}
+              alt=""
+              style={{ maxWidth: 'min(92vw, 860px)', maxHeight: '82vh', display: 'block', borderRadius: 10, objectFit: 'contain' }}
+            />
+            <button
+              onClick={() => setImagePreview(null)}
               style={{
                 position: 'absolute',
                 top: -40,

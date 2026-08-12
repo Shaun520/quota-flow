@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export type ProviderId = 'yuanbao' | 'qwenwan'
 
@@ -53,6 +53,8 @@ export interface GenerateRequest {
   resolution?: string
   audio?: string
   ratio?: string
+  /** 本地图片路径（图生视频） */
+  images?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -95,6 +97,9 @@ export interface DesktopApi {
   dispatch: {
     generate: (input: GenerateRequest) => Promise<{ ok: boolean; jobId?: string; error?: string }>
     onEvent: (callback: (event: JobEvent) => void) => () => void
+  }
+  files: {
+    getPath: (file: File) => string
   }
   media: {
     getUrl: (name: string) => Promise<string>
@@ -169,6 +174,9 @@ const api: DesktopApi = {
         ipcRenderer.removeListener('job:event', listener)
       }
     }
+  },
+  files: {
+    getPath: (file) => webUtils.getPathForFile(file)
   },
   media: {
     getUrl: (name) => ipcRenderer.invoke('media:get-url', name) as Promise<string>,

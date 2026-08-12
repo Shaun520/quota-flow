@@ -22,6 +22,8 @@ export interface GenerateInput {
   resolution?: string
   audio?: string
   ratio?: string
+  /** 本地图片路径（图生视频，仅允许常见图片格式） */
+  images?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -180,6 +182,9 @@ export async function runGenerate(
 
   // 1) 选号 + 解析 cookie：默认账号优先 → 剩余额度预检 → 失败自动换号（有界）
   const cost = doubaoCost(input.durationSec)
+  const images = (input.images ?? [])
+    .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
+    .slice(0, 10)
   const keys = await providerSvc.listProviderKeys(input.userId)
   const doubaoKeys = keys.filter((k) => k.provider_id === 'doubao' && k.enabled !== false)
 
@@ -280,6 +285,7 @@ export async function runGenerate(
           resolution: input.resolution,
           audio: input.audio,
           ratio: input.ratio,
+          images,
           keyId: cand.id,
           showWebview: input.showWebview,
           onProgress: (stage, detail) =>

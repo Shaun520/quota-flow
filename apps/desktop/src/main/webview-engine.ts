@@ -7,6 +7,7 @@
 //   注意：隐藏窗口下豆包发送事件可能不触发（Enter/点击在无焦点页面失效），测试时可开启显示。
 
 import { BrowserWindow, session } from 'electron'
+import { readFileSync } from 'node:fs'
 
 declare global {
   interface Window {
@@ -47,7 +48,7 @@ export interface DoubaoGenerateOptions {
   /** 新 v2 格式：多 origin storage（候选 A）。存在时优先于 localStorage */
   storages?: OriginStorage[]
   prompt: string
-  /** 生成模式：text2video（当前仅支持） / img2video 等 */
+  /** 生成模式：text2video / img2video（当前支持） */
   mode?: string
   /** 清晰度：豆包规格无清晰度维度，仅透传记录 */
   resolution?: string
@@ -55,6 +56,8 @@ export interface DoubaoGenerateOptions {
   audio?: string
   /** 画面比例：9:16 / 16:9 / 1:1（尽力注入） */
   ratio?: string
+  /** 本地图片路径（图生视频，主进程读取后以 data URL 注入页面上传） */
+  images?: string[]
   /** 账号 id：用于隔离 WebView 分区（persist:qf-p:doubao:<keyId>），防多账号串号；登录窗口也共用该分区（候选 C） */
   keyId?: string
   /** 5 / 10 / 15，默认 5（1 点/次） */
@@ -78,6 +81,24 @@ export interface DoubaoGenerateResult {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** 本地图片 → data URL（供页面注入上传）；超 10MB 或读取失败返回 null */
+function fileToDataUrl(file: string): string | null {
+  try {
+    const mime = /\.png$/i.test(file)
+      ? 'image/png'
+      : /\.gif$/i.test(file)
+        ? 'image/gif'
+        : /\.webp$/i.test(file)
+          ? 'image/webp'
+          : 'image/jpeg'
+    const buf = readFileSync(file)
+    if (buf.length > 10 * 1024 * 1024) return null
+    return `data:${mime};base64,${buf.toString('base64')}`
+  } catch {
+    return null
+  }
+}
 
 /* ---------------- 页面脚本（executeJavaScript 字符串） ---------------- */
 
@@ -131,6 +152,141 @@ const openVideoTabScript = (): unknown => {
   if (!hit) return { ok: false, reason: '未找到「视频生成」入口' }
   ;(hit as HTMLElement).click()
   return { ok: true, text: textOf(hit).slice(0, 20) }
+}
+
+// 上传图片（图生视频）：找到上传 input，注入 File 并触发 change，等待上传完成
+const uploadImagesScript = (dataUrls: string[]): unknown => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const findInput = (): HTMLInputElement | null => {
+    const inputs = [...document.querySelectorAll<HTMLInputElement>('input[type="file"]')]
+    return inputs.find((el) => el.offsetParent !== null) || inputs[0] || null
+  }
+  return (async () => {
+    const results: Array<{ ok: boolean; reason?: string }> = []
+    for (let i = 0; i < dataUrls.length; i++) {
+      const input = findInput()
+      if (!input) {
+        results.push({ ok: false, reason: '未找到上传输入框' })
+        continue
+      }
+      let file: File | null = null
+      try {
+        const resp = await fetch(dataUrls[i])
+        const blob = await resp.blob()
+        const ext = blob.type.includes('png')
+          ? 'png'
+          : blob.type.includes('gif')
+            ? 'gif'
+            : blob.type.includes('webp')
+              ? 'webp'
+              : 'jpg'
+        file = new File([blob], 'image-' + i + '.' + ext, { type: blob.type || 'image/jpeg' })
+      } catch {}
+      if (!file) {
+        results.push({ ok: false, reason: '图片数据解析失败' })
+        continue
+      }
+      const dt = new DataTransfer()
+      dt.items.add(file)
+      input.files = dt.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      // 等待上传完成：等「上传中/压缩中」文案消失后再多等 2s（粗略判定）
+      let done = false
+      for (let w = 0; w < 40; w++) {
+        await sleep(750)
+        const text = document.body ? document.body.innerText : ''
+        const pending = /上传中|正在上传|压缩中|处理中/.test(text)
+        if (w > 12 && !pending) {
+          await sleep(2000)
+          done = true
+          break
+        }
+      }
+      results.push({ ok: done })
+    }
+    return { ok: results.length > 0 && results.every((r) => r.ok), results }
+  })()
+}
+
+// 图生视频：不清空编辑器（保留已上传的图片 chip），光标移末尾插入 prompt 并回车提交
+const insertPromptAndSubmitScript = (prompt: string): unknown => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const norm = (s: string): string => (s || '').trim()
+  const findEditor = (): HTMLElement | null => {
+    const sels = ['[class*="ProseMirror"]', '[class*="tiptap"]', '[contenteditable="true"]', '[contenteditable="plaintext-only"]', '[role="textbox"]']
+    for (const s of sels) {
+      const els = [...document.querySelectorAll<HTMLElement>(s)].filter((el) => el.offsetParent !== null)
+      if (els.length) return els[0]
+    }
+    return null
+  }
+  // DOM 定位 ProseMirror 视图（不遍历 window 全局键，避免触发页面 getter 导致失响应）
+  const findView = (): { state?: unknown; dispatch?: (tr: unknown) => void } | null => {
+    try {
+      const pm = document.querySelector<HTMLElement>('[class*="ProseMirror"], [class*="tiptap"], [contenteditable="true"]')
+      const desc = pm && (pm as unknown as { pmViewDesc?: { view?: unknown } }).pmViewDesc
+      if (desc && desc.view) {
+        return desc.view as { state?: unknown; dispatch?: (tr: unknown) => void }
+      }
+    } catch {}
+    return null
+  }
+  return (async () => {
+    const editor = findEditor()
+    if (!editor) return { ok: false, reason: '未找到输入框' }
+    // 清理编辑器状态里的时长 chip（文本恰为 10s/5s/15s 的节点），保留已上传的图片
+    try {
+      const view = findView()
+      if (view && view.state && view.dispatch) {
+        const state = view.state as {
+          doc: { descendants: (fn: (node: Record<string, unknown>, pos: number) => void) => void }
+          tr: { delete: (from: number, to: number) => void; docChanged: boolean }
+        }
+        const tr = state.tr
+        state.doc.descendants((rawNode, pos) => {
+          const node = rawNode as { text?: string; attrs?: Record<string, string>; nodeSize?: number }
+          const label = String(node.text || (node.attrs && (node.attrs.label || node.attrs.text)) || '').trim()
+          if (/^\d{1,2}s$/.test(label) || (/自动/.test(label) && /\d{1,2}s/.test(label))) {
+            tr.delete(pos, pos + (node.nodeSize ?? 1))
+          }
+        })
+        if (tr.docChanged) view.dispatch(tr)
+        await sleep(300)
+      }
+    } catch {}
+    // DOM 兜底：删除编辑器内文本恰为时长格式的节点
+    try {
+      for (const el of [...editor.querySelectorAll('*')]) {
+        const t = norm(el.textContent || '')
+        if (/^\d{1,2}s$/.test(t)) el.remove()
+      }
+    } catch {}
+    editor.focus()
+    try {
+      const sel = window.getSelection()
+      if (sel) {
+        const range = document.createRange()
+        range.selectNodeContents(editor)
+        range.collapse(false)
+        sel.removeAllRanges()
+        sel.addRange(range)
+      }
+    } catch {}
+    try {
+      document.execCommand('insertText', false, prompt)
+    } catch {}
+    editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: prompt }))
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: prompt }))
+    await sleep(800)
+    editor.focus()
+    const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
+    editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts))
+    editor.dispatchEvent(new KeyboardEvent('keypress', enterOpts))
+    editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }))
+    await sleep(1500)
+    return { ok: true }
+  })()
 }
 
 // 填入 prompt：先清空编辑器（ProseMirror 可能含时长 chip），再插入干净文本，校验后回车提交
@@ -710,8 +866,8 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return { ...r, blocked: true }
   }
 
-  if (options.mode && options.mode !== 'text2video' && options.mode !== 't2v') {
-    return fail('暂仅支持文生视频（豆包），当前模式：' + options.mode)
+  if (options.mode && options.mode !== 'text2video' && options.mode !== 't2v' && options.mode !== 'img2video') {
+    return fail('暂仅支持文生视频/图生视频（豆包），当前模式：' + options.mode)
   }
 
   progress(options, 'inject-cookies')
@@ -913,13 +1069,55 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
 
   progress(options, 'submit')
   let fillResult: { ok?: boolean; reason?: string } = {}
-  try {
-    fillResult = (await win.webContents.executeJavaScript(
-      '(' + fillAndSubmitScript.toString() + ')(' + JSON.stringify(submitPrompt) + ')',
-      true
-    )) as typeof fillResult
-  } catch (e) {
-    fillResult = { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  const isImg2Video = options.mode === 'img2video'
+  if (isImg2Video && (!options.images || options.images.length === 0)) {
+    win.destroy()
+    return fail('图生视频需要上传图片')
+  }
+  if (isImg2Video) {
+    // 图生视频：先上传图片，再在保留图片的编辑器里插入 prompt 并提交
+    const dataUrls: string[] = []
+    for (const p of options.images ?? []) {
+      const d = fileToDataUrl(p)
+      if (d) dataUrls.push(d)
+    }
+    if (dataUrls.length === 0) {
+      win.destroy()
+      return fail('图片读取失败（路径无效或超过 10MB）')
+    }
+    progress(options, 'upload-images', { count: dataUrls.length })
+    let uploadOk = false
+    let uploadDetail: unknown = null
+    try {
+      uploadDetail = (await win.webContents.executeJavaScript(
+        '(' + uploadImagesScript.toString() + ')(' + JSON.stringify(dataUrls) + ')',
+        true
+      )) as unknown
+      uploadOk = !!((uploadDetail as { ok?: boolean })?.ok)
+    } catch {}
+    progress(options, 'upload-images-result', uploadDetail)
+    if (!uploadOk) {
+      win.destroy()
+      return fail('图片上传失败（豆包界面未确认图片上传完成），请确认图片格式后重试')
+    }
+    progress(options, 'submit-img2video')
+    try {
+      fillResult = (await win.webContents.executeJavaScript(
+        '(' + insertPromptAndSubmitScript.toString() + ')(' + JSON.stringify(submitPrompt) + ')',
+        true
+      )) as typeof fillResult
+    } catch (e) {
+      fillResult = { ok: false, reason: e instanceof Error ? e.message : String(e) }
+    }
+  } else {
+    try {
+      fillResult = (await win.webContents.executeJavaScript(
+        '(' + fillAndSubmitScript.toString() + ')(' + JSON.stringify(submitPrompt) + ')',
+        true
+      )) as typeof fillResult
+    } catch (e) {
+      fillResult = { ok: false, reason: e instanceof Error ? e.message : String(e) }
+    }
   }
   if (!fillResult.ok) {
     win.destroy()
