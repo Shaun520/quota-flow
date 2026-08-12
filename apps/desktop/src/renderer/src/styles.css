@@ -343,6 +343,34 @@ body {
   display: none;
 }
 
+/* 全局轻提示 toast（如：团队 Tab 暂未实现） */
+.app-toast {
+  position: fixed;
+  bottom: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  background: var(--fg-primary);
+  color: var(--bg-base);
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-size: 0.92em;
+  line-height: 1;
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  animation: app-toast-in 0.2s ease;
+}
+@keyframes app-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 /* 用户区域 + 下拉菜单 */
 .top-nav .user-area {
   margin-left: auto;
@@ -2028,6 +2056,29 @@ textarea::-webkit-scrollbar {
   margin-left: auto;
   color: var(--accent);
   flex-shrink: 0;
+}
+
+/* 新增厂商下拉：仅开放豆包，其余厂商置灰不可选（纯 CSS，无 JS 改动）
+   豆包以官方 logo 标志色 #1E37FC 识别（IconDoubao），order:-1 保证无论列表顺序如何都排第一 */
+.provider-select-list {
+  display: flex;
+  flex-direction: column;
+}
+.provider-select-item:has(path[fill="#1E37FC"]) {
+  order: -1;
+}
+.provider-select-item:not(:has(path[fill="#1E37FC"])) {
+  opacity: 0.45;
+  filter: grayscale(1);
+  color: var(--fg-muted);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.provider-select-item:not(:has(path[fill="#1E37FC"])).active {
+  background: transparent;
+}
+.provider-select-item:not(:has(path[fill="#1E37FC"])) .provider-select-check {
+  display: none;
 }
 
 /* ===== 自绘下拉（Select.tsx）：替代原生 select，规避 Windows 白色系统弹层 ===== */

@@ -73,10 +73,18 @@ function MainApp({
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
-    return (['dispatch', 'providers', 'history', 'team'] as TabId[]).includes(t as TabId)
+    return (['dispatch', 'providers', 'history'] as TabId[]).includes(t as TabId)
       ? (t as TabId)
       : 'dispatch'
   })
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<number | undefined>(undefined)
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2200)
+  }, [])
 
   useEffect(() => {
     applyTheme(getInitialTheme())
@@ -100,6 +108,10 @@ function MainApp({
               key={t.id}
               className={'nav-tab' + (tab === t.id ? ' active' : '')}
               onClick={() => {
+                if (t.id === 'team') {
+                  showToast('系统暂未实现')
+                  return
+                }
                 setTab(t.id)
                 location.hash = 'tab=' + t.id
               }}
@@ -192,6 +204,7 @@ function MainApp({
           <div className="status-item">Quota-Flow v0.9.0</div>
         </div>
       </footer>
+      {toast && <div className="app-toast">{toast}</div>}
     </div>
   )
 }
