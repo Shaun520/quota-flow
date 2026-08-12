@@ -9,6 +9,20 @@ import type { TeamContext } from '@quota-flow/db-supabase'
 
 export type Theme = 'light' | 'dark'
 export type FontSize = '12' | '13' | '14' | '15' | '16'
+export type HealthFreq = '每 4 小时' | '每 8 小时' | '每 12 小时'
+
+const HEALTH_FREQ_MS: Record<HealthFreq, number> = {
+  '每 4 小时': 4 * 60 * 60 * 1000,
+  '每 8 小时': 8 * 60 * 60 * 1000,
+  '每 12 小时': 12 * 60 * 60 * 1000
+}
+
+/** 健康检查节流间隔（毫秒）；供 useProviders 的自动检查复用，设置变更即时生效 */
+export function getHealthCheckIntervalMs(): number {
+  const stored = localStorage.getItem('qf-health-freq')
+  const freq = stored === '每 8 小时' || stored === '每 12 小时' ? stored : '每 4 小时'
+  return HEALTH_FREQ_MS[freq]
+}
 
 export function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme)
@@ -39,6 +53,15 @@ export function applyShowWebview(show: boolean): void {
 
 export function getInitialShowWebview(): boolean {
   return localStorage.getItem('qf-show-webview') === '1'
+}
+
+export function getInitialHealthFreq(): HealthFreq {
+  const stored = localStorage.getItem('qf-health-freq') as HealthFreq | null
+  return stored === '每 8 小时' || stored === '每 12 小时' ? stored : '每 4 小时'
+}
+
+export function applyHealthFreq(freq: HealthFreq): void {
+  localStorage.setItem('qf-health-freq', freq)
 }
 
 interface ModalProps {
@@ -159,7 +182,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [strategy, setStrategy] = useState('可用优先')
   const [runMode, setRunMode] = useState('官方托管（推荐）')
   const [cookieRenew, setCookieRenew] = useState('开启')
-  const [healthFreq, setHealthFreq] = useState('每 4 小时')
+  const [healthFreq, setHealthFreq] = useState<HealthFreq>(getInitialHealthFreq)
+
+  const handleHealthFreqChange = (value: string) => {
+    const freq = value as HealthFreq
+    setHealthFreq(freq)
+    applyHealthFreq(freq)
+  }
 
   const handleThemeChange = (value: Theme) => {
     setTheme(value)
@@ -217,7 +246,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         />
       </div>
       <div className="form-group">
-        <label>调试：显示豆包窗口</label>
+        <label>调试：显示厂商窗口</label>
         <Select
           value={showWebview ? '1' : '0'}
           onChange={(v) => handleShowWebviewChange(v === '1')}
@@ -226,9 +255,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             { value: '1', label: '显示（测试用）' }
           ]}
         />
-        <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--fg-muted)' }}>
-          生成时显示豆包 WebView 窗口，便于观察生成过程或处理验证码；默认隐藏。
-        </p>
       </div>
       <div className="form-group">
         <label>调度策略</label>
@@ -273,7 +299,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <label>健康检查频率</label>
         <Select
           value={healthFreq}
-          onChange={setHealthFreq}
+          onChange={(v) => handleHealthFreqChange(v)}
           options={[
             { value: '每 4 小时', label: '每 4 小时' },
             { value: '每 8 小时', label: '每 8 小时' },
@@ -404,7 +430,6 @@ export function AddProviderModal({
 
   const selected = providers.find((p) => p.providerId === providerId)
   const isApiKey = selected?.authType === 'apikey'
-  const loginOk = status === 'login-ok'
 
   const reset = () => {
     setStatus('idle')
@@ -437,7 +462,8 @@ export function AddProviderModal({
         await svc.refreshProviderKey(userId, refreshKeyId, {
           encryptedKey: encrypted,
           expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-          healthStatus: 'unknown'
+          // 登录刚成功即视为健康（登录会话本身是最强有效性证据），无需等后台健康检查
+          healthStatus: 'healthy'
         })
         // 把临时分区的 cookie 迁移到目标账号分区（登录分区 = 生成分区）
         if (loginTempId) {
@@ -459,7 +485,7 @@ export function AddProviderModal({
           await svc.refreshProviderKey(userId, dup.id, {
             encryptedKey: encrypted,
             expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-            healthStatus: 'unknown'
+            healthStatus: 'healthy'
           })
           // 把临时分区的 cookie 迁移到已有账号分区
           if (loginTempId) {
@@ -488,10 +514,11 @@ export function AddProviderModal({
         authType,
         expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
         accountFingerprint,
-        id: loginTempId || undefined
+        id: loginTempId || undefined,
+        healthStatus: 'healthy'
       })
 
-      // 绑定即初始化今日额度行（当天已有则跳过）
+      // 绑定即初始化今日额度行（当天已有则跳过；必须带 keyId，与列表检测口径一致，避免触发二次刷新）
       if (saved) {
         const meta = await svc.listProviders()
         const p = meta.find((m) => m.id === providerId)
@@ -499,7 +526,8 @@ export function AddProviderModal({
           userId,
           providerId,
           unitName: p?.unit_name ?? '',
-          dailyTotal: Number(p?.default_daily_quota ?? 0)
+          dailyTotal: Number(p?.default_daily_quota ?? 0),
+          keyId: saved.id
         })
       }
     } catch (e) {
@@ -555,7 +583,7 @@ export function AddProviderModal({
         } catch {}
       }
 
-      // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；指纹能识别且无重复 → 直接新增
+      // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；指纹能识别且无重复 → 暂存待「完成」时保存
       if (res.accountFingerprint && svc) {
         try {
           const dup = await svc.findDuplicateFingerprint(userId, selected.providerId, res.accountFingerprint)
@@ -563,21 +591,15 @@ export function AddProviderModal({
             await svc.refreshProviderKey(userId, dup.id, {
               encryptedKey: res.encrypted,
               expiresAt: res.expiresAt ? new Date(res.expiresAt).toISOString() : null,
-              healthStatus: 'unknown'
+              healthStatus: 'healthy'
             })
             setNotice(`已刷新账号「${dup.account_name ?? '未命名账号'}」的登录态（保留原账号记录）`)
             setStatus('login-ok')
             return
           }
         } catch {}
-        const saved = await saveEncrypted(
-          res.encrypted,
-          'cookie',
-          res.expiresAt ?? null,
-          res.accountFingerprint ?? null,
-          null
-        )
-        if (saved) setStatus('login-ok')
+        // 无重复：等用户点「完成」保存，此时已确认账号备注
+        setStatus('login-ok')
         return
       }
 
@@ -587,14 +609,8 @@ export function AddProviderModal({
         setRefreshTarget('new')
         setStatus('pick-account')
       } else {
-        const saved = await saveEncrypted(
-          res.encrypted,
-          'cookie',
-          res.expiresAt ?? null,
-          res.accountFingerprint ?? null,
-          null
-        )
-        if (saved) setStatus('login-ok')
+        // 首次绑定：等用户点「完成」保存（登录后仍可补充账号备注）
+        setStatus('login-ok')
       }
     } else if (res.canceled) {
       setStatus('idle')
@@ -605,8 +621,14 @@ export function AddProviderModal({
     }
   }
 
-  const confirmSave = async (): Promise<void> => {
-    if (!pendingLogin) return
+  /** 「完成」时统一保存：登录成功只暂存 pendingLogin，名字确认后才落库 */
+  const handleFinish = async (): Promise<void> => {
+    if (saving) return
+    if (isApiKey || !pendingLogin) {
+      onClose()
+      onDone?.()
+      return
+    }
     const saved = await saveEncrypted(
       pendingLogin.encrypted,
       'cookie',
@@ -614,12 +636,10 @@ export function AddProviderModal({
       pendingLogin.fingerprint,
       refreshTarget === 'new' ? null : refreshTarget
     )
-    if (saved) setStatus('login-ok')
-  }
-
-  const handleFinish = () => {
-    onClose()
-    onDone?.()
+    if (saved) {
+      onClose()
+      onDone?.()
+    }
   }
 
   return (
@@ -633,8 +653,8 @@ export function AddProviderModal({
           </button>
           <button
             className="btn-sm primary"
-            onClick={handleFinish}
-            disabled={saving || (!loginOk && status !== 'apikey-ok')}
+            onClick={() => void handleFinish()}
+            disabled={saving || (status !== 'login-ok' && status !== 'apikey-ok' && status !== 'pick-account')}
           >
             {saving ? '保存中…' : '完成'}
           </button>
@@ -750,8 +770,8 @@ export function AddProviderModal({
                     />
                   )}
                 </div>
-                <button className="btn-sm primary" onClick={() => void confirmSave()} disabled={saving}>
-                  {saving ? '保存中…' : '确认保存'}
+                <button className="btn-sm primary" onClick={() => void handleFinish()} disabled={saving}>
+                  {saving ? '保存中…' : '保存并完成'}
                 </button>
               </div>
             )}

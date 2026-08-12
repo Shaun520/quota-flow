@@ -3,6 +3,7 @@ import { getProviderService } from '../auth/service'
 import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
+import { getHealthCheckIntervalMs } from '../components/Modals'
 import type {
   ProviderKey,
   ProviderMeta,
@@ -68,7 +69,6 @@ function bindHealth(bindings: BindingView[]): ProviderAgg['health'] {
 
 /* ================= 健康检查（自动但节流）：与数据加载解耦，避免每次切页开窗口风暴 ================= */
 
-const HEALTH_CHECK_INTERVAL_MS = 10 * 60 * 1000 // 同一账号两次自动检查至少间隔 10 分钟
 const HEALTH_CHECK_CONCURRENCY = 2 // 同时最多 2 个隐藏窗口
 
 /** keyId -> 本会话最近一次检查尝试时间戳（防并发重复 + 会话内节流） */
@@ -81,13 +81,15 @@ async function runHealthChecks(
   onResult: (keyId: string, status: string) => void
 ): Promise<void> {
   const now = Date.now()
+  // 检查频率来自设置（默认每 4 小时），每次运行读取，设置变更即时生效
+  // 全部账号都进入周期性检查（不限 unknown）：healthy 的 cookie 也会过期、expired 也可能恢复
+  const intervalMs = getHealthCheckIntervalMs()
   const due = keys.filter((key) => {
-    if (key.health_status !== 'unknown') return false
     const lastAttempt = healthCheckAt.get(key.id) ?? 0
-    if (now - lastAttempt < HEALTH_CHECK_INTERVAL_MS) return false
+    if (now - lastAttempt < intervalMs) return false
     if (key.last_health_check) {
       const last = new Date(key.last_health_check).getTime()
-      if (now - last < HEALTH_CHECK_INTERVAL_MS) return false
+      if (now - last < intervalMs) return false
     }
     return true
   })
@@ -103,7 +105,7 @@ async function runHealthChecks(
         const key = due[i++]
         try {
           const res = await window.api.providers.healthCheck(key.provider_id, key.encrypted_key)
-          const newStatus = res.ok ? res.status : 'unknown'
+          const newStatus = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, now)
           await svc.updateHealth(userId, key.id, newStatus)
           onResult(key.id, newStatus)
         } catch {
@@ -113,6 +115,16 @@ async function runHealthChecks(
     }
   )
   await Promise.all(workers)
+}
+
+/** Cookie 距过期不足 3 天视为「将过期」；无过期时间的厂商无法判断，保持检查结果不变 */
+const EXPIRING_SOON_MS = 3 * 24 * 60 * 60 * 1000
+
+function resolveHealthAfterCheck(checked: string, expiresAt: string | null, now: number): string {
+  if (checked !== 'healthy' || !expiresAt) return checked
+  const expiresMs = new Date(expiresAt).getTime()
+  if (!Number.isFinite(expiresMs)) return checked
+  return expiresMs - now < EXPIRING_SOON_MS ? 'expiring' : 'healthy'
 }
 
 export interface ProvidersResult {
@@ -149,7 +161,9 @@ export function useProviders(): ProvidersResult {
       setLoading(false)
       return
     }
-    setLoading(true)
+    // 仅首次加载显示 loading；reload 时保留旧数据，避免保存/操作后列表闪空白等待
+    const isFirstLoad = providers.length === 0 && keys.length === 0
+    if (isFirstLoad) setLoading(true)
     setError(null)
     Promise.all([svc.listProviders(), svc.listProviderKeys(user.id), svc.listLedger(user.id)])
       .then(([p, k, l]) => {
@@ -279,7 +293,7 @@ export function useProviders(): ProvidersResult {
       if (!key) return
       try {
         const res = await window.api.providers.healthCheck(providerId, key.encrypted_key)
-        const status = res.ok ? res.status : 'unknown'
+        const status = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, Date.now())
         await svc.updateHealth(user.id, keyId, status)
         // 手动测试同样计入节流窗口，避免随后自动检查重复触发
         healthCheckAt.set(keyId, Date.now())

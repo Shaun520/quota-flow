@@ -104,6 +104,8 @@ export interface AddProviderKeyInput {
   accountFingerprint?: string | null
   /** 自定义记录 id（UUID）：用于「登录分区 = 生成分区」方案，让 DB id 与登录时的 partition keyId 一致 */
   id?: string
+  /** 初始健康状态；默认 'unknown' */
+  healthStatus?: string
 }
 
 export class ProviderService {
@@ -141,6 +143,9 @@ export class ProviderService {
     if (input.accountName) payload.account_name = input.accountName
     if (input.expiresAt) payload.cookie_expires_at = input.expiresAt
     if (input.accountFingerprint) payload.account_fingerprint = input.accountFingerprint
+    payload.health_status = input.healthStatus ?? 'unknown'
+    // 登录刚成功即视为已检查（标记 healthy 时），避免页面加载后立刻重复开窗复查
+    payload.last_health_check = new Date().toISOString()
 
     const { data, error } = await this.client
       .from('provider_keys')
