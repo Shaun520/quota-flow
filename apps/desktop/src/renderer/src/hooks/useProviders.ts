@@ -16,6 +16,7 @@ export interface BindingView {
   health: 'healthy' | 'expiring' | 'expired' | 'unknown'
   expiresAt: number | null
   isDefault: boolean
+  enabled: boolean
   dailyTotal: number
   used: number
   remaining: number
@@ -30,6 +31,7 @@ export interface ProviderAgg {
   unitName: string
   defaultDailyQuota: number
   boundCount: number
+  enabledCount: number
   health: 'online' | 'degraded' | 'offline' | 'unbound'
   healthLabel: string
   bindings: BindingView[]
@@ -55,8 +57,11 @@ function todayShanghai(): string {
 
 function bindHealth(bindings: BindingView[]): ProviderAgg['health'] {
   if (bindings.length === 0) return 'unbound'
-  if (bindings.some((b) => b.health === 'expired')) return 'offline'
-  if (bindings.some((b) => b.health === 'expiring' || b.health === 'unknown')) return 'degraded'
+  const active = bindings.filter((b) => b.enabled)
+  // 全部停用的厂商不参与调度，状态按离线展示（避免误以为仍可被调度）
+  if (active.length === 0) return 'offline'
+  if (active.some((b) => b.health === 'expired')) return 'offline'
+  if (active.some((b) => b.health === 'expiring' || b.health === 'unknown')) return 'degraded'
   return 'online'
 }
 
@@ -119,6 +124,7 @@ export interface ProvidersResult {
   testHealth: (providerId: string, keyId: string) => Promise<void>
   rename: (keyId: string, name: string) => Promise<void>
   setDefault: (providerId: string, keyId: string) => Promise<void>
+  setEnabled: (keyId: string, enabled: boolean) => Promise<void>
   unbind: (keyId: string) => Promise<void>
 }
 
@@ -221,6 +227,7 @@ export function useProviders(): ProvidersResult {
         health: (healthOverrides[k.id] ?? k.health_status) as BindingView['health'],
         expiresAt: k.cookie_expires_at ? new Date(k.cookie_expires_at).getTime() : null,
         isDefault: !!k.is_default,
+        enabled: k.enabled !== false,
         dailyTotal: defaultTotal,
         used,
         remaining: Math.max(defaultTotal - used, 0),
@@ -240,6 +247,7 @@ export function useProviders(): ProvidersResult {
         unitName: p.unit_name ?? '',
         defaultDailyQuota: Number(p.default_daily_quota ?? 0),
         boundCount: bindings.length,
+        enabledCount: bindings.filter((b) => b.enabled).length,
         health,
         healthLabel: HEALTH_LABEL[health],
         bindings
@@ -258,15 +266,17 @@ export function useProviders(): ProvidersResult {
       if (!key) return
       try {
         const res = await window.api.providers.healthCheck(providerId, key.encrypted_key)
-        await svc.updateHealth(user.id, keyId, res.ok ? res.status : 'unknown')
+        const status = res.ok ? res.status : 'unknown'
+        await svc.updateHealth(user.id, keyId, status)
         // 手动测试同样计入节流窗口，避免随后自动检查重复触发
         healthCheckAt.set(keyId, Date.now())
-        reload()
+        // 会话内即时覆盖展示，无需全量重拉
+        setHealthOverrides((prev) => ({ ...prev, [keyId]: status }))
       } catch (e) {
         setError(errMsg(e))
       }
     },
-    [user, keys, reload]
+    [user, keys]
   )
 
   const rename = useCallback(
@@ -274,13 +284,14 @@ export function useProviders(): ProvidersResult {
       const svc = getProviderService()
       if (!svc || !user) return
       try {
-        await svc.updateAccountName(user.id, keyId, name.trim())
-        reload()
+        const trimmed = name.trim()
+        await svc.updateAccountName(user.id, keyId, trimmed)
+        setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, account_name: trimmed } : k)))
       } catch (e) {
         setError(errMsg(e))
       }
     },
-    [user, reload]
+    [user]
   )
 
   const setDefault = useCallback(
@@ -289,12 +300,28 @@ export function useProviders(): ProvidersResult {
       if (!svc || !user) return
       try {
         await svc.setDefaultKey(user.id, providerId, keyId)
-        reload()
+        setKeys((prev) =>
+          prev.map((k) => (k.provider_id === providerId ? { ...k, is_default: k.id === keyId } : k))
+        )
       } catch (e) {
         setError(errMsg(e))
       }
     },
-    [user, reload]
+    [user]
+  )
+
+  const setEnabled = useCallback(
+    async (keyId: string, enabled: boolean) => {
+      const svc = getProviderService()
+      if (!svc || !user) return
+      try {
+        await svc.setEnabled(user.id, keyId, enabled)
+        setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, enabled } : k)))
+      } catch (e) {
+        setError(errMsg(e))
+      }
+    },
+    [user]
   )
 
   const unbind = useCallback(
@@ -303,13 +330,13 @@ export function useProviders(): ProvidersResult {
       if (!svc || !user) return
       try {
         await svc.removeProviderKey(user.id, keyId)
-        reload()
+        setKeys((prev) => prev.filter((k) => k.id !== keyId))
       } catch (e) {
         setError(errMsg(e))
       }
     },
-    [user, reload]
+    [user]
   )
 
-  return { loading, error, aggs, anyBound, totalBound, reload, testHealth, rename, setDefault, unbind }
+  return { loading, error, aggs, anyBound, totalBound, reload, testHealth, rename, setDefault, setEnabled, unbind }
 }

@@ -433,8 +433,8 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           <div className="panel-header">
             <h2>厂商实时状态</h2>
             <span className="panel-meta">
-              {provAggs.some((a) => a.boundCount > 0)
-                ? provAggs.reduce((s, a) => s + a.boundCount, 0) + ' 个账号'
+              {provAggs.some((a) => a.enabledCount > 0)
+                ? provAggs.reduce((s, a) => s + a.enabledCount, 0) + ' 个可用账号'
                 : '未绑定'}
             </span>
           </div>
@@ -476,9 +476,9 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
               <div className="provider-status-list">
                 {provAggs.map((p) => {
                   const IconComp = PROVIDER_ICONS[p.providerId]
-                  const used = p.bindings.reduce((s, b) => s + b.used, 0)
-                  const remaining = p.bindings.reduce((s, b) => s + b.remaining, 0)
-                  const total = p.bindings.reduce((s, b) => s + b.dailyTotal, 0)
+                  const used = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.used, 0)
+                  const remaining = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.remaining, 0)
+                  const total = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.dailyTotal, 0)
                   const fill = total > 0 ? Math.round((remaining / total) * 100) : 0
                   return (
                     <div className="ps-item" key={p.providerId}>

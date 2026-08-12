@@ -125,6 +125,7 @@ SSE 事件解析：
 关键实现点：
 
 - prompt 时长 chip：进入视频界面后先选 5s；填写时先清空 ProseMirror 编辑器再插入 prompt，并校验编辑器内容 === prompt（最多重试 3 次），杜绝「5秒 与 10s 冲突」。
+- 选号过滤：候选账号按 `k.enabled !== false` 过滤（厂商页停用的账号不参与调度，见 `docs/develop/desktop-providers-system.md` §3.4）；默认账号优先 → 已失效排后 → 剩余额度多者优先。
 - URL 时效：生成成功后立即下载到 userData/videos/<jobId>.mp4，jobs.result_url 优先存本地路径，options 里保留 remoteUrl；下载失败才回落远程 URL。
 - 额度：成功按时长扣减（5s=1 / 10s=2 / 15s=3 点），失败不扣。
 

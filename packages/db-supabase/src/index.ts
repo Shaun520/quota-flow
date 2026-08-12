@@ -217,6 +217,16 @@ export class ProviderService {
     if (error) throw error
   }
 
+  /** 启用/停用账号：停用后智能调度（生成视频等）自动跳过该账号 */
+  async setEnabled(userId: string, keyId: string, enabled: boolean): Promise<void> {
+    const { error } = await this.client
+      .from('provider_keys')
+      .update({ enabled })
+      .eq('id', keyId)
+      .eq('owner_user_id', userId)
+    if (error) throw error
+  }
+
   /** 设为默认账号：先把同厂商所有账号置否，再置目标为默认（每厂商至多一个） */
   async setDefaultKey(userId: string, providerId: string, keyId: string): Promise<void> {
     const { error: clearError } = await this.client

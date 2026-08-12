@@ -24,7 +24,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, onBound, providers }: ProvidersProps) {
   const { user } = useAuth()
-  const { loading, error, aggs, reload, testHealth, rename, setDefault, unbind } = providers
+  const { loading, error, aggs, reload, testHealth, rename, setDefault, setEnabled, unbind } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -86,7 +86,7 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
       {boundRows.length === 0 && (
           <div className="providers-hint">
             <IconInfo size={14} />
-            <span>绑定账号后额度将自动关联到你的账户，智能调度会按可用额度分发任务。</span>
+            <span>绑定账号后额度将自动关联到你的账户，智能调度会按可用额度分发任务；停用的账号不会被调度使用。</span>
           </div>
         )}
 
@@ -151,6 +151,9 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
                         onSetDefault={async (keyId) => {
                           await setDefault(p.providerId, keyId)
                         }}
+                        onToggleEnabled={async (keyId, enabled) => {
+                          await setEnabled(keyId, enabled)
+                        }}
                       />
                     )
                   })}
@@ -199,6 +202,7 @@ function ProviderRow({
   onTest,
   onRename,
   onSetDefault,
+  onToggleEnabled,
   onUnbind
 }: {
   agg: ProviderAgg
@@ -209,12 +213,15 @@ function ProviderRow({
   onRename: (keyId: string, name: string) => Promise<void>
   onTest: (keyId: string) => Promise<void>
   onSetDefault: (keyId: string) => Promise<void>
+  onToggleEnabled: (keyId: string, enabled: boolean) => Promise<void>
   onUnbind: (keyId: string) => Promise<void>
 }) {
   const IconComp = PROVIDER_ICONS[agg.providerId]
-  const totalUsed = agg.bindings.reduce((s, b) => s + b.used, 0)
-  const remaining = agg.bindings.reduce((s, b) => s + b.remaining, 0)
-  const totalQuota = agg.bindings.reduce((s, b) => s + b.dailyTotal, 0)
+  const activeBindings = agg.bindings.filter((b) => b.enabled)
+  const totalUsed = activeBindings.reduce((s, b) => s + b.used, 0)
+  const remaining = activeBindings.reduce((s, b) => s + b.remaining, 0)
+  const totalQuota = activeBindings.reduce((s, b) => s + b.dailyTotal, 0)
+  const disabledCount = agg.bindings.length - activeBindings.length
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [savingName, setSavingName] = useState(false)
@@ -235,7 +242,7 @@ function ProviderRow({
         </td>
         <td>{agg.unitName}</td>
         <td>{remaining} / {totalQuota}</td>
-        <td className="col-accounts">{agg.boundCount} 个账号</td>
+        <td className="col-accounts">{agg.boundCount} 个账号{disabledCount > 0 ? `（${disabledCount} 已停用）` : ''}</td>
         <td>
           <span className={'badge ' + badge.cls}>{badge.label}</span>
         </td>
@@ -254,7 +261,7 @@ function ProviderRow({
               <table className="account-subtable">
                 <tbody>
                   {agg.bindings.map((acc) => (
-                    <tr key={acc.keyId}>
+                    <tr key={acc.keyId} className={acc.enabled ? '' : 'account-disabled'}>
                       <td>
                         {editKeyId === acc.keyId ? (
                           <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
@@ -305,7 +312,17 @@ function ProviderRow({
                                 默认
                               </span>
                             )}
-                            <button className="link-btn" onClick={() => { setEditKeyId(acc.keyId); setEditName(acc.accountName) }}>
+                            {!acc.enabled && (
+                              <span className="badge badge-muted" style={{ fontSize: 11, padding: '1px 6px' }}>
+                                已停用
+                              </span>
+                            )}
+                            <button
+                              className="link-btn"
+                              disabled={!acc.enabled}
+                              title={acc.enabled ? undefined : '账号已停用，请先启用'}
+                              onClick={() => { setEditKeyId(acc.keyId); setEditName(acc.accountName) }}
+                            >
                               改名
                             </button>
                           </span>
@@ -313,28 +330,60 @@ function ProviderRow({
                       </td>
                       <td>{acc.remaining} / {acc.dailyTotal} {agg.unitName}</td>
                       <td className={acc.health === 'healthy' ? 'healthy' : acc.health === 'expiring' ? 'expiring' : 'exhausted'}>
-                        {acc.health === 'healthy' ? '正常' : acc.health === 'expiring' ? '将过期' : acc.health === 'expired' ? '已失效' : '未知'}
+                        {!acc.enabled
+                          ? '已停用'
+                          : acc.health === 'healthy' ? '正常' : acc.health === 'expiring' ? '将过期' : acc.health === 'expired' ? '已失效' : '未知'}
+                      </td>
+                      <td>
+                        <label
+                          className="switch"
+                          title={acc.enabled ? '停用后智能调度将跳过该账号' : '启用后该账号可被智能调度使用'}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={acc.enabled}
+                            onChange={(e) => void onToggleEnabled(acc.keyId, e.target.checked)}
+                          />
+                          <span className="switch-track">
+                            <span className="switch-thumb" />
+                          </span>
+                          <span className="switch-label">{acc.enabled ? '启用' : '停用'}</span>
+                        </label>
                       </td>
                       <td>
                         <button
                           className="btn-sm"
-                          disabled={acc.isDefault}
+                          disabled={acc.isDefault || !acc.enabled}
                           onClick={() => void onSetDefault(acc.keyId)}
-                          title={acc.isDefault ? '已是默认账号' : '设为默认：优先扣减该账号额度'}
+                          title={
+                            !acc.enabled
+                              ? '账号已停用，请先启用'
+                              : acc.isDefault
+                                ? '已是默认账号'
+                                : '设为默认：优先扣减该账号额度'
+                          }
                         >
                           设为默认
                         </button>{' '}
                         <button
                           className="btn-sm"
                           onClick={() => void onTest(acc.keyId)}
-                          disabled={acc.authType !== 'cookie'}
-                          title={acc.authType !== 'cookie' ? 'API Key 无需健康检查' : undefined}
+                          disabled={acc.authType !== 'cookie' || !acc.enabled}
+                          title={
+                            !acc.enabled
+                              ? '账号已停用，请先启用'
+                              : acc.authType !== 'cookie'
+                                ? 'API Key 无需健康检查'
+                                : undefined
+                          }
                         >
                           测试
                         </button>{' '}
                         <button
                           className="btn-sm"
                           style={{ color: 'var(--error)' }}
+                          disabled={!acc.enabled}
+                          title={acc.enabled ? undefined : '账号已停用，请先启用'}
                           onClick={() => void onUnbind(acc.keyId)}
                         >
                           解绑

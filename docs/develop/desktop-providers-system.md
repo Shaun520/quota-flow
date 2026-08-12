@@ -24,6 +24,7 @@
 |---|---|
 | 厂商列表 | Supabase `providers` 表（admin 可维护，客户端只读） |
 | 账号绑定 | 独立登录窗口 → 提取 cookie → 主进程加密 → 落 `provider_keys` |
+| 账号启用/停用 | 每个账号 `enabled` 开关（默认开），停用后智能调度自动跳过，保留绑定与额度记录 |
 | 额度展示 | `quota_ledger` 账本（按日/团队/厂商/账号），无行按 `default_daily_quota` 初始化 |
 | 解绑 / 测试 | 删行 / 主进程隐藏窗口真实健康检查 |
 | 数据安全 | cookie 主进程 safeStorage 加密落库 + RLS 隔离 |
@@ -47,6 +48,13 @@
 - 每个厂商一个持久 partition：`persist:qf-p:<providerId>`
 - 绑定 = 在该 partition 中打开厂商登录页让用户手动登录 → 主进程读该 partition 的 cookie
 - 后续 WebView 生成引擎复用同一 partition，cookie 天然可用，无需二次注入
+
+### 3.4 账号启用/停用（`provider_keys.enabled`，默认 TRUE）✅ 已实现
+
+- **语义**：`enabled = false` 的账号从智能调度候选池剔除（dispatch.ts 选号按 `k.enabled !== false` 过滤），生成视频时不选该账号；不删除记录、不扣额度、不影响同厂商其它账号
+- **默认开**：新绑定账号由 DB 默认值 `TRUE` 兜底，无需额外写入
+- **UI**：厂商 Tab 展开行的账号列表内提供开关，停用后账号行置灰、状态列显示「已停用」，厂商汇总行标注「N 已停用」，厂商状态聚合只看启用账号（全部停用视为离线）
+- **作用域**：仅影响调度选号；健康检查等其它功能后续按需同步跳过（P2 保活任务沿用同一 `enabled` 过滤）
 
 ## 4. 表结构（迁移 0001）
 
@@ -75,7 +83,7 @@ provider_keys
   cookie_expires_at TIMESTAMPTZ NULL,
   last_health_check TIMESTAMPTZ,
   health_status TEXT,            -- healthy / expiring / expired / unknown
-  enabled BOOLEAN DEFAULT TRUE,
+  enabled BOOLEAN DEFAULT TRUE,  -- 账号启用开关：停用后调度跳过（见 §3.4）
   created_at TIMESTAMPTZ DEFAULT now()
 
 quota_ledger
@@ -132,10 +140,10 @@ provider:health-check    → 隐藏 BrowserWindow 加载厂商 healthCheckUrl �
 ### 6.4 renderer
 
 ```
-hooks/useProviders.ts    # 列表 / 绑定 / 解绑 / 测试 / 刷新 状态管理
-Providers.tsx             # 表格接真实数据；展开行账号列表真实；测试/解绑真实
+hooks/useProviders.ts    # 列表 / 绑定 / 解绑 / 测试 / 启用停用 / 刷新 状态管理
+Providers.tsx             # 表格接真实数据；展开行账号列表真实（含启用开关）；测试/解绑真实
 AddProviderModal.tsx      # 重写：真实登录窗口流程（3.3）→ 成功后写库 → onBound 回调
-Dashboard.tsx             # 厂商实时状态面板接 useProviders（unbound ↔ 真实额度）
+Dashboard.tsx             # 厂商实时状态面板接 useProviders（unbound ↔ 真实额度，只看启用账号）
 App.tsx / useAuth         # fresh 判定 ← 是否有任意 provider keyboard（真实绑定事件）
 data.ts                   # 仅保留 MODELS/HISTORY 演示兜底，PROVIDERS 静态清单由 DB 替代
 ```

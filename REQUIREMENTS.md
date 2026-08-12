@@ -641,6 +641,7 @@ WebView 是桌面端默认路径。**保留 Node.js HTTP adapter 代码**作兜�
 - **次数 ≠ 固定 1 次**：豆包/即梦/可灵等选择不同时长/分辨率/模型会扣不同额度，不能简单按 1 扣
 - default_daily_quota / provider_cost_tables 必须可在 admin 后台调整下发
 - admin 后台可控制厂商全局启用/禁用，用户可在设置里临时禁用某家（调度器自动跳过）
+- **账号级启用/停用**：每个绑定账号有 `enabled` 开关（默认开），停用后该账号不被调度器选号（生成视频、保活、健康检查聚合均跳过），额度/绑定信息保留
 
 ### 6.3 豆包：按次数但时长影响
 
@@ -734,10 +735,12 @@ estimateCost 返回 `{ unit: 'inspiration', cost: 80, equivalentCount: 1 }`。
 ### 8.2 estimateCost 预检查路由
 
 路由选家时必须先 estimateCost，避免选了一个"剩余 80 灵感值，但本次要 160"的账号：
-1. 列出所有 enabled + healthy 的账号（provider_keys）
+1. 列出所有 enabled + healthy 的账号（provider_keys，账号级停用的直接剔除）
 2. 对每个账号调 provider.estimateCost(options) 得 cost
 3. 过滤掉 remaining < cost 的账号
 4. 在剩下列表里按策略选一个
+
+> 账号停用（`provider_keys.enabled = false`）：等同从候选池剔除，但不删除记录、不扣额度、不影响其余账号；重新启用立即恢复参与调度。厂商状态聚合同样只看启用账号，全部停用视为离线。
 
 ### 8.3 质量感知降级（免费层）
 
