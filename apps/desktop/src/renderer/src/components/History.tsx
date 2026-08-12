@@ -214,7 +214,7 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const pagedItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
-  const colSpan = batchMode ? 9 : 8
+  const colSpan = batchMode ? 10 : 9
   const selectedCount = filtered.filter((i) => selectedIds.has(i.id)).length
   const allSelected = filtered.length > 0 && selectedCount === filtered.length
 
@@ -350,10 +350,10 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                 <th style={{ width: '80px' }}>预览</th>
                 <th>提示词</th>
                 <th>厂商</th>
+                <th>账号</th>
                 <th>模式</th>
                 <th>消耗</th>
                 <th>状态</th>
-                <th>质量</th>
                 <th style={{ width: '120px' }}>操作</th>
               </tr>
             </thead>
@@ -387,13 +387,13 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                         )}
                       </td>
                       <td className="col-prompt">{r.prompt}</td>
-                      <td>{r.provider}{r.accountName ? ' · ' + r.accountName : ''}</td>
+                      <td>{r.provider}</td>
+                      <td>{r.accountName || '—'}</td>
                       <td>{r.mode}</td>
                       <td>{r.cost}</td>
                       <td>
                         <span className={'badge ' + badgeFor(r.status)}>{r.status}</span>
                       </td>
-                      <td>{r.quality}</td>
                       <td className="col-actions">
                         <div className="action-btns">
                           <button

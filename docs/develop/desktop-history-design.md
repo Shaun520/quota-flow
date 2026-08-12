@@ -39,7 +39,6 @@
     "providerId": "mathmind",
     "traceId": "mathmind-dryrun-1786073517142",
     "quotaUsed": 1,
-    "qualityScore": 3.5,
     "errorMessage": null
   },
   "mathmindCalls": [...]
@@ -55,7 +54,6 @@
 | 模式 | `mode` | `text2video`→`文生视频`，`img2video`→`图生视频` 等 |
 | 消耗 | `result.quotaUsed` + 厂商单位 | 结合 providers 表 `unit_name` 拼成 `N 点/灵感值/积分/次` |
 | 状态 | `result.ok` / `attempts` | `ok=true`→成功，`ok=false`→失败，`result=null` 且有 attempts→排队 |
-| 质量 | `result.qualityScore` | 直接取，null 时显示 `-` |
 | 预览 | 无对应字段 | 统一显示占位文字（现有逻辑保留） |
 | 操作 | 无对应字段 | 查看/下载/删除（暂为占位，后续接真实 URL） |
 | 时间 | `at` | ISO 时间戳，前端格式化为相对时间 |
@@ -141,7 +139,6 @@ interface JobRecord {
   prompt: string       // 提示词
   cost: string         // 消耗：如 "1 点"、"80 灵感值"
   status: '成功' | '排队' | '失败'
-  quality: string      // 质量分，如 "4.5" 或 "-"
   traceId: string | null
   errorMessage: string | null
 }
@@ -276,7 +273,7 @@ renderer 支持单条删除与批量删除（行勾选 + 全选/半选当前筛�
 dispatch 完成后主进程发 `webContents.send('history:updated')`，renderer 监听该事件自动调用 `list()` 刷新列表，无需用户手动切换 tab。
 
 ### 6.5 统计面板
-基于历史数据聚合：各厂商调用次数、成功率、平均质量分、日/周趋势图，可作为 Dashboard 的补充卡片。
+基于历史数据聚合：各厂商调用次数、成功率、日/周趋势图，可作为 Dashboard 的补充卡片。
 
 ---
 

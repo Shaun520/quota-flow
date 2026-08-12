@@ -68,7 +68,6 @@ function toJobItem(row: JobRow): JobItem {
       prompt: row.prompt ?? '',
       cost: quotaUsed > 0 ? `${quotaUsed} ${UNIT_MAP[pid] ?? row.cost_unit ?? '次'}` : '-',
       status: STATUS_MAP[row.status] ?? '失败',
-      quality: row.quality_score != null ? String(row.quality_score) : '-',
       traceId: row.trace_id ?? null,
       resultUrl: row.result_url ?? null,
       localPath,

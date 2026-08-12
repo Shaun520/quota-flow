@@ -10,7 +10,6 @@ export interface JobRecord {
   prompt: string // 提示词
   cost: string // 消耗：如 "1 点"、"80 灵感值"、"-"
   status: HistoryStatus
-  quality: string // 质量分，如 "4.5" 或 "-"
   traceId: string | null
   /** 视频地址：本地路径（app-media:// 可播放）或远程 https URL */
   resultUrl: string | null

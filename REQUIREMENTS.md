@@ -81,7 +81,6 @@
 | 基础调度（轮询/降级） | 是 | 是 | 是 | 是 |
 | 额度账本 + 看板 | 是 | 是 | 是 | 是 |
 | 多账号池化 | 是 | 是 | 是 | 是 |
-| 质量感知降级 | 是 | 是 | 是 | 是 |
 | Skill / CLI 入口 | 是 | 是 | 是 | 是 |
 | 团队共享额度池 | 否 | 是 | 是 | 是 |
 | 成员管理 | 否 | 是 | 是 | 是 |
@@ -321,7 +320,7 @@ member_usage              成员当日消费（date, team_id, user_id,
 jobs                      生成任务（id, team_id, user_id, provider_id, account_id,
                           mode, prompt, attachments JSONB,
                           status: pending/running/success/failed, trace_id, result_url,
-                          quality_score, error,
+                          error,
                           cost_unit, cost_amount, cost_breakdown JSONB,
                           equivalent_count,
                           created_at, completed_at）
@@ -348,7 +347,7 @@ class Scheduler {
   async generate(options: GenerateOptions): Promise<GenerateResult>
   // 1. 拉 provider_cost_tables 缓存（首次/过期刷新）
   // 2. 查总池可用 key（按 health_status + enabled 过滤，按 remaining 排序）
-  // 3. 按策略选家（轮询/质量优先/可用优先/成本优先）
+  // 3. 按策略选家（轮询/可用优先/成本优先）
   // 4. 调 provider.estimateCost() 预估算，对比 remaining，不够则跳过
   // 5. 调 provider.generate()
   // 6. 成功：回 quota_ledger.consume(实际扣减, breakdown) + 写 job + 返回
@@ -729,7 +728,6 @@ estimateCost 返回 `{ unit: 'inspiration', cost: 80, equivalentCount: 1 }`。
 |---|---|
 | available_first | 优先选剩余等效次数最多的厂商账号（默认） |
 | round_robin | 轮询所有可用厂商账号 |
-| quality_first | 优先选历史质量分最高的厂商 |
 | cost_first | 优先选单次等效成本最低的厂商（同参数下比较） |
 
 ### 8.2 estimateCost 预检查路由
@@ -741,33 +739,6 @@ estimateCost 返回 `{ unit: 'inspiration', cost: 80, equivalentCount: 1 }`。
 4. 在剩下列表里按策略选一个
 
 > 账号停用（`provider_keys.enabled = false`）：等同从候选池剔除，但不删除记录、不扣额度、不影响其余账号；重新启用立即恢复参与调度。厂商状态聚合同样只看启用账号，全部停用视为离线。
-
-### 8.3 质量感知降级（免费层）
-
-生成成功但质量评分低（< 阈值 3.0/5） 自动换一家重试：
-
-```
-第 1 轮：豆包 成功，质量 2.1/5（视频模糊）
-  低于阈值，判定为"低质量成功"
-  触发降级重试（不扣用户等效次数，算平台故障）
-  回滚本轮豆包扣减（如厂商允许退额度则退，不退则记录为平台损耗）
-
-第 2 轮：即梦 成功，质量 4.0/5
-  达标，采用
-  扣用户 1 等效次数
-```
-
-### 8.4 质量评分机制（选项 D：客观指标 + 用户反馈）
-
-**客观指标**：
-- 视频时长（短于预期扣分）
-- 分辨率（低于 720p 扣分）
-- 画面清晰度（SSIM/PSNR）
-
-**用户反馈**：
-- 用户在任务列表标记"差"的 provider
-- 下次调度时降权
-- 反馈累计 N 次差评 admin 后台告警
 
 ---
 

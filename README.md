@@ -11,7 +11,6 @@
 - **多账号池化**：同一家厂商绑多个账号，额度叠加，单账号失效自动切下一个
 - **账号级启用开关**：每个绑定账号可单独启用/停用（默认启用），停用账号被智能调度自动跳过，无需解绑
 - **团队共享额度池**：多人多账号额度叠加成一个池子（核心创新点）
-- **质量感知降级**：生成质量低于阈值自动换家重试，不扣用户等效次数
 - **声明式 WebView 接入**：新厂商接入只需填页面 URL + DOM 选择器，平均 2 小时搞定一家；不用逆向风控签名算法（千问 bx-ua / clt-acs-sign 等）
 - **Cookie 自动维护**：WebView 统一执行引擎（提交与保活共享实例池）+ cookie 隔离会话 + 凌晨 3 点自动续命，用户平均 1-2 月重登一次
 - **桌面端优先**：Electron 本地工具，无超时无 CORS；个人账号本地解密，团队公共账号走 Edge Function 代调用（key 不出云端）
@@ -128,10 +127,9 @@ cp .env.example .env
 # 方式 A：Supabase Dashboard → SQL Editor → 按序执行 migrations/*.sql（约定见 migrations/README.md）
 # 方式 B：桌面端首次启动会提示自动执行
 
-# 4. 桌面端模式切换
-# 桌面端设置 Tab → 模式切换：
-#   - 官方托管（默认）：使用官方 Supabase + Edge Function 代调用
-#   - 自部署：使用你自己的 Supabase，Edge Function 代调用禁用，cookie 完全本地
+# 4. 启动桌面端
+
+cd apps/desktop && pnpm dev  # 设置里的 Supabase 连接信息按需配置
 ```
 
 ### CLI 真跑示例（已验证）

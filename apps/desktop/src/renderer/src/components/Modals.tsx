@@ -64,6 +64,16 @@ export function applyHealthFreq(freq: HealthFreq): void {
   localStorage.setItem('qf-health-freq', freq)
 }
 
+/** 自动续命 Cookie 开关：localStorage 持久化 + 同步主进程调度器 */
+export function getInitialCookieRenew(): '开启' | '关闭' {
+  return localStorage.getItem('qf-cookie-renew') === '关闭' ? '关闭' : '开启'
+}
+
+export function applyCookieRenew(value: '开启' | '关闭'): void {
+  localStorage.setItem('qf-cookie-renew', value)
+  void window.api.cookieRenew.setEnabled(value === '开启')
+}
+
 interface ModalProps {
   title: string
   onClose: () => void
@@ -180,8 +190,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [fontSize, setFontSize] = useState<FontSize>(getInitialFontSize)
   const [showWebview, setShowWebview] = useState<boolean>(getInitialShowWebview)
   const [strategy, setStrategy] = useState('可用优先')
-  const [runMode, setRunMode] = useState('官方托管（推荐）')
-  const [cookieRenew, setCookieRenew] = useState('开启')
+  const [cookieRenew, setCookieRenew] = useState<'开启' | '关闭'>(getInitialCookieRenew)
   const [healthFreq, setHealthFreq] = useState<HealthFreq>(getInitialHealthFreq)
 
   const handleHealthFreqChange = (value: string) => {
@@ -264,23 +273,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           options={[
             { value: '可用优先', label: '可用优先' },
             { value: '轮询均衡', label: '轮询均衡' },
-            { value: '质量优先', label: '质量优先' },
             { value: '成本优先', label: '成本优先' }
-          ]}
-        />
-      </div>
-      <div className="form-group">
-        <label>质量阈值（低于此值自动重试）</label>
-        <input type="range" min={1} max={5} step={0.1} defaultValue={3} style={{ accentColor: 'var(--accent)' }} />
-      </div>
-      <div className="form-group">
-        <label>运行模式</label>
-        <Select
-          value={runMode}
-          onChange={setRunMode}
-          options={[
-            { value: '官方托管（推荐）', label: '官方托管（推荐）' },
-            { value: '自部署', label: '自部署' }
           ]}
         />
       </div>
@@ -288,9 +281,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <label>自动续命 Cookie</label>
         <Select
           value={cookieRenew}
-          onChange={setCookieRenew}
+          onChange={(v) => {
+            const value = v as '开启' | '关闭'
+            setCookieRenew(value)
+            applyCookieRenew(value)
+          }}
           options={[
-            { value: '开启', label: '开启' },
+            { value: '开启', label: '开启（每日 03:00 保活）' },
             { value: '关闭', label: '关闭' }
           ]}
         />
