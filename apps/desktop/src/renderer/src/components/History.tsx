@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import type { JobItem } from '../hooks/useJobs'
-import { useJobs } from '../hooks/useJobs'
+import type { JobItem, JobsResult } from '../hooks/useJobs'
 import { IconEye, IconFolder, IconTrash } from './icons'
 import Pagination from './Pagination'
+import Select from './Select'
 import { VideoThumb } from './VideoThumb'
 
 const PAGE_SIZE = 10
@@ -38,8 +38,8 @@ function timeAgo(iso: string): string {
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`
 }
 
-export default function History() {
-  const { loading, error, items, reload, remove, removeMany } = useJobs()
+export default function History({ jobs }: { jobs: JobsResult }) {
+  const { loading, error, items, reload, remove, removeMany } = jobs
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [batchDeleting, setBatchDeleting] = useState(false)
   const [confirm, setConfirm] = useState<{ kind: 'one'; item: JobItem } | { kind: 'many'; ids: string[] } | null>(null)
@@ -249,21 +249,22 @@ export default function History() {
             value={text}
             onChange={(e) => { setText(e.target.value); setPage(1) }}
           />
-          <select value={provider} onChange={(e) => { setProvider(e.target.value); setPage(1) }}>
-            <option value="">全部厂商</option>
-            {providers.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-          <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }}>
-            <option value="">全部状态</option>
-            <option value="成功">成功</option>
-            <option value="排队">排队</option>
-            <option value="失败">失败</option>
-            <option value="未生成">未生成</option>
-          </select>
+          <Select
+            value={provider}
+            onChange={(v) => { setProvider(v); setPage(1) }}
+            options={[{ value: '', label: '全部厂商' }, ...providers.map((p) => ({ value: p, label: p }))]}
+          />
+          <Select
+            value={status}
+            onChange={(v) => { setStatus(v); setPage(1) }}
+            options={[
+              { value: '', label: '全部状态' },
+              { value: '成功', label: '成功' },
+              { value: '排队', label: '排队' },
+              { value: '失败', label: '失败' },
+              { value: '未生成', label: '未生成' }
+            ]}
+          />
         </div>
       </div>
 

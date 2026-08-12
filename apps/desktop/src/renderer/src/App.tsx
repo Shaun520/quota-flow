@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { ComponentType } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ComponentType, MutableRefObject } from 'react'
 import Dashboard from './components/Dashboard'
 import Providers from './components/Providers'
 import History from './components/History'
@@ -10,6 +10,10 @@ import { BrandMark } from './components/Brand'
 import AuthScreen from './auth/AuthScreen'
 import { useAuth } from './hooks/useAuth'
 import type { AuthUser } from './hooks/useAuth'
+import { useProviders } from './hooks/useProviders'
+import type { ProvidersResult } from './hooks/useProviders'
+import { useJobs } from './hooks/useJobs'
+import type { JobsResult } from './hooks/useJobs'
 import type { TeamContext } from '@quota-flow/db-supabase'
 import { ProfileModal, SettingsModal, getInitialTheme, applyTheme, getInitialFontSize, applyFontSize } from './components/Modals'
 import {
@@ -46,11 +50,26 @@ interface MainAppProps {
   completeStep: (n: 1 | 2 | 3) => void
   onFinishOnboarding: () => void
   onDismissBanner: () => void
-  onUpdateProfile: (name: string) => Promise<string | null>
+  providers: ProvidersResult
+  jobs: JobsResult
+  onOpenModal: (m: 'profile' | 'settings') => void
   onSignOut: () => Promise<void>
 }
 
-function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, onFinishOnboarding, onDismissBanner, onUpdateProfile, onSignOut }: MainAppProps) {
+function MainApp({
+  user,
+  team,
+  fresh,
+  bannerVisible,
+  onboardStep,
+  completeStep,
+  onFinishOnboarding,
+  onDismissBanner,
+  providers,
+  jobs,
+  onOpenModal,
+  onSignOut
+}: MainAppProps) {
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -58,7 +77,6 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
       ? (t as TabId)
       : 'dispatch'
   })
-  const [modal, setModal] = useState<'profile' | 'settings' | null>(null)
 
   useEffect(() => {
     applyTheme(getInitialTheme())
@@ -100,11 +118,11 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
           <div className="avatar-wrap">
             <div className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</div>
             <div className="avatar-dropdown">
-              <button className="dropdown-item" onClick={() => setModal('profile')}>
+              <button className="dropdown-item" onClick={() => onOpenModal('profile')}>
                 <IconUser size={14} />
                 个人中心
               </button>
-              <button className="dropdown-item" onClick={() => setModal('settings')}>
+              <button className="dropdown-item" onClick={() => onOpenModal('settings')}>
                 <IconGear size={14} />
                 设置
               </button>
@@ -144,13 +162,15 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
               onGenerate={() => completeStep(2)}
               onGoHistory={() => setTab('history')}
               onGoProviders={() => setTab('providers')}
+              providers={providers}
+              jobs={jobs}
             />
           </div>
           <div className="tab-pane" style={{ display: tab === 'providers' ? 'block' : 'none' }}>
-            <Providers fresh={fresh} onBound={() => completeStep(1)} />
+            <Providers fresh={fresh} onBound={() => completeStep(1)} providers={providers} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'history' ? 'block' : 'none' }}>
-            <History />
+            <History jobs={jobs} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'team' ? 'block' : 'none' }}>
             <Team fresh={fresh} />
@@ -172,7 +192,32 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
           <div className="status-item">Quota-Flow v0.9.0</div>
         </div>
       </footer>
+    </div>
+  )
+}
 
+type ModalKind = 'profile' | 'settings'
+
+interface AppModalsProps {
+  modalApiRef: MutableRefObject<{ open: (m: ModalKind) => void } | null>
+  user: AuthUser
+  team: TeamContext | null
+  onUpdateProfile: (name: string) => Promise<string | null>
+}
+
+/** 个人中心 / 设置弹窗：弹窗状态独立于此组件内部，开合不再触发 MainApp 及四个 Tab 树重渲染 */
+function AppModals({ modalApiRef, user, team, onUpdateProfile }: AppModalsProps) {
+  const [modal, setModal] = useState<ModalKind | null>(null)
+
+  useEffect(() => {
+    modalApiRef.current = { open: setModal }
+    return () => {
+      modalApiRef.current = null
+    }
+  }, [modalApiRef])
+
+  return (
+    <>
       {modal === 'profile' && (
         <ProfileModal
           user={user}
@@ -182,7 +227,7 @@ function MainApp({ user, team, fresh, bannerVisible, onboardStep, completeStep, 
         />
       )}
       {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
-    </div>
+    </>
   )
 }
 
@@ -222,6 +267,13 @@ function ConfigWarning() {
 export default function App() {
   const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile } =
     useAuth()
+  // 厂商 / 任务数据提升到 App 层单例：消除 Dashboard 与 Providers（useProviders）、Dashboard 与 History（useJobs）的重复请求与重复健康检查
+  const providers = useProviders()
+  const jobs = useJobs()
+  const modalApiRef = useRef<{ open: (m: ModalKind) => void } | null>(null)
+  const openModal = useCallback((m: ModalKind) => {
+    modalApiRef.current?.open(m)
+  }, [])
   const [submitting, setSubmitting] = useState(false)
   const [onboardStep, setOnboardStep] = useState<1 | 2 | 3>(() => {
     try {
@@ -319,17 +371,22 @@ export default function App() {
   }
 
   return (
-    <MainApp
-      user={user}
-      team={team}
-      fresh={fresh}
-      bannerVisible={bannerVisible}
-      onboardStep={onboardStep}
-      completeStep={completeStep}
-      onFinishOnboarding={finishOnboarding}
-      onDismissBanner={dismissBanner}
-      onUpdateProfile={updateProfile}
-      onSignOut={signOut}
-    />
+    <>
+      <MainApp
+        user={user}
+        team={team}
+        fresh={fresh}
+        bannerVisible={bannerVisible}
+        onboardStep={onboardStep}
+        completeStep={completeStep}
+        onFinishOnboarding={finishOnboarding}
+        onDismissBanner={dismissBanner}
+        providers={providers}
+        jobs={jobs}
+        onOpenModal={openModal}
+        onSignOut={signOut}
+      />
+      <AppModals modalApiRef={modalApiRef} user={user} team={team} onUpdateProfile={updateProfile} />
+    </>
   )
 }

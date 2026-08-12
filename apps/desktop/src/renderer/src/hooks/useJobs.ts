@@ -83,6 +83,10 @@ export function useJobs(): JobsResult {
 
   useEffect(() => {
     let cancelled = false
+    if (!user) {
+      setLoading(false)
+      return
+    }
     const svc = getJobService()
     if (!svc) {
       setLoading(false)
@@ -105,7 +109,7 @@ export function useJobs(): JobsResult {
     return () => {
       cancelled = true
     }
-  }, [reloadKey])
+  }, [user?.id, reloadKey])
 
   const remove = useCallback(
     async (jobId: string): Promise<boolean> => {

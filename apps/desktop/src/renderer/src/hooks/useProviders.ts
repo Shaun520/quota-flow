@@ -130,6 +130,8 @@ export function useProviders(): ProvidersResult {
   const [keys, setKeys] = useState<ProviderKey[]>([])
   const [ledgers, setLedgers] = useState<QuotaLedgerRow[]>([])
   const [reloadKey, setReloadKey] = useState(0)
+  // 健康检查结果会话内覆盖：只更新 map，不重建 keys 数组，避免下游 memo / 效应链整体重算
+  const [healthOverrides, setHealthOverrides] = useState<Record<string, string>>({})
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
 
@@ -148,6 +150,8 @@ export function useProviders(): ProvidersResult {
         setProviders(p)
         setKeys(k)
         setLedgers(l)
+        // 全量数据已刷新（健康状态已写库并在本次拉取中带回），作废会话内覆盖
+        setHealthOverrides({})
 
         // 对已绑定但缺今日 ledger 行的账号自动初始化额度（按账号，每天 0 点重置）
         const today = todayShanghai()
@@ -183,7 +187,7 @@ export function useProviders(): ProvidersResult {
     return () => {
       cancelled = true
     }
-  }, [user, reloadKey])
+  }, [user?.id, reloadKey])
 
   // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
   useEffect(() => {
@@ -193,13 +197,13 @@ export function useProviders(): ProvidersResult {
     if (!svc) return
     void runHealthChecks(svc, user.id, keys, (keyId, status) => {
       if (!cancelled) {
-        setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, health_status: status } : k)))
+        setHealthOverrides((prev) => ({ ...prev, [keyId]: status }))
       }
     })
     return () => {
       cancelled = true
     }
-  }, [user, keys])
+  }, [user?.id, keys])
 
   const aggs = useMemo<ProviderAgg[]>(() => {
     const map = new Map<string, BindingView[]>()
@@ -214,7 +218,7 @@ export function useProviders(): ProvidersResult {
         keyId: k.id,
         accountName: k.account_name ?? '绑定账号',
         authType: k.auth_type,
-        health: k.health_status as BindingView['health'],
+        health: (healthOverrides[k.id] ?? k.health_status) as BindingView['health'],
         expiresAt: k.cookie_expires_at ? new Date(k.cookie_expires_at).getTime() : null,
         isDefault: !!k.is_default,
         dailyTotal: defaultTotal,
@@ -241,7 +245,7 @@ export function useProviders(): ProvidersResult {
         bindings
       }
     })
-  }, [providers, keys, ledgers])
+  }, [providers, keys, ledgers, healthOverrides])
 
   const anyBound = keys.length > 0
   const totalBound = keys.length

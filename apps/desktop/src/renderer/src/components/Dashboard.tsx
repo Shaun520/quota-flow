@@ -8,10 +8,11 @@ import {
 } from '../spec'
 import { IconInfo, IconPlay, IconUpload, PROVIDER_ICONS } from './icons'
 import { EmptyState } from './EmptyState'
-import { useProviders } from '../hooks/useProviders'
-import { useJobs } from '../hooks/useJobs'
+import Select from './Select'
 import type { JobItem } from '../hooks/useJobs'
 import { useAuth } from '../hooks/useAuth'
+import type { ProvidersResult } from '../hooks/useProviders'
+import type { JobsResult } from '../hooks/useJobs'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
 import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
@@ -42,12 +43,14 @@ interface DashboardProps {
   onGenerate?: () => void
   onGoHistory: () => void
   onGoProviders: () => void
+  providers: ProvidersResult
+  jobs: JobsResult
 }
 
-export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory, onGoProviders }: DashboardProps) {
-  const { aggs: provAggs } = useProviders()
+export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory, onGoProviders, providers, jobs }: DashboardProps) {
+  const { aggs: provAggs } = providers
   const { user } = useAuth()
-  const { items: jobItems, reload: reloadJobs } = useJobs()
+  const { items: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('auto')
   const [model, setModel] = useState(MODELS.auto[0])
   const [mode, setMode] = useState('t2v')
@@ -264,89 +267,94 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           <div className="cascade-row">
             <div className="param-field">
               <label htmlFor="provider">选择厂商</label>
-              <select
+              <Select
                 id="provider"
                 value={provider}
-                onChange={(e) => onProviderChange(e.target.value)}
-              >
-                <option value="auto">智能调度（推荐）</option>
-                <option value="doubao">豆包</option>
-                <option value="jimeng">即梦</option>
-                <option value="qwen">通义万相</option>
-                <option value="yuanbao">元宝混元</option>
-                <option value="kling">可灵</option>
-                <option value="hailuo">海螺</option>
-                <option value="mathmind">MathMind</option>
-              </select>
+                onChange={onProviderChange}
+                options={[
+                  { value: 'auto', label: '智能调度（推荐）' },
+                  { value: 'doubao', label: '豆包' },
+                  { value: 'jimeng', label: '即梦' },
+                  { value: 'qwen', label: '通义万相' },
+                  { value: 'yuanbao', label: '元宝混元' },
+                  { value: 'kling', label: '可灵' },
+                  { value: 'hailuo', label: '海螺' },
+                  { value: 'mathmind', label: 'MathMind' }
+                ]}
+              />
             </div>
             <div className="param-field">
               <label htmlFor="model">选择模型</label>
-              <select id="model" value={model} onChange={(e) => setModel(e.target.value)}>
-                {(MODELS[provider] ?? MODELS.auto).map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="model"
+                value={model}
+                onChange={setModel}
+                options={(MODELS[provider] ?? MODELS.auto).map((m) => ({ value: m, label: m }))}
+              />
             </div>
           </div>
 
           <div className="param-row">
             <div className="param-field">
               <label htmlFor="mode">生成模式</label>
-              <select id="mode" value={mode} onChange={(e) => setMode(e.target.value)}>
-                <option value="t2v">文生视频</option>
-                <option value="img">图生视频</option>
-                <option value="multi_ref">多参考生成</option>
-                <option value="first_last">首尾帧</option>
-              </select>
+              <Select
+                id="mode"
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: 't2v', label: '文生视频' },
+                  { value: 'img', label: '图生视频' },
+                  { value: 'multi_ref', label: '多参考生成' },
+                  { value: 'first_last', label: '首尾帧' }
+                ]}
+              />
             </div>
             <div className="param-field">
               <label htmlFor="duration">时长</label>
-              <select
+              <Select
                 id="duration"
-                value={duration}
-                onChange={(e) => setDuration(Number(e.target.value))}
-              >
-                {durations.map((d) => (
-                  <option key={d.value} value={d.value} disabled={d.disabled}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
+                value={String(duration)}
+                onChange={(v) => setDuration(Number(v))}
+                options={durations.map((d) => ({ value: String(d.value), label: d.label, disabled: d.disabled }))}
+              />
             </div>
             <div className="param-field">
               <label htmlFor="resolution">分辨率</label>
-              <select
+              <Select
                 id="resolution"
                 value={resolution}
                 disabled={provider === 'yuanbao'}
-                onChange={(e) => setResolution(e.target.value)}
-              >
-                {resolutions.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
+                onChange={setResolution}
+                options={resolutions.map((r) => ({ value: r.value, label: r.label }))}
+              />
             </div>
           </div>
 
           <div className="param-row">
             <div className="param-field">
               <label htmlFor="audio">智能配音</label>
-              <select id="audio" value={audio} onChange={(e) => setAudio(e.target.value)}>
-                <option value="on">开</option>
-                <option value="off">关</option>
-              </select>
+              <Select
+                id="audio"
+                value={audio}
+                onChange={setAudio}
+                options={[
+                  { value: 'on', label: '开' },
+                  { value: 'off', label: '关' }
+                ]}
+              />
             </div>
             <div className="param-field">
               <label htmlFor="ratio">视频比例</label>
-              <select id="ratio" value={ratio} onChange={(e) => setRatio(e.target.value)}>
-                <option value="9:16">9:16</option>
-                <option value="16:9">16:9</option>
-                <option value="1:1">1:1</option>
-              </select>
+              <Select
+                id="ratio"
+                value={ratio}
+                onChange={setRatio}
+                options={[
+                  { value: '9:16', label: '9:16' },
+                  { value: '16:9', label: '16:9' },
+                  { value: '1:1', label: '1:1' }
+                ]}
+              />
             </div>
             <div className="param-field">
               <span className="field-hint">配音 / 比例不影响额度</span>

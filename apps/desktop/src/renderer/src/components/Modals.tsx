@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { IconChevron, IconClose, PROVIDER_ICONS } from './icons'
+import Select from './Select'
 import { getProviderService } from '../auth/service'
 import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
@@ -155,6 +156,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [fontSize, setFontSize] = useState<FontSize>(getInitialFontSize)
   const [showWebview, setShowWebview] = useState<boolean>(getInitialShowWebview)
+  const [strategy, setStrategy] = useState('可用优先')
+  const [runMode, setRunMode] = useState('官方托管（推荐）')
+  const [cookieRenew, setCookieRenew] = useState('开启')
+  const [healthFreq, setHealthFreq] = useState('每 4 小时')
 
   const handleThemeChange = (value: Theme) => {
     setTheme(value)
@@ -188,39 +193,55 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     >
       <div className="form-group">
         <label>外观主题</label>
-        <select value={theme} onChange={(e) => handleThemeChange(e.target.value as Theme)}>
-          <option value="dark">暗黑</option>
-          <option value="light">浅色</option>
-        </select>
+        <Select
+          value={theme}
+          onChange={(v) => handleThemeChange(v as Theme)}
+          options={[
+            { value: 'dark', label: '暗黑' },
+            { value: 'light', label: '浅色' }
+          ]}
+        />
       </div>
       <div className="form-group">
         <label>显示大小</label>
-        <select value={fontSize} onChange={(e) => handleFontSizeChange(e.target.value as FontSize)}>
-          <option value="12">小 (12px)</option>
-          <option value="13">默认 (13px)</option>
-          <option value="14">大 (14px)</option>
-          <option value="15">特大 (15px)</option>
-          <option value="16">超大 (16px)</option>
-        </select>
+        <Select
+          value={fontSize}
+          onChange={(v) => handleFontSizeChange(v as FontSize)}
+          options={[
+            { value: '12', label: '小 (12px)' },
+            { value: '13', label: '默认 (13px)' },
+            { value: '14', label: '大 (14px)' },
+            { value: '15', label: '特大 (15px)' },
+            { value: '16', label: '超大 (16px)' }
+          ]}
+        />
       </div>
       <div className="form-group">
         <label>调试：显示豆包窗口</label>
-        <select value={showWebview ? '1' : '0'} onChange={(e) => handleShowWebviewChange(e.target.value === '1')}>
-          <option value="0">隐藏（默认）</option>
-          <option value="1">显示（测试用）</option>
-        </select>
+        <Select
+          value={showWebview ? '1' : '0'}
+          onChange={(v) => handleShowWebviewChange(v === '1')}
+          options={[
+            { value: '0', label: '隐藏（默认）' },
+            { value: '1', label: '显示（测试用）' }
+          ]}
+        />
         <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--fg-muted)' }}>
           生成时显示豆包 WebView 窗口，便于观察生成过程或处理验证码；默认隐藏。
         </p>
       </div>
       <div className="form-group">
         <label>调度策略</label>
-        <select defaultValue="可用优先">
-          <option>可用优先</option>
-          <option>轮询均衡</option>
-          <option>质量优先</option>
-          <option>成本优先</option>
-        </select>
+        <Select
+          value={strategy}
+          onChange={setStrategy}
+          options={[
+            { value: '可用优先', label: '可用优先' },
+            { value: '轮询均衡', label: '轮询均衡' },
+            { value: '质量优先', label: '质量优先' },
+            { value: '成本优先', label: '成本优先' }
+          ]}
+        />
       </div>
       <div className="form-group">
         <label>质量阈值（低于此值自动重试）</label>
@@ -228,25 +249,37 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       </div>
       <div className="form-group">
         <label>运行模式</label>
-        <select defaultValue="官方托管（推荐）">
-          <option>官方托管（推荐）</option>
-          <option>自部署</option>
-        </select>
+        <Select
+          value={runMode}
+          onChange={setRunMode}
+          options={[
+            { value: '官方托管（推荐）', label: '官方托管（推荐）' },
+            { value: '自部署', label: '自部署' }
+          ]}
+        />
       </div>
       <div className="form-group">
         <label>自动续命 Cookie</label>
-        <select defaultValue="开启">
-          <option>开启</option>
-          <option>关闭</option>
-        </select>
+        <Select
+          value={cookieRenew}
+          onChange={setCookieRenew}
+          options={[
+            { value: '开启', label: '开启' },
+            { value: '关闭', label: '关闭' }
+          ]}
+        />
       </div>
       <div className="form-group">
         <label>健康检查频率</label>
-        <select defaultValue="每 4 小时">
-          <option>每 4 小时</option>
-          <option>每 8 小时</option>
-          <option>每 12 小时</option>
-        </select>
+        <Select
+          value={healthFreq}
+          onChange={setHealthFreq}
+          options={[
+            { value: '每 4 小时', label: '每 4 小时' },
+            { value: '每 8 小时', label: '每 8 小时' },
+            { value: '每 12 小时', label: '每 12 小时' }
+          ]}
+        />
       </div>
     </Modal>
   )
@@ -709,17 +742,12 @@ export function AddProviderModal({
                   />
                   <span>刷新已有账号</span>
                   {refreshTarget !== 'new' && (
-                    <select
+                    <Select
                       value={refreshTarget}
-                      onChange={(e) => setRefreshTarget(e.target.value)}
-                      style={{ marginLeft: 4 }}
-                    >
-                      {existingKeys.map((k) => (
-                        <option key={k.id} value={k.id}>
-                          {k.accountName}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setRefreshTarget}
+                      options={existingKeys.map((k) => ({ value: k.id, label: k.accountName }))}
+                      style={{ marginLeft: 4, minWidth: 140 }}
+                    />
                   )}
                 </div>
                 <button className="btn-sm primary" onClick={() => void confirmSave()} disabled={saving}>

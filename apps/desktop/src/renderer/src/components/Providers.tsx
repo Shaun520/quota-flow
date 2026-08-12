@@ -3,8 +3,8 @@ import { IconChevron, IconInfo, PROVIDER_ICONS } from './icons'
 import { AddProviderModal } from './Modals'
 import Pagination from './Pagination'
 import { EmptyState } from './EmptyState'
-import { useProviders } from '../hooks/useProviders'
-import type { ProviderAgg } from '../hooks/useProviders'
+import Select from './Select'
+import type { ProviderAgg, ProvidersResult } from '../hooks/useProviders'
 import { useAuth } from '../hooks/useAuth'
 
 const PAGE_SIZE = 10
@@ -19,11 +19,12 @@ function statusBadge(p: ProviderAgg): { cls: string; label: string } {
 interface ProvidersProps {
   fresh: boolean
   onBound?: () => void
+  providers: ProvidersResult
 }
 
-export default function Providers({ fresh, onBound }: ProvidersProps) {
+export default function Providers({ fresh, onBound, providers }: ProvidersProps) {
   const { user } = useAuth()
-  const { loading, error, aggs, reload, testHealth, rename, setDefault, unbind } = useProviders()
+  const { loading, error, aggs, reload, testHealth, rename, setDefault, unbind } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -63,13 +64,17 @@ export default function Providers({ fresh, onBound }: ProvidersProps) {
             value={text}
             onChange={(e) => { setText(e.target.value); setPage(1) }}
           />
-          <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}>
-            <option value="">全部状态</option>
-            <option value="online">正常</option>
-            <option value="degraded">异常</option>
-            <option value="offline">离线</option>
-            <option value="unbound">未绑定</option>
-          </select>
+          <Select
+            value={statusFilter}
+            onChange={(v) => { setStatusFilter(v); setPage(1) }}
+            options={[
+              { value: '', label: '全部状态' },
+              { value: 'online', label: '正常' },
+              { value: 'degraded', label: '异常' },
+              { value: 'offline', label: '离线' },
+              { value: 'unbound', label: '未绑定' }
+            ]}
+          />
           <button className="btn-sm primary" onClick={() => openAdd()}>
             + 新增厂商
           </button>
