@@ -66,6 +66,8 @@ export interface DoubaoGenerateOptions {
   showWebview?: boolean
   /** 最长等待秒数，默认 360 */
   maxWaitSec?: number
+  /** 取消/已提交状态：主进程注册表持有，提交前检查 aborted，提交后置 submitted */
+  cancel?: { aborted: boolean; submitted: boolean }
   onProgress?: (stage: string, detail?: unknown) => void
 }
 
@@ -77,6 +79,8 @@ export interface DoubaoGenerateResult {
   error?: string
   /** 内容政策拒绝（侵权/肖像/版权）：与账号无关，不应切换账号重试 */
   blocked?: boolean
+  /** 用户手动终止（提示词未发送） */
+  cancelled?: boolean
   attempts: Array<{ providerId: string; ok: boolean; errorMessage?: string }>
 }
 
@@ -865,6 +869,31 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     const r = fail(blockedText)
     return { ...r, blocked: true }
   }
+  let win: BrowserWindow | null = null
+  const cancelState = options.cancel
+  const failCancelled = (): DoubaoGenerateResult => {
+    attempts.push({ providerId: 'doubao', ok: false, errorMessage: '已手动终止生成（提示词未发送）' })
+    return { ok: false, providerId: 'doubao', cancelled: true, error: '已手动终止生成（提示词未发送）', attempts }
+  }
+  /** 提交前阶段边界检查：用户已点「终止生成」则销毁窗口并返回中断结果 */
+  const abortIfCancelled = (): DoubaoGenerateResult | null => {
+    if (!cancelState?.aborted) return null
+    try {
+      win?.destroy()
+    } catch {}
+    return failCancelled()
+  }
+  /** 可中断等待：每 200ms 检查一次取消标记，被取消时立即返回（调用方 return abortNow()） */
+  const waitOrAbort = async (ms: number): Promise<boolean> => {
+    const step = 200
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      if (cancelState?.aborted) return true
+      await sleep(Math.min(step, end - Date.now()))
+    }
+    return cancelState?.aborted === true
+  }
+  const abortNow = (): DoubaoGenerateResult => abortIfCancelled() ?? failCancelled()
 
   if (options.mode && options.mode !== 'text2video' && options.mode !== 't2v' && options.mode !== 'img2video') {
     return fail('暂仅支持文生视频/图生视频（豆包），当前模式：' + options.mode)
@@ -876,9 +905,13 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     // 候选 C 兜底：若分区已存在登录态（登录窗口=生成分区），注入失败但可能仍可使用
     // 继续往下走，由 inspect 登录态检查决定
   }
+  {
+    const aborted = abortIfCancelled()
+    if (aborted) return aborted
+  }
 
   progress(options, 'open-page')
-  const win = new BrowserWindow({
+  win = new BrowserWindow({
     // 默认隐藏；设置里开启「显示豆包窗口」后可见（用于测试/观察/处理验证码）
     show: options.showWebview === true,
     width: 1280,
@@ -912,14 +945,15 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
   try {
     await Promise.race([
       win.loadURL(DOUBAO_URL),
-      sleep(90000).then(() => {
+      waitOrAbort(90000).then((ab) => {
+        if (ab) throw new Error('已取消')
         throw new Error('页面加载超时')
       })
     ])
   } catch (e) {
     loadError = { code: -1, desc: e instanceof Error ? e.message : String(e), url: DOUBAO_URL }
   }
-  await sleep(4000)
+  if (await waitOrAbort(4000)) return abortNow()
 
   // 归一化 effectiveStorages：优先用 storages（v2 多 origin），否则 fallback localStorage（v1）
   const effectiveStorages: OriginStorage[] = []
@@ -953,7 +987,7 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
         true
       )
       await win.webContents.executeJavaScript('location.reload()', true)
-      await sleep(3500)
+      if (await waitOrAbort(3500)) return abortNow()
     } catch {
       // storage 注入失败不阻断，页面可能仅依赖 cookie
     }
@@ -982,6 +1016,10 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     await win.webContents.executeJavaScript('(' + riskProbeScript.toString() + ')()', true)
   } catch {}
 
+  {
+    const aborted = abortIfCancelled()
+    if (aborted) return aborted
+  }
   // 等「视频生成」入口出现（SPA 渲染，最多 ~15s）
   progress(options, 'wait-tab')
   let tabReady = false
@@ -1001,13 +1039,17 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
         break
       }
     } catch {}
-    await sleep(1000)
+    if (await waitOrAbort(1000)) return abortNow()
   }
   if (!tabReady) {
     win.destroy()
     return fail('豆包页面未出现「视频生成」入口（可能未登录或页面结构变化）')
   }
 
+  {
+    const aborted = abortIfCancelled()
+    if (aborted) return aborted
+  }
   // 点击页签 → 轮询视频界面出现；失败则 Escape 关弹层重试
   progress(options, 'open-video-tab')
   let entered = false
@@ -1018,12 +1060,12 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
         true
       )
     } catch {}
-    await sleep(500)
+    if (await waitOrAbort(500)) return abortNow()
     try {
       await win.webContents.executeJavaScript('(' + openVideoTabScript.toString() + ')()', true)
     } catch {}
     for (let i = 0; i < 8; i++) {
-      await sleep(1500)
+      if (await waitOrAbort(1500)) return abortNow()
       try {
         const vv = (await win.webContents.executeJavaScript(
           '(' + inspectScript.toString() + ')()',
@@ -1045,6 +1087,10 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail('未进入视频生成界面（页面结构可能有变化）' + (lastView ? JSON.stringify(lastView).slice(0, 300) : ''))
   }
 
+  {
+    const aborted = abortIfCancelled()
+    if (aborted) return aborted
+  }
   const durationSec = options.durationSec === 10 ? 10 : options.durationSec === 15 ? 15 : 5
   // 时长：真实 UI 滑块（Radix Slider），避免「5秒 文本 vs 10s chip」双时长冲突
   progress(options, 'apply-duration', { durationSec })
@@ -1067,6 +1113,10 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
   const submitPrompt = parts.join('，')
   progress(options, 'apply-params', { mode: modeLabel, ratio: options.ratio, audio: options.audio, resolution: options.resolution, submitPrompt })
 
+  {
+    const aborted = abortIfCancelled()
+    if (aborted) return aborted
+  }
   progress(options, 'submit')
   let fillResult: { ok?: boolean; reason?: string } = {}
   const isImg2Video = options.mode === 'img2video'
@@ -1123,6 +1173,13 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     win.destroy()
     return fail(fillResult.reason || '提交失败')
   }
+  // 脚本执行期间用户点了停止：即使脚本已跑完，也按中断处理，不再继续（杜绝「点了停止还在生成」）
+  {
+    const aborted = abortIfCancelled()
+    if (aborted) return aborted
+  }
+  // 提示词已发送：此后不允许再终止（主进程 cancel 会因 submitted=true 拒绝）
+  if (cancelState) cancelState.submitted = true
 
   // 提交后检查风控：verify → 显示窗口交用户；limit → 直接失败
   await sleep(1500)

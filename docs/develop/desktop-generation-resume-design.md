@@ -1,0 +1,205 @@
+# 桌面端生成恢复（Resume）设计方案
+
+> 记录日期：2026-08-12
+> 状态：**设计分析，未实现（先不改代码）**
+> 关联：[desktop-dispatch-doubao.md](desktop-dispatch-doubao.md)、[desktop-generation-reject-and-status.md](desktop-generation-reject-and-status.md)、[desktop-doubao-risk-control.md](desktop-doubao-risk-control.md)
+
+---
+
+## 1. 问题背景
+
+用户点击「开始生成」后，生成过程分两段：
+
+1. **本地段（可中断）**：dispatch 开隐藏豆包 WebView，注入 cookie → 进视频界面 → 提交 prompt → 轮询「生成好了」→ 抽 mp4 URL；
+2. **服务端段（不可中断）**：豆包一旦接单（`/chat/completion` 返回 `async_task`），**生成在豆包云端异步执行**，与本地 App 无关。
+
+**现象**：生成中误关桌面端 → WebView 轮询被杀，但豆包云端生成仍在继续；重启后现有 `dispatch:reconcile`（`apps/desktop/src/main/index.ts:238`）会把超 10min 的 `running` 任务直接打 failed（`:260-270`），导致「其实可能已生成好」的视频结果丢失，用户只能重新生成、再花一次豆包点数。
+
+**目标**：重启桌面端后，状态为「排队中」（DB 中 `pending` / `running`）的任务自动恢复生成，最终正常收敛到 `success/failed`。
+
+---
+
+## 2. 现状盘点
+
+| 项 | 状态 | 位置 |
+|---|---|---|
+| 任务生命周期 | `pending → running → success/failed` | `apps/desktop/src/main/dispatch.ts:149`（`runGenerate` 单体函数） |
+| 执行引擎 | cookie 注入 → 进界面 → 设时长 → 提交 → 轮询（≤360s） | `apps/desktop/src/main/webview-engine.ts:856`（`runDoubaoGeneration`） |
+| 崩溃恢复 | 仅 ① >10min 的 running 打 failed ② 追记未入账额度 | `apps/desktop/src/main/index.ts:238-298` |
+| 状态展示 | `pending/running → 排队` | `apps/desktop/src/renderer/src/hooks/useJobs.ts:24-30` |
+| 单实例锁 | **无**（`requestSingleInstanceLock` 不存在） | `apps/desktop/src/main/index.ts` |
+| 任务数据持久化 | prompt / options / account_id / provider_id 已落库 | `migrations/0003_jobs.sql:7-29` |
+| 图片副本 | 图生视频图片已复制到 `userData/images/<jobId>-<n>.*` | `dispatch.ts:189-203` |
+
+**关键结论**：恢复所需数据（prompt、参数、图片副本、账号、cookie）全部已在库中，恢复 = 重新接管这些任务的「轮询/提交」，无需新增表结构（convId 等存进 `jobs.options` JSONB 即可）。
+
+---
+
+## 3. 恢复策略总览
+
+### 策略 A：直接重新提交（MVP 推荐）
+
+恢复时对任务反向序列化参数，重跑一遍 `runDoubaoGeneration`。
+
+- 优点：实现改动最小、最稳。
+- 代价：若崩溃前其实已成功提交过，会再生成一条 → **豆包侧点数双花**（本地 `quota_ledger` 只在成功时扣一次，不受影响）。
+
+### 策略 B：先收集结果，再提交（优化项）
+
+引擎把「提交」与「轮询收集」拆开，恢复时先尝试捡回已完成的旧结果；没有才提交。
+
+- 优点：崩溃**前已提交**的任务，恢复后直接收集到结果并扣费收工，**不再多烧豆包点数**（这正是 B 相较 A 的收益，对点数紧张的用户关键）。
+- 代价：依赖豆包能否恢复同一会话；复杂度高、脆弱。
+
+> **半价方案**：即使不做 B，也建议先做「落提交标记 + 竞态压缩」（见 §5、§6），把 A 的误判/双扣概率降到极低，为后续 B 打地基。
+
+---
+
+## 4. 会话 ID（convId）采集与落库
+
+豆包是 SPA，提交后通过 history API 把地址变成 `/chat/<convId>`（如 `https://www.doubao.com/chat/38437471173315586?channel=RSX4N`），**不会触发页面跳转事件**，只能在轮询/提交后读 `location.href` 提取。
+
+```text
+location.href 匹配 /chat/(\d+)/ → 取数字段
+```
+
+- **读取点**：`extractResultScript`（`webview-engine.ts:380`）目前不返回 url，`inspectScript`（:128）返回 `url`。给提取脚本返回 url + convId 即可。
+- **采集时机**：提交脚本返回后**立刻**读一次（见 §6 竞态压缩），并在 `waiting` 轮询每拍读取，**首次变化才上报**（防抖，避免每 5s 写库）。
+- **上报**：`onProgress('conversation-id', { conversationId, url })` → dispatch 里 `updateJob` 写 `options.conversationId`。
+- **关键约束**：必须在任务 success 之前落库（崩溃可能发生在生成等待中途）。
+
+---
+
+## 5. 「已提交」标记：不能只靠 convId
+
+区分「还没提交 / 已提交 / 已提交且拿到会话锚点」，需要一个服务器侧回执信号：
+
+- **`options.submittedAt`**：风控探针检测到 `async_task|"task_id"`（`webview-engine.ts:699-704`）即服务器**已接单**（点数已扣）的时刻。这是比 URL 更早更可靠的信号。
+- **`options.conversationId`**：已提交且拿到会话锚点。
+
+### 恢复状态矩阵
+
+| 恢复时 `options` 状态 | 含义 | 动作 |
+|---|---|---|
+| 有 `conversationId` | 已提交、有会话锚点 | 定位收集（`collectResult`）→ 失败再提交 |
+| 无 convId、有 `submittedAt` | 疑似提交、锚点丢失（~1.5s 竞态） | blind-collect 尽力收集 → 失败再提交 |
+| 无 convId、无 `submittedAt` | **确认未提交**（含卡 `pending` 的任务） | 直接 `submitAndPoll` 重提交，豆包点零浪费、无孤儿 |
+
+> 卡 `pending` 的任务（`dispatch.ts:171-174` insert 后未 running）天然归入「未提交」分支，无需额外设计。
+
+---
+
+## 6. 竞态窗口（Enter 已发、服务器刚接单、convId 未抓到）
+
+时序：Enter（~T0）→ 脚本内 `sleep(1500)`（:375）→ 回主进程 `sleep(1500)`（:1128）→ 读 risk → 进 while 第一拍 `sleep(5000)` 后才读 URL（:1164）→ **约 Enter+8s 才能拿到 convId**。这 8s 内关 App：
+
+- 服务器其实已接单、点数已扣；
+- 但 `conversationId` 是空 → 恢复时误判「未提交」→ 重提交 → **点数双扣**。
+
+### 应对
+
+1. **提交脚本返回后立刻读一次 `location.href` + risk**，插在 `fillResult` 之后、`sleep(1500)` 之前（:1128 前），把窗口从 8s 压到 ~1.5s；
+2. **服务器回执优先于 URL**：`async_task` ack 一旦出现，立即 `onProgress('submitted')` 落 `options.submittedAt`，不必等 URL（风控探针已 hook 响应，改造点小）。
+
+### 残留窗口兜底：blind-collect
+
+无 convId 但有 `submittedAt` 的任务，恢复时打开该账号会话、进视频 tab，**不提交**，先跑 60~90s `collectResult`（无目标会话版）——豆包通常恢复最近一条视频会话，若孤儿子任务已完成，`extractResultScript` 能扫到结果 → 直接 `finalizeJob` 收工；超时未扫到 → 再提交。
+
+> 若孤儿还在生成中，blind-collect 扫不到「完成卡片」，随后提交会有极低概率双扣——这是方案 B 的系统性上限，靠窗口压缩 + 兜底把概率压到极低。
+
+---
+
+## 7. 引擎重构（`apps/desktop/src/main/webview-engine.ts`）
+
+把 `runDoubaoGeneration`（:856）拆成三段：
+
+### 7.1 `prepareSession(options)`
+
+cookie/storage 注入 → 打开页面 → 登录检查 → 风控探针 → 等视频 tab → 进入。失败 destroy 返回错误。即现 :873~:1046 的部分。
+
+### 7.2 `collectResult(win, conversationId?, timeoutSec)`
+
+- 有 convId：`win.loadURL('https://www.doubao.com/chat/<convId>?channel=RSX4N')` 硬导航到该会话（partition 保留会话、UA 一致），等 SPA 渲染 + 登录检查；
+- 无 convId（blind-collect）：沿用当前页面即可；
+- **收集轮询**：复用现有 while 循环（:1164~:1233）逻辑——`extractResultScript` 找 `<video>`/mp4/「你的视频生成好了」，`hasDone` 时 `clickVideoCardScript`（:419）点击卡片挂载视频元素再抽 URL；**完整复用 risk-verify/limit/blocked 处理**（:1178~:1211）；
+- 返回 `{ found, videoUrl, posterUrl }` 或超时 `found:false`。
+
+collect/found 结果走与正常成功路径一致的 `finalizeJob`（下载 → 扣费 → success）。
+
+### 7.3 `submitAndPoll(win, options)`
+
+设时长 → 填 prompt → 提交 → 轮询（现 :1048 之后）。轮询中顺带采集 convId / async_task ack 上报。
+
+### 7.4 组装
+
+```text
+runDoubaoGeneration :=
+  prepareSession
+  → collectFirst && conversationId ? collectResult(convId) : skip
+  → found ? 返回结果 : submitAndPoll（建新会话，上报新 convId）
+```
+
+---
+
+## 8. dispatch / reconcile 集成
+
+### 8.1 `dispatch.ts`
+
+- 把 `runGenerate` 尾部「下载 → 扣费 → 回写 success/failed」（:350-438）抽成共享的 `finalizeJob(jobId, result, input)`；
+- `runGenerate` 与新的 `resumeJob(job)` 共用；`resumeJob` 从 row 反序列化 `GenerateInput`（prompt / options / account_id 优先），带 `collectFirst:true` + `conversationId`；
+- onProgress 里落 `options.conversationId` / `options.submittedAt`（仅变化时写）。
+
+### 8.2 `apps/desktop/src/main/index.ts`
+
+扩展 `dispatch:reconcile`（或独立 `dispatch:resume`，更解耦），流程：
+
+1. 查 `status in (pending, running)` 且 `created_at >= now-24h` 的任务（**恢复窗口**，避免把陈年任务翻出来烧今天的额度）；
+2. 串行 `resumeJob`，事件走 `job:event`；
+3. **窗口外**旧任务才打 failed（替换现在无条件 >10min 打 failed 的 `:260-270`）。
+
+### 8.3 渲染层（`apps/desktop/src/renderer/src/components/Dashboard.tsx`）
+
+- reconcile effect（:135）追加 resume 调用，完成后 `reloadJobs()`；
+- 可选：恢复期间提示「恢复上次未完成任务…」。
+
+### 8.4 防重入（必须）
+
+1. `app.requestSingleInstanceLock()`——现在没有，双实例会双恢复双扣费；
+2. 主进程 in-memory `Set` 记录正在恢复的 jobId（单飞）；
+3. 状态回写前置条件：仅当 job 仍为 `pending/running` 才 update（乐观 CAS，防并发双扣）；
+4. 恢复与用户手动生成并发 → 同分区双 WebView 有风控风险，建议主进程串行 dispatch。
+
+---
+
+## 9. 风险与必须实测的验证清单
+
+方案 B 的脆弱性集中在「豆包能否恢复同一会话」，验证清单：
+
+1. **同账号同 partition 重新打开 `/chat/<convId>`，视频结果卡能否恢复出来**——整个方案成立的前提，必须先手工验证（`apps/desktop/scripts/doubao-e2e-test.cjs` 有现成 harness）；
+2. convId 是否每账号每 skill 独立、有无过期/清理机制（会话太久可能被服务端回收）；
+3. 收集轮询里 `hasDone` 文案与卡片点击在「历史会话页面」是否仍适用；
+4. `?channel=RSX4N` 参数是否必需——建议只拼 convId 路径，实际验证；
+5. 若豆包打开旧会话是「只读空壳」（不自动挂载视频元素），能否靠 `clickVideoCardScript` 兜底；`extractResultScript` 的 mp4s 是全 DOM 扫描，兜底面大；
+6. 服务端段时长：确认豆包点数在「接单」（async_task）而非「完成」时扣除，以校准 submittedAt 语义。
+
+---
+
+## 10. 改动文件清单
+
+| 文件 | 改动 |
+|---|---|
+| `apps/desktop/src/main/webview-engine.ts` | 拆 `prepareSession / collectResult / submitAndPoll`；提取脚本返回 url/convId；提交后立刻读 URL/risk；轮询收集复用风控/卡片逻辑 |
+| `apps/desktop/src/main/dispatch.ts` | onProgress 落 `options.conversationId` / `submittedAt`；抽 `finalizeJob`；新增 `resumeJob` |
+| `apps/desktop/src/main/index.ts` | 恢复入口（reconcile 或独立 resume）+ 单实例锁 + 单飞 |
+| `apps/desktop/src/preload/index.ts` | `dispatch.resume` 类型/透传（若独立 IPC） |
+| `apps/desktop/src/renderer/src/components/Dashboard.tsx` | 挂载时调用 resume + `reloadJobs` |
+| DB | 无需改表（全部进 `jobs.options` JSONB） |
+
+---
+
+## 11. 实施顺序建议
+
+1. **地基**（低风险，先做）：dispatch 抽 `finalizeJob` + 落 `submittedAt`/`conversationId` + 单实例锁 + 防重入；
+2. **方案 A 恢复**：`resumeJob` 走重提交路径 + reconcile 窗口化，快速解决「排队中不恢复」；
+3. **实测验证集**：第 9 节清单 1/2/4 —— 决定方案 B 是否成立；
+4. **方案 B 收集**：引擎拆段 + `collectResult` + 恢复状态矩阵分流（含 blind-collect 兜底）。

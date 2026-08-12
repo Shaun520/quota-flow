@@ -22,6 +22,7 @@ const VIP = false
 
 /** 生成阶段 → 用户可见文案 */
 const STAGE_LABEL: Record<string, string> = {
+  pending: '正在创建任务…',
   'select-account': '选择账号中…',
   'inject-cookies': '注入登录态…',
   'open-page': '打开豆包页面…',
@@ -39,6 +40,18 @@ const STAGE_LABEL: Record<string, string> = {
   'account-failed': '当前账号失败，尝试切换…',
   blocked: '豆包拒绝了本次生成（见左侧错误）'
 }
+
+/** 进入这些阶段说明提示词已发送，不能再终止生成 */
+const SUBMITTED_STAGES = new Set([
+  'submit',
+  'submit-img2video',
+  'submit-verify',
+  'submit-verify-fallback',
+  'waiting',
+  'risk-verify',
+  'risk-resolved',
+  'blocked'
+])
 
 interface DashboardProps {
   fresh: boolean
@@ -69,6 +82,9 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [genError, setGenError] = useState<string | null>(null)
   const [genFailed, setGenFailed] = useState(false)
   const [genStage, setGenStage] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState(false)
+  const submittedRef = useRef(false)
+  const cancellingRef = useRef(false)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const activeJobIdRef = useRef<string | null>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
@@ -116,9 +132,15 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   useEffect(() => {
     return window.api.dispatch.onEvent((ev: { jobId?: string; status?: string; stage?: string; message?: string }) => {
       if (ev.status === 'success' || ev.status === 'failed') reloadJobs()
+      // 运行期间捕获任务 id（dispatch.generate 结束才返回，这里从进度事件里拿）
+      if (ev.status === 'running' && ev.jobId && !activeJobIdRef.current) {
+        activeJobIdRef.current = ev.jobId
+      }
       // 只处理当前任务的事件，避免历史任务事件误伤
       if (activeJobIdRef.current && ev.jobId && ev.jobId !== activeJobIdRef.current) return
-      if (ev.status === 'running' && ev.stage) {
+      if (ev.status === 'pending') {
+        setGenStage('pending')
+      } else if (ev.status === 'running' && ev.stage) {
         setGenStage(ev.stage)
       } else if (ev.status === 'failed') {
         setGenError(ev.message || '生成失败')
@@ -233,6 +255,8 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     setGenFailed(false)
     setGenStage(null)
     activeJobIdRef.current = null // 上一轮残留的任务 id 会过滤掉本轮进度事件，必须重置
+    submittedRef.current = false
+    cancellingRef.current = false
     setGenerating(true)
     try {
       const auth = getAuthService()
@@ -281,8 +305,42 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       setGenFailed(true)
     } finally {
       setGenerating(false)
+      setCancelling(false)
+      cancellingRef.current = false
+      submittedRef.current = false
     }
   }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
+
+  /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
+  const handleCancel = useCallback(async (): Promise<void> => {
+    if (cancelling || cancellingRef.current) return
+    if (submittedRef.current) {
+      setGenError('提示词已发送，无法终止')
+      return
+    }
+    cancellingRef.current = true
+    setCancelling(true)
+    try {
+      // 事件未捕获到 jobId 时也按「当前唯一活跃任务」取消；准备窗口由主进程待取消标志兜底
+      const res = await window.api.dispatch.cancel(activeJobIdRef.current ?? undefined)
+      if (res.ok) {
+        // 取消已受理：保持「正在终止…」直到本任务结束（handleGenerate finally 复位）
+        return
+      }
+      if (res.submitted) {
+        submittedRef.current = true
+        setGenError(res.reason || '提示词已发送，无法终止')
+      } else if (res.reason && res.reason !== '任务不存在或已结束') {
+        setGenError(res.reason)
+      }
+      setCancelling(false)
+      cancellingRef.current = false
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e))
+      setCancelling(false)
+      cancellingRef.current = false
+    }
+  }, [cancelling])
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
@@ -482,11 +540,22 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             )}
             <button
               className="btn-primary"
-              disabled={generating}
-              onClick={() => void handleGenerate()}
+              disabled={generating && cancelling}
+              onClick={() => {
+                if (generating) void handleCancel()
+                else void handleGenerate()
+              }}
             >
               <IconPlay size={14} />
-              {generating ? '生成中…' : genFailed ? '重新生成' : '开始生成'}
+              {generating
+                ? cancelling
+                  ? '正在终止…'
+                  : submittedRef.current || (genStage && SUBMITTED_STAGES.has(genStage))
+                    ? '生成中…'
+                    : '停止生成'
+                : genFailed
+                  ? '重新生成'
+                  : '开始生成'}
             </button>
             <div className="cost-estimate">
               <IconInfo size={12} />

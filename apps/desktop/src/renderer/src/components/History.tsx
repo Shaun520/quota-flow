@@ -11,6 +11,7 @@ function badgeFor(status: string): string {
   if (status === '成功') return 'badge-success'
   if (status === '排队') return 'badge-pending'
   if (status === '失败') return 'badge-error'
+  if (status === '意外中断') return 'badge-error'
   return 'badge-muted'
 }
 
@@ -18,6 +19,7 @@ function previewLabel(status: string): string {
   if (status === '失败') return '失败'
   if (status === '排队') return '生成中'
   if (status === '未生成') return '未生成'
+  if (status === '意外中断') return '中断'
   return '预览'
 }
 

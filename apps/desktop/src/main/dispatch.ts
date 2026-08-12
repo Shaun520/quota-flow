@@ -148,7 +148,8 @@ function downloadVideo(url: string, jobId: string, redirects = 0): Promise<strin
 
 export async function runGenerate(
   input: GenerateInput,
-  emit: (event: DispatchEvent) => void
+  emit: (event: DispatchEvent) => void,
+  onJobCreated?: (jobId: string, state: { aborted: boolean; submitted: boolean }) => void
 ): Promise<{ ok: boolean; jobId?: string; error?: string }> {
   if (!input.supabaseUrl || !input.supabaseAnonKey) {
     return { ok: false, error: 'Supabase 未配置' }
@@ -165,6 +166,8 @@ export async function runGenerate(
   }
   const jobSvc = new JobService(client)
   const providerSvc = new ProviderService(client)
+  // 取消/已提交状态：由主进程注册表持有引用，IPC 侧可标记 aborted，引擎提交后置 submitted
+  const runCancelState: { aborted: boolean; submitted: boolean } = { aborted: false, submitted: false }
 
   let job
   try {
@@ -179,6 +182,7 @@ export async function runGenerate(
   }
   if (!job) return { ok: false, error: '创建任务失败' }
   emit({ jobId: job.id, status: 'pending', message: '任务已创建' })
+  onJobCreated?.(job.id, runCancelState)
 
   // 1) 选号 + 解析 cookie：默认账号优先 → 剩余额度预检 → 失败自动换号（有界）
   const cost = doubaoCost(input.durationSec)
@@ -301,6 +305,17 @@ export async function runGenerate(
           accountId: cand.id,
           options: { ...jobOptions, accountId: cand.id, accountName: cand.account_name }
         })
+        // 任务注册后、进入引擎前已被取消 → 直接返回中断结果
+        if (runCancelState.aborted) {
+          result = {
+            ok: false,
+            providerId: 'doubao',
+            cancelled: true,
+            error: '已手动终止生成（提示词未发送）',
+            attempts: []
+          }
+          break
+        }
         result = await runDoubaoGeneration({
           cookies: c,
           localStorage: s,
@@ -313,12 +328,30 @@ export async function runGenerate(
           ratio: input.ratio,
           images,
           keyId: cand.id,
+          cancel: runCancelState,
           showWebview: input.showWebview,
           onProgress: (stage, detail) =>
             emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
         })
         if (result.ok && result.videoUrl) break
         lastError = result.error || '生成失败'
+        // 用户手动终止（提示词未发送）：标记为意外中断，不再换号
+        if (result.cancelled) {
+          try {
+            await jobSvc.updateJob(input.userId, job.id, {
+              status: 'interrupted',
+              error: '已手动终止生成（提示词未发送）',
+              options: jobOptions,
+              completedAt: new Date().toISOString()
+            })
+          } catch {}
+          emit({
+            jobId: job.id,
+            status: 'failed',
+            message: '已手动终止生成（提示词未发送）'
+          })
+          return { ok: false, jobId: job.id, error: '已手动终止生成（提示词未发送）' }
+        }
         // 内容政策拒绝（侵权/肖像/版权）：与账号无关，不再切换账号重试
         if (result.blocked) {
           emit({

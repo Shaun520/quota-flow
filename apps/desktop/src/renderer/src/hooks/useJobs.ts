@@ -26,7 +26,8 @@ const STATUS_MAP: Record<string, HistoryStatus> = {
   failed: '失败',
   pending: '排队',
   running: '排队',
-  not_generated: '未生成'
+  not_generated: '未生成',
+  interrupted: '意外中断'
 }
 
 export interface JobItem {

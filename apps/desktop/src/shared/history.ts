@@ -1,6 +1,6 @@
 // 桌面端历史记录模块共享类型（main / preload / renderer 三端共用，避免重复定义）
 
-export type HistoryStatus = '成功' | '排队' | '失败' | '未生成'
+export type HistoryStatus = '成功' | '排队' | '失败' | '未生成' | '意外中断'
 
 export interface JobRecord {
   at: string // ISO 时间戳

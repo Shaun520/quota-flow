@@ -477,7 +477,7 @@ export class ProviderService {
 
 /* ================= 生成任务历史（P2：数据库为真相源） ================= */
 
-export type JobStatus = 'pending' | 'running' | 'success' | 'failed' | 'not_generated'
+export type JobStatus = 'pending' | 'running' | 'success' | 'failed' | 'not_generated' | 'interrupted'
 
 export interface JobRow {
   id: string

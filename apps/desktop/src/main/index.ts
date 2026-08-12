@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
@@ -8,6 +8,18 @@ import { initProviders } from './providers'
 import { initCookieRenew } from './cookie-renew'
 import { runGenerate } from './dispatch'
 import type { DispatchEvent } from './dispatch'
+
+/** 活跃生成任务注册表：jobId → 取消/已提交状态（用于「终止生成」与「关闭确认」） */
+interface ActiveRunState {
+  aborted: boolean
+  submitted: boolean
+}
+const activeRuns = new Map<string, ActiveRunState>()
+let allowClose = false
+/** 是否有生成在跑（含任务注册前的准备窗口） */
+let isGenerating = false
+/** 任务注册前用户已点停止 → 注册后立即置 aborted */
+let pendingCancel = false
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
 
 // 禁用 GPU 硬件加速：Windows 上 Chromium 合成器在频繁重绘（如快速点击 tab 切换页面）时
@@ -152,6 +164,27 @@ function createWindow(): void {
   win.on('ready-to-show', () => win.show())
   win.on('maximize', () => win.webContents.send('window:maximize-changed', true))
   win.on('unmaximize', () => win.webContents.send('window:maximize-changed', false))
+  // 生成进行中关闭 → 弹确认框，避免误关导致生成意外中断
+  win.on('close', (e) => {
+    if (allowClose || activeRuns.size === 0) return
+    e.preventDefault()
+    void dialog
+      .showMessageBox(win, {
+        type: 'warning',
+        title: '视频正在生成',
+        message: '当前有视频正在生成，关闭应用将中断生成。确定要关闭吗？',
+        buttons: ['取消', '确认关闭'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      })
+      .then(({ response }) => {
+        if (response === 1) {
+          allowClose = true
+          win.close()
+        }
+      })
+  })
   initWebviewTest(win)
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -219,8 +252,17 @@ app.whenReady().then(() => {
     const emit = (ev: DispatchEvent): void => {
       if (!e.sender.isDestroyed()) e.sender.send('job:event', ev)
     }
+    let registeredJobId: string | null = null
+    isGenerating = true
+    pendingCancel = false
     try {
-      return await runGenerate(input, emit)
+      return await runGenerate(input, emit, (jobId, state) => {
+        registeredJobId = jobId
+        activeRuns.set(jobId, state)
+        // 准备窗口用户已点停止 → 任务一注册立即标记取消
+        if (pendingCancel) state.aborted = true
+        pendingCancel = false
+      })
     } catch (err) {
       // 主进程抛出任意值（如 Supabase PostgrestError 对象）时规范化为可读信息，
       // 避免 Electron 序列化成 [object Object] 导致 UI 看不到真实原因
@@ -231,7 +273,35 @@ app.whenReady().then(() => {
             ? String((err as { message?: unknown }).message ?? JSON.stringify(err))
             : String(err)
       throw new Error(msg || '生成失败（未知错误）')
+    } finally {
+      if (registeredJobId) activeRuns.delete(registeredJobId)
+      isGenerating = false
+      pendingCancel = false
     }
+  })
+
+  ipcMain.handle('dispatch:cancel', (_e, jobId: unknown) => {
+    // 优先按 jobId 定位；未匹配时回退到当前唯一活跃任务（渲染层事件丢失时也能停）
+    let state: ActiveRunState | undefined
+    if (typeof jobId === 'string' && jobId && activeRuns.has(jobId)) {
+      state = activeRuns.get(jobId)
+    } else if (activeRuns.size === 1) {
+      const only = activeRuns.keys().next().value as string
+      state = activeRuns.get(only)
+    } else if (activeRuns.size > 1) {
+      return { ok: false, reason: '存在多个进行中的任务，请稍后再试' }
+    }
+    if (!state) {
+      // 生成已开始但任务尚未注册（准备窗口）→ 记待取消，注册后立即生效
+      if (isGenerating) {
+        pendingCancel = true
+        return { ok: true }
+      }
+      return { ok: false, reason: '任务不存在或已结束' }
+    }
+    if (state.submitted) return { ok: false, reason: '提示词已发送，无法终止', submitted: true }
+    state.aborted = true
+    return { ok: true }
   })
 
   // reconciliation：启动时恢复崩溃残留 + 追记账本
@@ -249,24 +319,21 @@ app.whenReady().then(() => {
       const providerSvc = new ProviderService(client)
       let recovered = false
 
-      // 1. 恢复崩溃残留：status='running' 且超时（>10min）→ 标记 failed
+      // 1. 恢复崩溃残留：上次会话遗留的 pending/running → 标记「意外中断」（不做自动恢复）
       const { data: stuckJobs } = await client
         .from('jobs')
         .select('id, created_at')
         .eq('user_id', params.userId)
-        .eq('status', 'running')
+        .in('status', ['pending', 'running'])
         .order('created_at', { ascending: false })
         .limit(20)
       for (const j of (stuckJobs ?? [])) {
-        const ageMs = Date.now() - new Date(j.created_at).getTime()
-        if (ageMs > 10 * 60 * 1000) {
-          await jobSvc.updateJob(params.userId, j.id, {
-            status: 'failed',
-            error: '应用异常退出，任务中断',
-            completedAt: new Date().toISOString()
-          })
-          recovered = true
-        }
+        await jobSvc.updateJob(params.userId, j.id, {
+          status: 'interrupted',
+          error: '应用意外退出，生成中断',
+          completedAt: new Date().toISOString()
+        })
+        recovered = true
       }
 
       // 2. 追记未入账的成功任务（单 RPC 原子：检查→扣减→finalize 同一事务）

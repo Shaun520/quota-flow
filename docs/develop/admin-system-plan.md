@@ -1,0 +1,417 @@
+# Quota-Flow 后台管理系统（apps/admin）开发方案
+
+> 本文档基于 REQUIREMENTS.md §13、README.md、docs/prototype/admin.html 原型，以及现有 migrations/ 数据库迁移，制定 apps/admin 的完整开发方案。
+
+---
+
+## 1. 现状分析
+
+### 1.1 需求来源
+
+| 文档 | 核心内容 |
+|---|---|
+| **README.md** | `apps/admin` 是后台管理（开源，运营者用，含消耗表编辑器），部署在 Vercel，连官方 Supabase，加 IP 白名单 + TOTP + 操作审计 |
+| **REQUIREMENTS.md §13** | 6 大功能模块的详细需求（团队用户/订阅/Provider+消耗表/监控/安全合规/公告） |
+| **docs/prototype/admin.html** | 3754 行完整 UI 原型，定义了 8 个页面的布局、组件、交互 |
+
+### 1.2 当前 apps/admin 状态
+
+- `apps/admin/package.json`：只有名称和版本（0.1.0，private），**无任何依赖、无 Next.js、无 React 配置**
+- `apps/admin/src/index.ts`：仅 `export {}`，**完全未开发**
+- Monorepo 中 import 路径约定：引用一律用 `workspace:*`
+
+### 1.3 原型中定义的 8 个页面
+
+| 导航项 | 页面 ID | 功能 |
+|---|---|---|
+| 系统监控 | `page-dashboard` | KPI 卡（活跃团队/用户/调用量/响应时长）、调用量趋势图（7/30/90天）、厂商健康状态、Supabase 用量、活跃告警 |
+| 团队管理 | `page-teams` | 团队列表（订阅档/成员数/用量/到期/状态）、筛选器、详情/重置额度/封禁/解封 |
+| 用户管理 | `page-users` | 用户列表（所属团队/角色/消费/状态）、筛选器、详情/封禁/解封、导出 CSV |
+| 订阅管理 | `page-subscriptions` | 手动开通订阅 Modal、订阅记录列表、支付记录登记 |
+| Provider 管理 | `page-providers` | 7 家厂商卡片（全局启用开关、单位、等效除数、日额度、成功率）、编辑 |
+| 消耗表编辑器 | `page-cost-tables` | 按厂商选择、规则表格（模式/时长区间/分辨率/模型/成本/除数/显示文本）、增删改、导入/导出 JSON、保存发布 |
+| 安全与合规 | `page-security` | 异常行为检测、内容审核队列、隐私合规 |
+| 审计日志 | `page-audit` | 操作记录列表（key 绑定/订阅变更/团队封禁/额度重置等）、类型与时间筛选 |
+| 公告通知 | `page-announcements` | 公告列表、发布公告 Modal（全部/指定团队） |
+
+### 1.4 已有数据库基础（migrations/）
+
+**已存在的表**（6 个迁移文件）：
+
+| 迁移 | 表 | 状态 |
+|---|---|---|
+| 0001_providers.sql | `teams` / `team_members` / `team_invitations` / `providers` / `provider_keys` / `quota_ledger` | ✅ |
+| 0002_account_fingerprint.sql | `provider_keys.account_fingerprint` | ✅ |
+| 0003_jobs.sql | `jobs` | ✅ |
+| 0004_account_default.sql | `provider_keys.is_default` | ✅ |
+| 0004_quota_ledger_index.sql | `quota_ledger` 索引 | ✅ |
+| 0005_quota_consistency.sql | `quota_ledger.reserved` / `quota_operations` | ✅ |
+| 0006_quota_rpc.sql | RPC 函数（atomic_consume_ledger 等） | ✅ |
+
+**后台管理需要但缺失的表**（需求文档 §5.7 定义）：
+
+| 缺失表 | 用途 |
+|---|---|
+| `subscriptions` | 订阅记录（手动开通） |
+| `provider_cost_tables` | 消耗表（README 已提到但迁移中缺失） |
+| `member_usage` | 成员当日消费 |
+| `announcements` | 系统公告 |
+| `audit_logs` | 审计日志 |
+| `profiles` | 用户扩展信息（含 is_admin 标记） |
+
+**字段缺失**：
+- `providers` 表缺少 `equivalent_count_divisor` 字段
+- `provider_keys` 表缺少 `daily_quota`、`equivalent_count_divisor` 字段
+
+---
+
+## 2. 技术选型
+
+基于项目现有技术栈（README §5.6 / REQUIREMENTS §5.6 已锁定）：
+
+| 项 | 选择 | 理由 |
+|---|---|---|
+| 框架 | **Next.js 14+ (App Router) + TypeScript** | 需求明确 Next.js；App Router 用 ESM 与 monorepo 兼容 |
+| 样式 | **Tailwind CSS**（对齐原型设计 token） | 项目 README 已选 Tailwind；原型是纯 CSS 可转换 |
+| 图表 | **Recharts**（轻量 React 图表库） | 调用量趋势、厂商健康等图表需求 |
+| 状态 | **TanStack Query + Zustand** | 服务端数据缓存 + 全局 UI 状态 |
+| 数据访问 | **@supabase/supabase-js**（直连 Supabase，走 RLS） | 项目已锁定 Supabase |
+| 认证 | **@supabase/auth-helpers-nextjs**（服务端 session） | admin 需要独立登录页，与桌面端 Auth 分离 |
+| 表单 | **React Hook Form + Zod** | 消耗表编辑器、订阅开通等复杂表单 |
+| 日志/审计 | 写 `audit_logs` 表 | 每次 admin 操作写审计 |
+| 部署 | **Vercel**（独立项目，独立域名） | 项目已锁定 |
+
+---
+
+## 3. 数据库迁移设计（新增 0007_admin_tables.sql）
+
+### 3.1 新增表
+
+```sql
+-- ============ 1. profiles（用户扩展信息） ============
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  display_name TEXT,
+  avatar_url TEXT,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,  -- admin 后台权限标记
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============ 2. subscriptions（订阅记录） ============
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  plan TEXT NOT NULL,                       -- free / team_free / pro / business
+  seats INTEGER NOT NULL DEFAULT 3,
+  status TEXT NOT NULL DEFAULT 'active',    -- active / expired / cancelled
+  current_period_start TIMESTAMPTZ,
+  current_period_end TIMESTAMPTZ,
+  payment_method TEXT,                      -- wechat / alipay / bank / free
+  payment_note TEXT,                        -- 备注
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============ 3. provider_cost_tables（消耗表） ============
+CREATE TABLE IF NOT EXISTS provider_cost_tables (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL,                       -- text2video / img2video / ...
+  duration_min INTEGER,
+  duration_max INTEGER,
+  resolution TEXT,
+  model TEXT,
+  unit_cost NUMERIC NOT NULL,
+  equivalent_count_divisor NUMERIC NOT NULL DEFAULT 1,
+  display_text TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============ 4. member_usage（成员当日消费） ============
+CREATE TABLE IF NOT EXISTS member_usage (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
+  used_equivalent NUMERIC DEFAULT 0,
+  frozen_until TIMESTAMPTZ,
+  UNIQUE (date, team_id, user_id)
+);
+
+-- ============ 5. announcements（系统公告） ============
+CREATE TABLE IF NOT EXISTS announcements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT 'all',       -- all / team
+  team_id UUID NULL REFERENCES teams(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============ 6. audit_logs（审计日志） ============
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_user_id UUID NOT NULL,
+  action TEXT NOT NULL,                     -- key.bind / sub.update / team.ban / quota.reset / cost.update ...
+  target TEXT,                              -- 目标对象描述
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### 3.2 字段补充
+
+```sql
+-- providers 表补字段
+ALTER TABLE providers ADD COLUMN IF NOT EXISTS equivalent_count_divisor NUMERIC DEFAULT 1;
+
+-- provider_keys 表补字段
+ALTER TABLE provider_keys ADD COLUMN IF NOT EXISTS daily_quota NUMERIC;
+ALTER TABLE provider_keys ADD COLUMN IF NOT EXISTS equivalent_count_divisor NUMERIC DEFAULT 1;
+```
+
+### 3.3 消耗表初始数据（provider_cost_tables）
+
+| provider_id | mode | duration_min | duration_max | resolution | model | unit_cost | divisor | display_text |
+|---|---|---|---|---|---|---|---|---|
+| doubao | text2video | 1 | 5 | 480p | default | 1 | 1 | 豆包 5s 480p = 1次 |
+| doubao | text2video | 6 | 10 | 480p | default | 2 | 1 | 豆包 10s 480p = 2次 |
+| doubao | img2video | 1 | 5 | 480p | default | 1 | 1 | 豆包图生 5s 480p = 1次 |
+| jimeng | text2video | 1 | 5 | 720p | default | 80 | 80 | 即梦 5s 720p = 80灵感值 |
+| jimeng | text2video | 6 | 10 | 720p | default | 160 | 80 | 即梦 10s 720p = 160灵感值 |
+| jimeng | img2video | 1 | 5 | 720p | default | 80 | 80 | 即梦图生 5s 720p = 80灵感值 |
+| qwenwan | text2video | 1 | 10 | 720p | default | 1 | 1 | 通义万相 10s 内 = 1次 |
+| yuanbao | text2video | 1 | 10 | 720p | default | 1 | 1 | 元宝 10s 内 = 1次 |
+| kling | text2video | 1 | 5 | 720p | default | 5 | 5 | 可灵 5s 720p = 5积分 |
+| kling | text2video | 1 | 5 | 1080p | default | 10 | 5 | 可灵 5s 1080p = 10积分 |
+| hailuo | text2video | 1 | 10 | 720p | default | 1 | 1 | 海螺 10s 内 = 1次 |
+| mathmind | img2video | 1 | 10 | 720p | default | 1 | 1 | mathmind = 1次 |
+
+### 3.4 RLS 策略
+
+- `profiles`：本人可读，admin 可写
+- `subscriptions`：团队成员可读，admin 可写
+- `provider_cost_tables`：全员只读（authenticated），admin 可写
+- `member_usage`：团队成员可读，admin 可写
+- `announcements`：全员可读，admin 可写
+- `audit_logs`：仅 admin 可读
+
+---
+
+## 4. 工程结构设计
+
+### 4.1 apps/admin 目录结构
+
+```
+apps/admin/
+├── package.json
+├── next.config.mjs
+├── tailwind.config.ts
+├── tsconfig.json
+├── .env.example
+├── vercel.json
+└── src/
+    ├── middleware.ts                    # 路由守卫（未登录跳 /login）
+    ├── app/
+    │   ├── layout.tsx                   # 根布局
+    │   ├── page.tsx                     # 重定向到 /dashboard
+    │   ├── login/
+    │   │   └── page.tsx                 # 登录页（Supabase Auth）
+    │   └── (dashboard)/
+    │       ├── layout.tsx               # Sidebar + TopHeader 布局
+    │       ├── dashboard/page.tsx       # 系统监控
+    │       ├── teams/page.tsx           # 团队管理
+    │       ├── users/page.tsx           # 用户管理
+    │       ├── subscriptions/page.tsx   # 订阅管理
+    │       ├── providers/page.tsx       # Provider 管理
+    │       ├── cost-tables/page.tsx     # 消耗表编辑器
+    │       ├── security/page.tsx        # 安全与合规
+    │       ├── audit/page.tsx           # 审计日志
+    │       └── announcements/page.tsx   # 公告通知
+    ├── components/
+    │   ├── layout/
+    │   │   ├── Sidebar.tsx
+    │   │   ├── TopHeader.tsx
+    │   │   └── AdminProfile.tsx
+    │   ├── ui/
+    │   │   ├── Card.tsx
+    │   │   ├── KpiCard.tsx
+    │   │   ├── Table.tsx
+    │   │   ├── Badge.tsx
+    │   │   ├── Toggle.tsx
+    │   │   ├── Modal.tsx
+    │   │   ├── Toast.tsx
+    │   │   ├── Pagination.tsx
+    │   │   ├── FilterBar.tsx
+    │   │   └── EmptyState.tsx
+    │   ├── dashboard/
+    │   │   ├── KpiGrid.tsx
+    │   │   ├── CallTrendChart.tsx
+    │   │   ├── ProviderHealthList.tsx
+    │   │   ├── SupabaseUsage.tsx
+    │   │   └── ActiveAlerts.tsx
+    │   ├── teams/
+    │   │   ├── TeamTable.tsx
+    │   │   ├── TeamDetailModal.tsx
+    │   │   └── TeamFilters.tsx
+    │   ├── users/
+    │   │   ├── UserTable.tsx
+    │   │   └── UserFilters.tsx
+    │   ├── subscriptions/
+    │   │   ├── SubscriptionTable.tsx
+    │   │   ├── CreateSubscriptionModal.tsx
+    │   │   └── PaymentTable.tsx
+    │   ├── providers/
+    │   │   ├── ProviderCard.tsx
+    │   │   ├── ProviderGrid.tsx
+    │   │   └── EditProviderModal.tsx
+    │   ├── cost-tables/
+    │   │   ├── CostTableEditor.tsx
+    │   │   ├── CostRuleRow.tsx
+    │   │   ├── AddRuleModal.tsx
+    │   │   └── JsonImportExport.tsx
+    │   ├── security/
+    │   │   ├── AnomalyList.tsx
+    │   │   ├── ContentReviewQueue.tsx
+    │   │   └── PrivacyCompliance.tsx
+    │   ├── audit/
+    │   │   ├── AuditLogList.tsx
+    │   │   └── AuditFilters.tsx
+    │   └── announcements/
+    │       ├── AnnouncementList.tsx
+    │       └── CreateAnnouncementModal.tsx
+    ├── hooks/
+    │   ├── useTeams.ts
+    │   ├── useUsers.ts
+    │   ├── useSubscriptions.ts
+    │   ├── useProviders.ts
+    │   ├── useCostTables.ts
+    │   ├── useAuditLogs.ts
+    │   ├── useAnnouncements.ts
+    │   └── useDashboard.ts
+    ├── lib/
+    │   ├── supabase/
+    │   │   ├── client.ts               # 浏览器端 client
+    │   │   └── server.ts               # 服务端 client
+    │   ├── api/
+    │   │   ├── teams.ts
+    │   │   ├── users.ts
+    │   │   ├── subscriptions.ts
+    │   │   ├── providers.ts
+    │   │   ├── cost-tables.ts
+    │   │   ├── audit.ts
+    │   │   └── announcements.ts
+    │   └── utils/
+    │       ├── format.ts               # 日期/数字格式化
+    │       └── audit.ts                # 写审计日志工具
+    └── types/
+        └── index.ts                    # 类型定义
+```
+
+### 4.2 设计 Token（对齐原型）
+
+```css
+:root {
+  --color-primary: #1E40AF;
+  --color-on-primary: #FFFFFF;
+  --color-secondary: #3B82F6;
+  --color-accent: #D97706;
+  --color-background: #F8FAFC;
+  --color-foreground: #1E3A8A;
+  --color-muted: #E9EEF6;
+  --color-border: #DBEAFE;
+  --color-destructive: #DC2626;
+  --color-success: #059669;
+  --color-warning: #D97706;
+  --color-info: #3B82F6;
+  --font-sans: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Fira Code', 'SF Mono', monospace;
+}
+```
+
+---
+
+## 5. 开发阶段规划
+
+### 阶段 1：基础设施 + 数据库补齐（P0）
+
+1. **数据库迁移**：新增 `migrations/0007_admin_tables.sql`（补齐 6 张表 + 字段 + 初始数据 + RLS）
+2. **apps/admin 工程初始化**：
+   - `package.json`：加 next/react/react-dom/@supabase/supabase-js 等依赖
+   - Next.js App Router 结构 + Middleware 路由守卫
+   - Tailwind CSS 配置（对齐设计 token）
+   - `.env.example`：`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. **登录页**：Supabase Auth 邮箱登录 + `profiles.is_admin` 校验
+4. **布局**：Sidebar（8 导航项）+ TopHeader + 移动端适配
+
+### 阶段 2：核心页面（P0）
+
+按原型逐页实现（对齐 admin.html 的设计 token）：
+
+| 页面 | 核心组件 | 数据来源 |
+|---|---|---|
+| Dashboard | KPI 卡 + Recharts 趋势图 + 厂商健康 + Supabase 用量 + 告警 | `quota_ledger` / `jobs` / `providers` 聚合 |
+| 团队管理 | 筛选 + 表格 + 详情 Modal + 重置额度/封禁 | `teams` / `team_members` / `subscriptions` |
+| 用户管理 | 筛选 + 表格 + 封禁/解封 | `profiles` / `team_members` / `jobs` |
+| Provider 管理 | 7 家厂商卡片 + 编辑 Modal | `providers` |
+| 消耗表编辑器 | 厂商选择 + 规则表格 + 增删改 + 导入/导出 JSON | `provider_cost_tables` |
+
+### 阶段 3：数据接入 + 业务逻辑（P1）
+
+1. **API 层**：每页对应一个数据 hook（TanStack Query）
+2. **关键业务逻辑**：
+   - 消耗表编辑器：CRUD + 保存发布 + 写审计
+   - 手动开通订阅：写 `subscriptions` + 更新 `teams.plan` + 写审计
+   - 重置额度：更新 `quota_ledger`
+   - 封禁/解封：更新状态 + 写审计
+3. **订阅管理页**：套餐分布 KPI + 订阅列表 + 手动开通 Modal + 支付记录
+4. **审计日志页**：操作记录 + 类型/时间筛选 + 导出
+5. **公告通知页**：公告列表 + 发布 Modal
+6. **安全与合规页**：异常行为 + 内容审核 + 隐私合规
+
+### 阶段 4：完善 + 优化（P2）
+
+1. **TOTP 二步验证**
+2. **异常行为检测**（真实算法：高频调用/多账号切换）
+3. **内容审核队列**
+4. **IP 白名单**
+5. **Stripe/微信支付集成**
+6. **部署配置**：`vercel.json` + 环境变量文档
+7. **README 补充**：部署说明、自部署使用说明
+
+---
+
+## 6. 优先级总结
+
+```
+P0（MVP 必需）：
+  ├── 工程初始化（Next.js + Supabase + Tailwind）
+  ├── 数据库迁移 0007（补齐表 + 初始数据）
+  ├── 登录 + 路由守卫
+  ├── Dashboard 系统监控
+  ├── 团队管理 / 用户管理
+  ├── Provider 管理
+  └── 消耗表编辑器 ← 核心功能
+
+P1（第二阶段）：
+  ├── 订阅管理（手动开通）
+  ├── 审计日志
+  ├── 公告通知
+  └── 安全与合规
+
+P2（后续迭代）：
+  ├── TOTP 二步验证
+  ├── 异常行为检测（真实算法）
+  ├── 内容审核队列
+  ├── IP 白名单
+  └── Stripe/微信支付集成
+```
+
+---
+
+## 7. 已确认的决策
+
+1. **admin 登录方式**：Supabase Auth 邮箱密码 + `profiles.is_admin` 标记授权
+2. **消耗表编辑器**：按 `provider_cost_tables` 表结构设计（每行一条规则，按厂商下拉过滤）
+3. **TOTP 二步验证**：MVP 阶段先做"邮箱+密码"，TOTP 后续补
+4. **实现范围**：完整可运行的 Next.js 后台（React 组件 + Supabase 数据接入）
