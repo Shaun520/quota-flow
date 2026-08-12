@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { JobItem, JobsResult } from '../hooks/useJobs'
-import { IconEye, IconFolder, IconTrash } from './icons'
+import { IconEye, IconFolder, IconInfo, IconTrash } from './icons'
 import Pagination from './Pagination'
 import Select from './Select'
 import { VideoThumb } from './VideoThumb'
@@ -47,12 +47,49 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const selectAllRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
+  const [detail, setDetail] = useState<JobItem | null>(null)
+  const [detailImgUrls, setDetailImgUrls] = useState<string[]>([])
+  const [zoomImg, setZoomImg] = useState<string | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const [text, setText] = useState('')
   const [provider, setProvider] = useState('')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
   const [notice, setNotice] = useState<string | null>(null)
+
+  // 打开详情时，把上传图片的本地路径解析成可预览的 http 地址
+  useEffect(() => {
+    if (!detail) {
+      setDetailImgUrls([])
+      return
+    }
+    let cancelled = false
+    const names = detail.record.images
+      .map((p) => p.replace(/\\/g, '/').split('/').pop() || '')
+      .filter(Boolean)
+    Promise.all(
+      names.map((n) => window.api.media.getImageUrl(n).catch(() => null))
+    )
+      .then((urls) => {
+        if (!cancelled) setDetailImgUrls(urls.filter((u): u is string => !!u))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [detail])
+
+  const buildParamItems = (item: JobItem): Array<[string, string]> => {
+    const r = item.record
+    const items: Array<[string, string]> = []
+    const p = r.params
+    if (p?.durationSec) items.push(['时长', `${p.durationSec} 秒`])
+    if (p?.ratio) items.push(['比例', p.ratio])
+    if (p?.audio === 'on') items.push(['配音', '开启'])
+    else if (p?.audio === 'off') items.push(['配音', '关闭'])
+    if (p?.resolution) items.push(['分辨率', `${p.resolution}p`])
+    return items
+  }
 
   const removeJob = async (item: JobItem): Promise<void> => {
     setConfirm({ kind: 'one', item })
@@ -361,6 +398,14 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                         <div className="action-btns">
                           <button
                             className="action-btn"
+                            title="查看详情（提示词/参数/图片）"
+                            aria-label="查看详情"
+                            onClick={() => setDetail(item)}
+                          >
+                            <IconInfo size={12} />
+                          </button>
+                          <button
+                            className="action-btn"
                             title="查看"
                             aria-label="查看"
                             onClick={() => togglePreview(item)}
@@ -453,6 +498,131 @@ export default function History({ jobs }: { jobs: JobsResult }) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 生成详情：提示词 / 参数 / 上传图片 */}
+      {detail && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 300 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setDetail(null) }}
+        >
+          <div
+            className="modal-card"
+            style={{ width: 'min(92vw, 720px)', maxHeight: '86vh', overflow: 'auto', padding: 20 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>生成详情</div>
+              <button className="btn-sm" onClick={() => setDetail(null)}>关闭</button>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 4 }}>提示词</div>
+              <div
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  background: 'rgba(255,255,255,0.05)',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  lineHeight: 1.7,
+                  color: 'var(--fg-primary)'
+                }}
+              >
+                {detail.record.prompt || '—'}
+              </div>
+            </div>
+
+            {buildParamItems(detail).length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>参数</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {buildParamItems(detail).map(([k, v]) => (
+                    <span
+                      key={k}
+                      style={{
+                        padding: '3px 10px',
+                        borderRadius: 999,
+                        background: 'var(--accent-bg)',
+                        fontSize: 12,
+                        color: 'var(--fg-secondary)'
+                      }}
+                    >
+                      {k}：{v}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {detailImgUrls.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>上传图片</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {detailImgUrls.map((u, i) => (
+                    <img
+                      key={i}
+                      src={u}
+                      alt=""
+                      title="点击放大"
+                      onClick={() => setZoomImg(u)}
+                      style={{
+                        width: 96,
+                        height: 96,
+                        objectFit: 'cover',
+                        borderRadius: 8,
+                        cursor: 'zoom-in',
+                        background: '#000'
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            {detailImgUrls.length === 0 && detail.record.mode === '图生视频' && (
+              <div style={{ marginBottom: 14, fontSize: 12, color: 'var(--fg-muted)' }}>
+                上传图片：（该记录未保存图片副本，旧记录无法回显）
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg-muted)' }}>
+              <div style={{ display: 'flex', gap: 12, lineHeight: 1.7 }}>
+                {[
+                  ['厂商', detail.record.provider],
+                  ['账号', detail.record.accountName || '—'],
+                  ['消耗', detail.record.cost],
+                  ['时间', timeAgo(detail.record.at)]
+                ].map(([k, v]) => (
+                  <div key={k} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline' }}>
+                    <span style={{ width: '3.6em', flexShrink: 0, color: 'var(--fg-secondary)' }}>{k}：</span>
+                    <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              {detail.record.errorMessage && (
+                <div style={{ display: 'flex', gap: 0, lineHeight: 1.6 }}>
+                  <span style={{ color: 'var(--fg-secondary)', flexShrink: 0 }}>错误：</span>
+                  <span style={{ color: 'var(--error)', wordBreak: 'break-word', minWidth: 0 }}>{detail.record.errorMessage}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 图片放大浮层 */}
+      {zoomImg && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 400, cursor: 'zoom-out' }}
+          onClick={() => setZoomImg(null)}
+        >
+          <img
+            src={zoomImg}
+            alt=""
+            style={{ maxWidth: '92vw', maxHeight: '88vh', borderRadius: 10, objectFit: 'contain' }}
+          />
         </div>
       )}
     </div>

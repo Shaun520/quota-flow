@@ -13,15 +13,39 @@ import type { DispatchEvent } from './dispatch'
 // 必须在 app ready 之前调用。
 app.disableHardwareAcceleration()
 
-// 本地视频预览服务：127.0.0.1 随机端口，仅提供 userData/videos 下 <uuid>.mp4，支持 Range
+// 本地媒体预览服务：127.0.0.1 随机端口
+//  - 根路径：userData/videos 下 <uuid>.mp4（视频，支持 Range）
+//  - /images/：userData/images 下 <jobId>-<n>.<ext>（图生视频上传的图片副本）
 let mediaPortPromise: Promise<number> | null = null
 
 function startMediaServer(): Promise<number> {
   if (!mediaPortPromise) {
     mediaPortPromise = new Promise((resolve, reject) => {
       const videosDir = join(app.getPath('userData'), 'videos')
+      const imagesDir = join(app.getPath('userData'), 'images')
       const server = createServer((req, res) => {
-        const name = (req.url || '').split('?')[0].replace(/^\//, '')
+        const path = (req.url || '').split('?')[0]
+        if (path.startsWith('/images/')) {
+          const name = path.slice('/images/'.length)
+          if (!/^[0-9a-fA-F-]+-\d+\.(png|jpe?g|gif|webp)$/i.test(name)) {
+            res.writeHead(400)
+            res.end()
+            return
+          }
+          const file = join(imagesDir, name)
+          if (!existsSync(file)) {
+            res.writeHead(404)
+            res.end()
+            return
+          }
+          const ext = (name.split('.').pop() || 'jpg').toLowerCase()
+          const type =
+            ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+          res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' })
+          createReadStream(file).pipe(res)
+          return
+        }
+        const name = path.replace(/^\//, '')
         if (!/^[0-9a-fA-F-]+\.mp4$/.test(name)) {
           res.writeHead(400)
           res.end()
@@ -145,6 +169,14 @@ app.whenReady().then(() => {
     return `http://127.0.0.1:${port}/${name}`
   })
 
+  ipcMain.handle('media:get-image-url', async (_e, name: unknown) => {
+    if (typeof name !== 'string' || !/^[0-9a-fA-F-]+-\d+\.(png|jpe?g|gif|webp)$/i.test(name)) {
+      throw new Error('invalid image name')
+    }
+    const port = await startMediaServer()
+    return `http://127.0.0.1:${port}/images/${name}`
+  })
+
   ipcMain.handle('media:show-in-folder', (_e, filePath: unknown) => {
     if (typeof filePath !== 'string' || !filePath) throw new Error('invalid path')
     // 只允许打开 userData/videos 下的文件，避免 renderer 被诱导打开任意路径
@@ -185,7 +217,19 @@ app.whenReady().then(() => {
     const emit = (ev: DispatchEvent): void => {
       if (!e.sender.isDestroyed()) e.sender.send('job:event', ev)
     }
-    return runGenerate(input, emit)
+    try {
+      return await runGenerate(input, emit)
+    } catch (err) {
+      // 主进程抛出任意值（如 Supabase PostgrestError 对象）时规范化为可读信息，
+      // 避免 Electron 序列化成 [object Object] 导致 UI 看不到真实原因
+      const msg =
+        err instanceof Error
+          ? err.message
+          : err && typeof err === 'object'
+            ? String((err as { message?: unknown }).message ?? JSON.stringify(err))
+            : String(err)
+      throw new Error(msg || '生成失败（未知错误）')
+    }
   })
   initProviders()
   createWindow()

@@ -16,5 +16,9 @@ export interface JobRecord {
   resultUrl: string | null
   /** 本地视频文件绝对路径（生成后落盘 userData/videos/<jobId>.mp4），无本地文件时为 null */
   localPath: string | null
+  /** 生成参数（模式/时长/比例/配音/分辨率），无记录时为 null */
+  params: { mode?: string; durationSec?: number; ratio?: string; audio?: string; resolution?: string } | null
+  /** 上传的本地图片副本路径（userData/images/<jobId>-<n>.<ext>），无图片时为空数组 */
+  images: string[]
   errorMessage: string | null
 }

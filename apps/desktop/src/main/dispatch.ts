@@ -2,7 +2,7 @@
 // + 豆包执行（webview-engine）+ 额度扣减（quota_ledger）+ 视频下载落盘（URL 时效）
 
 import { app, safeStorage } from 'electron'
-import { createWriteStream, mkdirSync, renameSync } from 'node:fs'
+import { copyFileSync, createWriteStream, mkdirSync, renameSync } from 'node:fs'
 import { get as httpsGet } from 'node:https'
 import { join } from 'node:path'
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
@@ -185,6 +185,30 @@ export async function runGenerate(
   const images = (input.images ?? [])
     .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
     .slice(0, 10)
+  // 生成参数 + 上传图片副本：随任务持久化，历史详情可回显「提示词/参数/图片」
+  const jobImages: string[] = []
+  if (images.length > 0) {
+    try {
+      const imgDir = join(app.getPath('userData'), 'images')
+      mkdirSync(imgDir, { recursive: true })
+      for (let i = 0; i < images.length; i++) {
+        try {
+          const ext = (/\.(png|gif|webp)$/i.exec(images[i])?.[1] ?? 'jpg').toLowerCase()
+          const dest = join(imgDir, `${job.id}-${i}.${ext}`)
+          copyFileSync(images[i], dest)
+          jobImages.push(dest)
+        } catch {}
+      }
+    } catch {}
+  }
+  const jobOptions: Record<string, unknown> = {
+    mode: input.mode,
+    durationSec: input.durationSec,
+    ratio: input.ratio,
+    audio: input.audio,
+    resolution: input.resolution
+  }
+  if (jobImages.length > 0) jobOptions.images = jobImages
   const keys = await providerSvc.listProviderKeys(input.userId)
   const doubaoKeys = keys.filter((k) => k.provider_id === 'doubao' && k.enabled !== false)
 
@@ -197,6 +221,7 @@ export async function runGenerate(
     await jobSvc.updateJob(input.userId, job.id, {
       status: 'failed',
       error: err,
+      options: jobOptions,
       completedAt: new Date().toISOString()
     })
     emit({ jobId: job.id, status: 'failed', message: err })
@@ -273,7 +298,7 @@ export async function runGenerate(
         await jobSvc.updateJob(input.userId, job.id, {
           status: 'running',
           accountId: cand.id,
-          options: { accountId: cand.id, accountName: cand.account_name }
+          options: { ...jobOptions, accountId: cand.id, accountName: cand.account_name }
         })
         result = await runDoubaoGeneration({
           cookies: c,
@@ -323,36 +348,56 @@ export async function runGenerate(
 
   if (!result || !result.ok || !result.videoUrl) {
     const err = result ? result.error || lastError || '生成失败' : lastError || '未找到可用豆包账号'
-    await jobSvc.updateJob(input.userId, job.id, {
-      status: 'failed',
-      error: err,
-      attempts: result?.attempts ?? [],
-      completedAt: new Date().toISOString()
-    })
+    try {
+      await jobSvc.updateJob(input.userId, job.id, {
+        status: 'failed',
+        error: err,
+        attempts: result?.attempts ?? [],
+        options: jobOptions,
+        completedAt: new Date().toISOString()
+      })
+    } catch {
+      // 状态回写失败不阻断错误返回
+    }
     emit({ jobId: job.id, status: 'failed', message: err })
     return { ok: false, jobId: job.id, error: err }
   }
 
   // 2) 成功：下载落盘（URL 时效）→ 写 jobs（含 account_id）→ 扣该账号额度
-  const localPath = await downloadVideo(result.videoUrl, job.id)
+  let localPath: string | null = null
+  try {
+    localPath = await downloadVideo(result.videoUrl, job.id)
+  } catch {
+    localPath = null
+  }
   const resultUrl = localPath || result.videoUrl
-  await jobSvc.updateJob(input.userId, job.id, {
-    status: 'success',
-    providerId: 'doubao',
-    accountId: selectedKey?.id ?? null,
-    resultUrl,
-    costUnit: '点',
-    costAmount: cost,
-    attempts: result.attempts,
-    options: {
-      remoteUrl: result.videoUrl,
-      localPath: localPath || null,
-      posterUrl: result.posterUrl ?? null,
+  try {
+    await jobSvc.updateJob(input.userId, job.id, {
+      status: 'success',
+      providerId: 'doubao',
       accountId: selectedKey?.id ?? null,
-      accountName: selectedKey?.accountName ?? null
-    },
-    completedAt: new Date().toISOString()
-  })
+      resultUrl,
+      costUnit: '点',
+      costAmount: cost,
+      attempts: result.attempts,
+      options: {
+        ...jobOptions,
+        remoteUrl: result.videoUrl,
+        localPath: localPath || null,
+        posterUrl: result.posterUrl ?? null,
+        accountId: selectedKey?.id ?? null,
+        accountName: selectedKey?.accountName ?? null
+      },
+      completedAt: new Date().toISOString()
+    })
+  } catch (e) {
+    emit({
+      jobId: job.id,
+      status: 'success',
+      message: '生成成功，但历史记录保存失败: ' + (e instanceof Error ? e.message : String(e))
+    })
+    return { ok: true, jobId: job.id }
+  }
   try {
     await providerSvc.consumeLedger(input.userId, 'doubao', cost, {
       unitName: '点',

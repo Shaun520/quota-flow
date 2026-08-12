@@ -45,6 +45,19 @@ function toJobItem(row: JobRow): JobItem {
       : row.result_url && !/^https?:/i.test(row.result_url)
         ? row.result_url
         : null
+  const params =
+    opts.mode || opts.durationSec || opts.ratio || opts.audio || opts.resolution
+      ? {
+          mode: typeof opts.mode === 'string' ? opts.mode : undefined,
+          durationSec: typeof opts.durationSec === 'number' ? opts.durationSec : undefined,
+          ratio: typeof opts.ratio === 'string' ? opts.ratio : undefined,
+          audio: typeof opts.audio === 'string' ? opts.audio : undefined,
+          resolution: typeof opts.resolution === 'string' ? opts.resolution : undefined
+        }
+      : null
+  const images = Array.isArray(opts.images)
+    ? opts.images.filter((p): p is string => typeof p === 'string')
+    : []
   return {
     id: row.id,
     record: {
@@ -59,6 +72,8 @@ function toJobItem(row: JobRow): JobItem {
       traceId: row.trace_id ?? null,
       resultUrl: row.result_url ?? null,
       localPath,
+      params,
+      images,
       errorMessage: row.error ?? null
     }
   }
