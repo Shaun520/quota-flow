@@ -32,6 +32,22 @@ export interface HealthCheckResult {
   error?: string
 }
 
+export interface CookieRenewState {
+  enabled: boolean
+  running: boolean
+  lastRunAt: number | null
+  nextRunAt: number | null
+  lastResult: { ok: boolean; renewed: number; failed: number; message?: string } | null
+}
+
+export interface CookieRenewConfig {
+  supabaseUrl: string
+  supabaseAnonKey: string
+  accessToken: string
+  refreshToken: string
+  userId: string
+}
+
 export interface JobEvent {
   jobId: string
   status?: string
@@ -93,6 +109,11 @@ export interface DesktopApi {
      * 迁移分区：把 src 分区的 cookie 复制到 dst 分区（用于刷新已有账号时把临时分区登录态迁移到目标分区）
      */
     migratePartition: (providerId: string, srcKeyId: string, dstKeyId: string) => Promise<{ ok: boolean; cookieCount?: number; error?: string }>
+  }
+  cookieRenew: {
+    configure: (config: CookieRenewConfig) => Promise<{ ok: boolean; error?: string }>
+    setEnabled: (enabled: boolean) => Promise<{ ok: boolean; state: CookieRenewState }>
+    getState: () => Promise<CookieRenewState>
   }
   dispatch: {
     generate: (input: GenerateRequest) => Promise<{ ok: boolean; jobId?: string; error?: string }>
@@ -166,6 +187,11 @@ const api: DesktopApi = {
       ipcRenderer.invoke('provider:login-cancel', providerId, keyId) as Promise<void>,
     migratePartition: (providerId, srcKeyId, dstKeyId) =>
       ipcRenderer.invoke('provider:migrate-partition', providerId, srcKeyId, dstKeyId) as Promise<{ ok: boolean; cookieCount?: number; error?: string }>
+  },
+  cookieRenew: {
+    configure: (config) => ipcRenderer.invoke('cookie-renew:configure', config) as Promise<{ ok: boolean; error?: string }>,
+    setEnabled: (enabled) => ipcRenderer.invoke('cookie-renew:set-enabled', enabled) as Promise<{ ok: boolean; state: CookieRenewState }>,
+    getState: () => ipcRenderer.invoke('cookie-renew:get-state') as Promise<CookieRenewState>
   },
   dispatch: {
     generate: (input) => ipcRenderer.invoke('dispatch:generate', input) as Promise<{ ok: boolean; jobId?: string; error?: string }>,

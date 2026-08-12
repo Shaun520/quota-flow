@@ -122,6 +122,8 @@ function encryptCookies(
   return safeStorage.encryptString(plain).toString('base64')
 }
 
+export { encryptCookies }
+
 /** 兼容 v0 / v1 / v2 格式，统一返回 cookies + storages（以及为调用方保留的 localStorage 兼容字段） */
 function parseStoredCredentials(encrypted: string): {
   cookies: ProviderCookie[]
@@ -268,6 +270,8 @@ function fingerprintFor(providerId: string, raw: string): string {
 function providerSite(providerId: string): ProviderSite | undefined {
   return PROVIDER_SITES[providerId as ProviderId]
 }
+
+export { providerSite }
 
 // 轻量诊断：仅记录来源与指纹哈希（不落明文标识），供各厂商提取脚本联调校准
 function appendFingerprintDebug(entry: Record<string, unknown>): void {
@@ -661,6 +665,143 @@ async function healthCheck(
     })
 
     void win.loadURL(site.healthUrl)
+  })
+}
+
+export interface VisitResult {
+  ok: boolean
+  status: 'healthy' | 'expired' | 'unknown'
+  cookies?: ProviderCookie[]
+  storages?: OriginStorage[]
+  cookieCount?: number
+  expiresAt?: number | null
+  error?: string
+}
+
+/**
+ * 自动续命核心：用隐藏窗口访问厂商站点（复用账号分区与 UA），
+ * 模拟活跃等待会话滑动续期，随后重新抓取 cookie + localStorage 并返回。
+ * 完整性校验：新会话明显缩水（< 旧的 60%）视为风控/验证码页 → 返回 unknown 放弃写回（保留旧 cookie）。
+ */
+export async function visitAndCapture(
+  providerId: string,
+  keyId: string,
+  encrypted: string,
+  url: string
+): Promise<VisitResult> {
+  let cookies: ProviderCookie[]
+  let oldStorages: OriginStorage[] = []
+  try {
+    const parsed = parseStoredCredentials(encrypted)
+    cookies = parsed.cookies
+    oldStorages = parsed.storages ?? []
+  } catch {
+    return { ok: false, status: 'unknown', error: '解密失败' }
+  }
+  if (cookies.length === 0) return { ok: false, status: 'unknown', error: '无可用 Cookie' }
+
+  const partition = partitionFor(providerId, keyId)
+  const ses = session.fromPartition(partition)
+  ses.setUserAgent(CHROME_UA)
+  try {
+    await injectCookies(providerId, cookies, keyId)
+  } catch {
+    return { ok: false, status: 'unknown', error: 'Cookie 注入失败' }
+  }
+
+  return new Promise((resolve) => {
+    const win = new BrowserWindow({
+      show: false,
+      paintWhenInitiallyHidden: false,
+      width: 800,
+      height: 600,
+      backgroundColor: '#0c0c0c',
+      webPreferences: { partition }
+    })
+    win.webContents.setUserAgent(CHROME_UA)
+
+    let statusCode: number | null = null
+    let settled = false
+    let timeout: NodeJS.Timeout | undefined
+    const settle = (result: VisitResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      if (!win.isDestroyed()) win.destroy()
+      resolve(result)
+    }
+
+    // 页面加载 + 模拟活跃停留，最长 30s
+    timeout = setTimeout(() => settle({ ok: false, status: 'unknown', error: '续命访问超时' }), 30000)
+
+    ses.webRequest.onResponseStarted((details) => {
+      if (details.resourceType === 'mainFrame') {
+        statusCode = details.statusCode
+      }
+    })
+
+    win.webContents.on('did-fail-load', (_e, code, desc) => {
+      if (code === -3) return // ERR_ABORTED
+      settle({ ok: false, status: 'unknown', error: `加载失败 (${code}: ${desc})` })
+    })
+
+    win.webContents.on('did-finish-load', async () => {
+      try {
+        if (statusCode === 401 || statusCode === 403) {
+          settle({ ok: false, status: 'expired', error: `HTTP ${statusCode}` })
+          return
+        }
+        // 模拟活跃：停留等页面完成初始化，触发服务端会话滑动续期
+        await sleep(6000)
+        const fresh = await collectPartitionCookies(providerId, keyId)
+        if (fresh.length === 0) {
+          settle({ ok: false, status: 'expired', error: '会话 Cookie 已丢失' })
+          return
+        }
+        if (fresh.length < cookies.length * 0.6) {
+          settle({ ok: false, status: 'unknown', error: 'Cookie 数量异常（可能触发验证），保留旧会话' })
+          return
+        }
+        // 重新收集当前页面 Web Storage（抓不到就沿用旧数据）
+        let storages: OriginStorage[] = oldStorages
+        try {
+          const collected = (await win.webContents.executeJavaScript(
+            `(() => {
+              const results = [];
+              try {
+                results.push({
+                  origin: location.origin,
+                  localStorage: Object.entries(localStorage).map(([k,v]) => ({ key: k, value: v })),
+                  sessionStorage: Object.entries(sessionStorage).map(([k,v]) => ({ key: k, value: v }))
+                });
+              } catch {}
+              return results;
+            })()`,
+            true
+          )) as OriginStorage[]
+          if (Array.isArray(collected) && collected.length > 0) {
+            storages = collected.filter(
+              (s) => s && typeof s.origin === 'string' && Array.isArray(s.localStorage)
+            )
+          }
+        } catch {}
+        const maxExp = Math.max(...fresh.map((c) => c.expires))
+        settle({
+          ok: true,
+          status: 'healthy',
+          cookies: fresh,
+          storages,
+          cookieCount: fresh.length,
+          expiresAt: maxExp > 0 ? maxExp : null
+        })
+      } catch (e) {
+        settle({ ok: false, status: 'unknown', error: String(e) })
+      }
+    })
+
+    void win.loadURL(url).catch((e: unknown) => {
+      settle({ ok: false, status: 'unknown', error: `加载页面失败：${String(e)}` })
+    })
   })
 }
 

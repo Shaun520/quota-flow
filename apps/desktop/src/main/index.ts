@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
+import { initCookieRenew } from './cookie-renew'
 import { runGenerate } from './dispatch'
 import type { DispatchEvent } from './dispatch'
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
@@ -296,6 +297,7 @@ app.whenReady().then(() => {
     }
   })
   initProviders()
+  initCookieRenew()
   createWindow()
 
   app.on('activate', () => {

@@ -16,6 +16,7 @@ import { useJobs } from './hooks/useJobs'
 import type { JobsResult } from './hooks/useJobs'
 import type { TeamContext } from '@quota-flow/db-supabase'
 import { ProfileModal, SettingsModal, getInitialTheme, applyTheme, getInitialFontSize, applyFontSize } from './components/Modals'
+import { getSupabaseConfig, getAuthService } from './auth/service'
 import {
   IconClock,
   IconGear,
@@ -79,6 +80,7 @@ function MainApp({
   })
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
+  const [renewText, setRenewText] = useState('自动续命：—')
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -90,6 +92,50 @@ function MainApp({
     applyTheme(getInitialTheme())
     applyFontSize(getInitialFontSize())
   }, [])
+
+  // Cookie 自动续命：配置主进程调度器（携带最新会话 token）+ 轮询状态更新状态栏
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const sync = async (): Promise<void> => {
+      try {
+        const cfg = getSupabaseConfig()
+        const auth = getAuthService()
+        if (!cfg || !auth) return
+        const s = await auth.getSession()
+        if (!s?.access_token) return
+        await window.api.cookieRenew.configure({
+          supabaseUrl: cfg.url,
+          supabaseAnonKey: cfg.anonKey,
+          accessToken: s.access_token,
+          refreshToken: s.refresh_token,
+          userId: user.id
+        })
+        const st = await window.api.cookieRenew.getState()
+        if (cancelled) return
+        if (!st.enabled) {
+          setRenewText('自动续命：已关闭')
+        } else if (st.running) {
+          setRenewText('自动续命中…')
+        } else if (st.nextRunAt) {
+          const d = new Date(st.nextRunAt)
+          const hh = String(d.getHours()).padStart(2, '0')
+          const mi = String(d.getMinutes()).padStart(2, '0')
+          setRenewText(`自动续命：${hh}:${mi}`)
+        } else {
+          setRenewText('自动续命：—')
+        }
+      } catch {
+        // 主进程未就绪等下次轮询
+      }
+    }
+    void sync()
+    const timer = window.setInterval(() => void sync(), 60000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [user?.id])
 
   return (
     <div className="app-shell">
@@ -198,7 +244,7 @@ function MainApp({
             调度引擎正常
           </div>
           <div className="status-item">上次刷新：14:32</div>
-          <div className="status-item">自动续命：03:00</div>
+          <div className="status-item">{renewText}</div>
         </div>
         <div className="status-right">
           <div className="status-item">Quota-Flow v0.9.0</div>
