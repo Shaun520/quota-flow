@@ -898,16 +898,18 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail('豆包时长设置失败：' + (durApply.reason || '未知原因'))
   }
 
-  // 参数统一拼进提示词（豆包会从提示词解析）：时长 + 比例 + 配音
-  const parts: string[] = [options.prompt, `${durationSec}秒`]
+  // 参数统一拼进提示词（豆包会从提示词解析）：生成模式 + 比例 + 配音 + 分辨率 + 单视频约束
+  // 时长不再拼文本：已由上方 applyDoubaoDuration 走真实 UI 设置，避免「5秒 文本 vs 5s chip」重复
+  const modeLabel = options.mode === 'img2video' ? '图生视频' : '文生视频'
+  const parts: string[] = [options.prompt, modeLabel]
   if (options.ratio) parts.push(options.ratio)
   if (options.audio === 'on') parts.push('带配音')
   else if (options.audio === 'off') parts.push('关闭配音')
-  if (options.resolution) parts.push(`帧率${options.resolution}p`)
+  if (options.resolution) parts.push(`分辨率${options.resolution}p`)
   // 单视频约束：置于最后，作为最明确的指令，覆盖 prompt 里列举多个实体导致的「生成多个视频」
   parts.push('仅生成1个视频')
   const submitPrompt = parts.join('，')
-  progress(options, 'apply-params', { durationSec, ratio: options.ratio, audio: options.audio, submitPrompt })
+  progress(options, 'apply-params', { mode: modeLabel, ratio: options.ratio, audio: options.audio, resolution: options.resolution, submitPrompt })
 
   progress(options, 'submit')
   let fillResult: { ok?: boolean; reason?: string } = {}

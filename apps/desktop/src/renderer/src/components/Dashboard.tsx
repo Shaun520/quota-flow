@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import {
   MODELS,
   computeCost,
@@ -14,6 +14,7 @@ import { useAuth } from '../hooks/useAuth'
 import type { ProvidersResult } from '../hooks/useProviders'
 import type { JobsResult } from '../hooks/useJobs'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
+import { ensureFreshSession } from '../auth/session'
 import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
 
@@ -73,6 +74,24 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const resolutions = resolutionOptions(provider)
   const cost = computeCost(provider, model, duration, resolution)
   const upload = uploadHint(provider, mode)
+
+  // 厂商选项只取「厂商页已绑定」的厂商；智能调度仅在至少绑定一家时提供
+  const providerOptions = useMemo(() => {
+    const bound = provAggs
+      .filter((a) => a.boundCount > 0)
+      .map((a) => ({ value: a.providerId, label: a.name }))
+    if (bound.length === 0) return []
+    return [{ value: 'auto', label: '智能调度（推荐）' }, ...bound]
+  }, [provAggs])
+
+  // 当前选择不在可用列表时（例如厂商被解绑），回退到智能调度或第一个可用厂商
+  useEffect(() => {
+    if (providerOptions.length === 0) return
+    const valid = providerOptions.map((o) => o.value)
+    if (!valid.includes(provider)) {
+      setProvider(valid.includes('auto') ? 'auto' : valid[0])
+    }
+  }, [providerOptions, provider])
 
   useEffect(() => {
     if (!durations.some((d) => d.value === duration)) {
@@ -171,15 +190,30 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       setGenError('暂仅支持文生视频（图生视频/多参考待接入）')
       return
     }
+    if (providerOptions.length === 0) {
+      setGenError('尚未绑定厂商账号，请先到厂商页绑定后再生成')
+      onGoProviders()
+      return
+    }
     setGenError(null)
     setGenFailed(false)
     setGenStage(null)
     setGenerating(true)
     try {
       const auth = getAuthService()
-      const session = await auth?.getSession()
       const cfg = getSupabaseConfig()
-      if (!auth || !session || !user || !cfg) {
+      if (!auth || !user || !cfg) {
+        setGenError('登录态异常，请重新登录')
+        return
+      }
+      // 生成前确保会话新鲜：token 即将过期则先续期，避免主进程查询被 401 拦截
+      const guard = await ensureFreshSession()
+      if (!guard.ok) {
+        setGenError('登录已过期，请重新登录')
+        return
+      }
+      const session = await auth.getSession()
+      if (!session) {
         setGenError('登录态异常，请重新登录')
         return
       }
@@ -212,7 +246,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     } finally {
       setGenerating(false)
     }
-  }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, user, onGenerate, reloadJobs, onGoProviders])
+  }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
@@ -269,18 +303,9 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
               <label htmlFor="provider">选择厂商</label>
               <Select
                 id="provider"
-                value={provider}
+                value={providerOptions.length === 0 ? '' : provider}
                 onChange={onProviderChange}
-                options={[
-                  { value: 'auto', label: '智能调度（推荐）' },
-                  { value: 'doubao', label: '豆包' },
-                  { value: 'jimeng', label: '即梦' },
-                  { value: 'qwen', label: '通义万相' },
-                  { value: 'yuanbao', label: '元宝混元' },
-                  { value: 'kling', label: '可灵' },
-                  { value: 'hailuo', label: '海螺' },
-                  { value: 'mathmind', label: 'MathMind' }
-                ]}
+                options={providerOptions.length > 0 ? providerOptions : [{ value: '', label: '未绑定厂商' }]}
               />
             </div>
             <div className="param-field">

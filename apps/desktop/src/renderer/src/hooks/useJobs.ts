@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getJobService } from '../auth/service'
+import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
 import type { JobRow } from '@quota-flow/db-supabase'
@@ -105,8 +106,20 @@ export function useJobs(): JobsResult {
           setItems(rows.map(toJobItem))
         }
       })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(errMsg(e))
+      .catch(async (e: unknown) => {
+        if (cancelled) return
+        if (isAuthError(e)) {
+          const guard = await ensureFreshSession()
+          if (cancelled) return
+          if (guard.ok && guard.refreshed) {
+            // 续期成功：重试一次（刷新过才会重试，避免无限循环）
+            setReloadKey((k) => k + 1)
+            return
+          }
+          setError(guard.ok ? errMsg(e) : '登录已过期，请重新登录')
+        } else {
+          setError(errMsg(e))
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)

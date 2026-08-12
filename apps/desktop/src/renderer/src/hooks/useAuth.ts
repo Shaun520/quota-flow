@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getAuthService, isAuthConfigured, toTokens } from '../auth/service'
+import { ensureFreshSession, onSessionExpired } from '../auth/session'
 import type { TeamContext } from '@quota-flow/db-supabase'
 
 const ERROR_MAP: Record<string, string> = {
@@ -99,6 +100,13 @@ export function useAuth(): AuthResult {
             refreshToken: stored.refreshToken,
             expiresAt: stored.expiresAt
           })
+          // 过期检测 + 自动续期：恢复后确保 token 新鲜，并把新 token 持久化
+          const guard = await ensureFreshSession()
+          if (cancelled) return
+          if (!guard.ok) {
+            setError('登录已过期，请重新登录')
+            return
+          }
           const session = await auth.getSession()
           if (session?.user) {
             const t = await auth.getTeam(session.user.id)
@@ -120,6 +128,60 @@ export function useAuth(): AuthResult {
       cancelled = true
     }
   }, [])
+
+  // 登录态被判定失效（续期失败）→ 清理界面并提示重新登录
+  useEffect(() => {
+    return onSessionExpired(() => {
+      setError('登录已过期，请重新登录')
+      setUser(null)
+      setTeam(null)
+      setNotice(null)
+    })
+  }, [])
+
+  // 会话到期前 60s 自动续期：应用常开也不会因 token 过期出现“空数据”
+  useEffect(() => {
+    if (!user) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const refresh = async (): Promise<void> => {
+      if (stopped) return
+      const auth = getAuthService()
+      if (!auth) return
+      const session = await auth.getSession()
+      if (!session || stopped) return
+      const refreshed = await auth.refreshSession()
+      if (stopped) return
+      if (refreshed) {
+        await window.api.auth.setSession(toTokens(refreshed))
+      } else {
+        await window.api.auth.clearSession()
+        setError('登录已过期，请重新登录')
+        setUser(null)
+        setTeam(null)
+        return
+      }
+      void schedule()
+    }
+
+    const schedule = async (): Promise<void> => {
+      if (stopped) return
+      const auth = getAuthService()
+      const session = await auth?.getSession()
+      if (!session?.expires_at || stopped) return
+      const now = Math.floor(Date.now() / 1000)
+      const leadSec = 60
+      const delayMs = Math.max(10_000, (session.expires_at - now - leadSec) * 1000)
+      timer = setTimeout(() => void refresh(), delayMs)
+    }
+
+    void schedule()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [user?.id])
 
   const signUp = useCallback(async (email: string, token: string, password: string, displayName: string) => {
     setError(null)

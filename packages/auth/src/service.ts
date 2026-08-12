@@ -80,6 +80,13 @@ export class AuthService {
     return data.session
   }
 
+  /** 主动续期：用当前 refresh token 换新 access token；失败返回 null */
+  async refreshSession(): Promise<Session | null> {
+    const { data, error } = await this.client.auth.refreshSession()
+    if (error) return null
+    return data.session ?? null
+  }
+
   async restoreSession(tokens: AuthTokens): Promise<void> {
     await this.client.auth.setSession({
       access_token: tokens.accessToken,
