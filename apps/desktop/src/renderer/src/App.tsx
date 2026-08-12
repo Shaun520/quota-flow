@@ -11,9 +11,7 @@ import AuthScreen from './auth/AuthScreen'
 import { useAuth } from './hooks/useAuth'
 import type { AuthUser } from './hooks/useAuth'
 import { useProviders } from './hooks/useProviders'
-import type { ProvidersResult } from './hooks/useProviders'
 import { useJobs } from './hooks/useJobs'
-import type { JobsResult } from './hooks/useJobs'
 import type { TeamContext } from '@quota-flow/db-supabase'
 import { ProfileModal, SettingsModal, getInitialTheme, applyTheme, getInitialFontSize, applyFontSize } from './components/Modals'
 import { getSupabaseConfig, getAuthService } from './auth/service'
@@ -51,8 +49,6 @@ interface MainAppProps {
   completeStep: (n: 1 | 2 | 3) => void
   onFinishOnboarding: () => void
   onDismissBanner: () => void
-  providers: ProvidersResult
-  jobs: JobsResult
   onOpenModal: (m: 'profile' | 'settings') => void
   onSignOut: () => Promise<void>
 }
@@ -66,11 +62,12 @@ function MainApp({
   completeStep,
   onFinishOnboarding,
   onDismissBanner,
-  providers,
-  jobs,
   onOpenModal,
   onSignOut
 }: MainAppProps) {
+  // 厂商 / 任务数据提升到 MainApp 层：随 user 挂载/卸载，账号切换时整棵数据树重建，避免残留上一账号数据
+  const providers = useProviders()
+  const jobs = useJobs()
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -326,9 +323,6 @@ function ConfigWarning() {
 export default function App() {
   const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile } =
     useAuth()
-  // 厂商 / 任务数据提升到 App 层单例：消除 Dashboard 与 Providers（useProviders）、Dashboard 与 History（useJobs）的重复请求与重复健康检查
-  const providers = useProviders()
-  const jobs = useJobs()
   const modalApiRef = useRef<{ open: (m: ModalKind) => void } | null>(null)
   const openModal = useCallback((m: ModalKind) => {
     modalApiRef.current?.open(m)
@@ -432,6 +426,7 @@ export default function App() {
   return (
     <>
       <MainApp
+        key={user.id}
         user={user}
         team={team}
         fresh={fresh}
@@ -440,8 +435,6 @@ export default function App() {
         completeStep={completeStep}
         onFinishOnboarding={finishOnboarding}
         onDismissBanner={dismissBanner}
-        providers={providers}
-        jobs={jobs}
         onOpenModal={openModal}
         onSignOut={signOut}
       />

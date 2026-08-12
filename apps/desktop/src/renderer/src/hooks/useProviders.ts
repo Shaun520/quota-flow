@@ -74,6 +74,9 @@ const HEALTH_CHECK_CONCURRENCY = 2 // 同时最多 2 个隐藏窗口
 /** keyId -> 本会话最近一次检查尝试时间戳（防并发重复 + 会话内节流） */
 const healthCheckAt = new Map<string, number>()
 
+/** 健康检查节流记录所属的 user id；账号切换时清空，避免节流记录串号 */
+let healthCheckUserId: string | null = null
+
 async function runHealthChecks(
   svc: ProviderService,
   userId: string,
@@ -153,6 +156,17 @@ export function useProviders(): ProvidersResult {
   const [healthOverrides, setHealthOverrides] = useState<Record<string, string>>({})
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+
+  // 组件实例挂载时（MainApp key=user.id 保证账号切换即重建）检查账号是否变化：
+  // 变化则清空上一账号残留的健康检查节流记录。不放在数据加载 effect 的 cleanup 里，
+  // 否则 reload（reloadKey 变化）也会误清空、导致节流失效。
+  useEffect(() => {
+    const uid = user?.id ?? null
+    if (uid !== healthCheckUserId) {
+      healthCheckUserId = uid
+      healthCheckAt.clear()
+    }
+  }, [user?.id])
 
   useEffect(() => {
     let cancelled = false
