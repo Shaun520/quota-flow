@@ -404,7 +404,9 @@ export function AddProviderModal({
   onClose: () => void
   onDone?: () => void
 }) {
-  const [providerId, setProviderId] = useState(initialProviderId ?? providers[0]?.providerId ?? '')
+  const [providerId, setProviderId] = useState(
+    initialProviderId ?? providers.find((p) => p.providerId === 'doubao')?.providerId ?? providers[0]?.providerId ?? ''
+  )
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
