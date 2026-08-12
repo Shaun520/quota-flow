@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getJobService } from '../auth/service'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
@@ -78,6 +78,8 @@ export function useJobs(): JobsResult {
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<JobItem[]>([])
   const [reloadKey, setReloadKey] = useState(0)
+  // 是否已加载过：首次加载显示 loading，后续刷新静默（保留旧数据，避免整页闪“加载中”）
+  const loadedRef = useRef(false)
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
 
@@ -93,12 +95,15 @@ export function useJobs(): JobsResult {
       setError('Supabase 未配置，无法加载历史记录')
       return
     }
-    setLoading(true)
+    if (!loadedRef.current) setLoading(true)
     setError(null)
     svc
       .listJobs()
       .then((rows) => {
-        if (!cancelled) setItems(rows.map(toJobItem))
+        if (!cancelled) {
+          loadedRef.current = true
+          setItems(rows.map(toJobItem))
+        }
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(errMsg(e))

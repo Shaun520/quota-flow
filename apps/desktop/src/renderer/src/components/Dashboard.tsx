@@ -88,10 +88,10 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     }
   }, [resolutions, resolution])
 
-  // 主进程生成事件（进度/完成）→ 刷新最近生成
+  // 主进程生成事件：仅终态（成功/失败）刷新列表，进度事件不触发，避免历史页列表/分页反复闪加载
   useEffect(() => {
     return window.api.dispatch.onEvent((ev: { jobId?: string; status?: string; stage?: string; message?: string }) => {
-      reloadJobs()
+      if (ev.status === 'success' || ev.status === 'failed') reloadJobs()
       // 只处理当前任务的事件，避免历史任务事件误伤
       if (activeJobIdRef.current && ev.jobId && ev.jobId !== activeJobIdRef.current) return
       if (ev.status === 'running' && ev.stage) {

@@ -154,7 +154,7 @@ function MainApp({
             />
           )}
           {/* 各 tab 常驻挂载，仅用 display 切换：保留表单/筛选等本地状态，避免切 tab 丢失 */}
-          <div className="tab-pane" style={{ display: tab === 'dispatch' ? 'block' : 'none' }}>
+          <div className="tab-pane" style={{ display: tab === 'dispatch' ? 'flex' : 'none' }}>
             <Dashboard
               fresh={fresh}
               banner={bannerVisible}
@@ -166,13 +166,13 @@ function MainApp({
               jobs={jobs}
             />
           </div>
-          <div className="tab-pane" style={{ display: tab === 'providers' ? 'block' : 'none' }}>
+          <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
             <Providers fresh={fresh} onBound={() => completeStep(1)} providers={providers} />
           </div>
-          <div className="tab-pane" style={{ display: tab === 'history' ? 'block' : 'none' }}>
+          <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
             <History jobs={jobs} />
           </div>
-          <div className="tab-pane" style={{ display: tab === 'team' ? 'block' : 'none' }}>
+          <div className="tab-pane" style={{ display: tab === 'team' ? 'flex' : 'none' }}>
             <Team fresh={fresh} />
           </div>
         </div>
