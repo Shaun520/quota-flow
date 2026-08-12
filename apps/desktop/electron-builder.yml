@@ -5,7 +5,18 @@ directories:
   output: release
 files:
   - out/**
+  - "!node_modules/@quota-flow/*/src/**"
+  - "!node_modules/@quota-flow/*/.turbo/**"
+  - "!node_modules/@quota-flow/*/tsconfig.json"
+  - "!node_modules/@quota-flow/*/tsup.config.ts"
+  - "!node_modules/@quota-flow/*/dist/*.map"
+  - "!node_modules/@supabase/**/*.map"
+  - "!node_modules/@supabase/**/src/**"
+  - "!node_modules/@supabase/**/*.tsbuildinfo"
 asar: true
+electronLanguages:
+  - zh-CN
+  - en-US
 win:
   icon: build/icon.ico
   target:
