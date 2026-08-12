@@ -1,0 +1,177 @@
+# 数据一致性专项修复 — 实施总结
+
+> 修复日期：2026-08-12
+> 关联审计：[data-consistency-audit.md](./data-consistency-audit.md)
+> 修复范围：PostgreSQL RPC + 应用层重构 + 并发测试
+
+---
+
+## 1. 改动总览
+
+| 文件 | 改动类型 | 说明 |
+|------|---------|------|
+| `migrations/0005_quota_consistency.sql` | 新增 | 去重 + partial unique index + quota_operations 表 |
+| `migrations/0006_quota_rpc.sql` | 新增 | 4 个原子操作 RPC 函数 |
+| `packages/db-supabase/src/index.ts` | 重构 | 所有额度操作统一走 RPC |
+| `apps/desktop/src/main/dispatch.ts` | 重构 | 扣费流程重排 + remainingOf 修正 |
+| `apps/desktop/src/main/index.ts` | 新增 | reconcile IPC handler |
+| `apps/desktop/src/preload/index.ts` | 新增 | dispatch.reconcile API bridge |
+| `apps/desktop/src/renderer/src/components/Dashboard.tsx` | 新增 | 启动时自动 reconcile |
+| `scripts/test-concurrency.mjs` | 新增 | 5 项并发测试 |
+| `packages/db-supabase/deploy-migrations.mjs` | 新增 | Migration 部署脚本 |
+
+---
+
+## 2. 数据库层改动
+
+### 2.1 新增数据结构
+
+**quota_operations 表** — Job-Quota 关联记录，保证幂等：
+
+```sql
+CREATE TABLE quota_operations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  ledger_id UUID NOT NULL REFERENCES quota_ledger(id),
+  operation_type TEXT NOT NULL CHECK (operation_type IN ('reserve', 'finalize', 'release')),
+  amount NUMERIC NOT NULL CHECK (amount > 0),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (job_id, operation_type)  -- 每个 job 每种操作最多一条
+);
+```
+
+**reserved 字段** — 预留额度（当前未启用）：
+
+```sql
+ALTER TABLE quota_ledger ADD COLUMN IF NOT EXISTS reserved NUMERIC DEFAULT 0;
+```
+
+### 2.2 Partial Unique Index
+
+修复 `NULL != NULL` 导致个人账号 (`team_id IS NULL`) 出现重复行：
+
+```sql
+CREATE UNIQUE INDEX idx_quota_ledger_unique_personal
+  ON quota_ledger (date, owner_user_id, account_key_id, provider_id)
+  WHERE team_id IS NULL AND account_key_id IS NOT NULL;
+```
+
+### 2.3 RPC 函数
+
+所有函数使用 `SECURITY INVOKER SET search_path = ''`，表引用加 `public.` 前缀：
+
+| 函数 | 用途 | 安全机制 |
+|------|------|---------|
+| `atomic_consume_ledger` | 原子扣减额度 | 单条 UPDATE + WHERE 条件用 `daily_total - used - reserved` |
+| `atomic_release_ledger` | 释放预占额度 | WHERE `reserved >= amount` 防止负数 |
+| `set_default_key` | 事务化默认账号切换 | `FOR UPDATE` 行锁 + 零默认回退 |
+| `reconcile_consume_and_finalize` | Reconciliation 原子扣减 | `pg_advisory_xact_lock` 串行化 + 单事务 consume+finalize |
+
+**关键设计决策**：额度判断用 `daily_total - used - reserved` 而非 `remaining` 字段，确保即使 `remaining` 被手动修改或旧代码写脏，扣减条件仍正确。
+
+---
+
+## 3. 应用层改动
+
+### 3.1 ProviderService（db-supabase/src/index.ts）
+
+**consumeLedger** — 统一走 RPC，不再区分有/无 keyId 路径：
+
+```typescript
+// 所有路径统一通过 atomic_consume_ledger RPC
+// LEDGER_NOT_FOUND → 自动初始化 + 重试
+// QUOTA_EXHAUSTED / DB_ERROR → 抛出 Error
+```
+
+**getOrInitLedger** — TOCTOU 保护，先 INSERT 后 retry-SELECT：
+
+```typescript
+// INSERT → 遇到 23505(duplicate key) → 重试 SELECT
+// 注意：不能用 UPSERT，因为 team_id=NULL 时 PostgREST 无法匹配唯一键
+```
+
+**setDefaultKey** — 改为 RPC 调用，返回值从 `void` 变为 `Promise<LedgerResult>`。
+
+**insertQuotaOperation** — 改为 `.upsert({ onConflict, ignoreDuplicates: true })`，等价于 `ON CONFLICT DO NOTHING`。
+
+**新增方法**：`releaseLedger`、`findUnfinalizedJobs`。
+
+**QuotaLedgerRow** — 接口新增 `reserved: number`。
+
+**remainingOf**（dispatch.ts）— 改为 `daily_total - used - reserved` 计算，与 RPC 一致。
+
+### 3.2 调度流程重排（dispatch.ts）
+
+```
+修复前：updateJob(success) → consumeLedger → insertQuotaOperation  ❌ 先标记成功后扣费
+修复后：consumeLedger → insertQuotaOperation → updateJob(success)  ✅ 先扣费后标记成功
+         ↓ 失败
+         updateJob(failed)  ✅ 扣费失败标记失败，不丢失额度
+```
+
+### 3.3 Reconciliation（main/index.ts）
+
+启动时自动执行，两阶段：
+
+1. **恢复崩溃残留**：`status='running'` 超 10 分钟 → 标记 `failed`
+2. **追记未入账**：查找 `success` 但无 `finalize` 记录的 job → 调用 `reconcile_consume_and_finalize` RPC
+
+RPC 内部使用 `pg_advisory_xact_lock(hashtextextended('reconcile_job:' || job_id, 0))` 防止并发重复扣费。即使两个 reconcile 同时处理同一 job，后者也会看到 `finalize` 记录并返回 `ALREADY_FINALIZED`。
+
+---
+
+## 4. 并发测试
+
+测试文件：[scripts/test-concurrency.mjs](../../scripts/test-concurrency.mjs)
+
+运行方式：
+
+```powershell
+$env:TEST_EMAIL='<email>'; $env:TEST_PASSWORD='<password>'
+node packages/db-supabase/test-concurrency.mjs
+```
+
+| # | 测试 | 验证点 | 结果 |
+|---|------|--------|------|
+| 1 | getOrInitLedger TOCTOU | 8 并发 init → 只创建 1 行 | ✅ |
+| 2 | atomic_consume_ledger 并发 | 12 并发各扣 1，总量 10 → 10 成功 2 拒绝 | ✅ |
+| 3 | remaining 脏数据 | remaining=100 但 daily_total-used=8 → 按 8 判断 | ✅ |
+| 4 | set_default_key 并发 | 并发切换 A→X、B→Y → 恰好 1 个默认 | ✅ |
+| 5 | reconcile 重复扣费 | 5 并发 reconcile 同一 job → 1 扣 4 跳过 | ✅ |
+
+---
+
+## 5. 部署说明
+
+### 部署到 Supabase
+
+1. 确保 Supabase 项目已开启 **Connection Pooling**（Settings → Database）
+2. 在 SQL Editor 中执行 `migrations/0005_quota_consistency.sql` 和 `migrations/0006_quota_rpc.sql`
+3. 或使用部署脚本：
+   ```bash
+   node packages/db-supabase/deploy-migrations.mjs <db-password>
+   ```
+
+### 连接注意事项
+
+- 本机无 IPv6 时需通过 connection pooler 连接（端口 6543）
+- Pooler 密码需要 URL 编码（如果含特殊字符）
+- `SET LOCAL search_path = ''` 在 pooler transaction mode 下会导致 schema 解析失败，已从 migration 文件移除
+- RPC 函数的表引用必须加 `public.` 前缀（因为 `SET search_path = ''`）
+
+---
+
+## 6. 已知残留项
+
+| 项 | 优先级 | 说明 |
+|----|--------|------|
+| `atomic_release_ledger` remaining 计算 | LOW | 仍用 `remaining = remaining + p_amount`，而非 `daily_total - used - reserved`。当前 reservation 模式未启用，上线前修正。 |
+| 团队账号覆盖 | LOW | Partial unique index 和 RPC 的 WHERE 条件有 `team_id IS NULL`。团队账号使用原有 UNIQUE 约束，但 consumeLedger 的 RMW 竞态同样存在于团队路径。当前团队功能未启用。 |
+
+---
+
+## 7. 相关文档
+
+- [数据一致性审计报告](./data-consistency-audit.md)
+- [调度引擎时长通道设计](./desktop-duration-channel-design.md)
+- [生成拒绝处理与状态流转](./desktop-generation-reject-and-status.md)

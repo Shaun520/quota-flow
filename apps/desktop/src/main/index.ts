@@ -7,6 +7,7 @@ import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
 import { runGenerate } from './dispatch'
 import type { DispatchEvent } from './dispatch'
+import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
 
 // 禁用 GPU 硬件加速：Windows 上 Chromium 合成器在频繁重绘（如快速点击 tab 切换页面）时
 // 偶发丢帧/显示旧缓冲，导致整窗"时不时闪一下"。切到软件合成可根治。
@@ -229,6 +230,69 @@ app.whenReady().then(() => {
             ? String((err as { message?: unknown }).message ?? JSON.stringify(err))
             : String(err)
       throw new Error(msg || '生成失败（未知错误）')
+    }
+  })
+
+  // reconciliation：启动时恢复崩溃残留 + 追记账本
+  ipcMain.handle('dispatch:reconcile', async (
+    _e,
+    params: { supabaseUrl: string; supabaseAnonKey: string; accessToken: string; refreshToken: string; userId: string }
+  ) => {
+    try {
+      const client = createSupabaseClient({
+        supabaseUrl: params.supabaseUrl,
+        supabaseAnonKey: params.supabaseAnonKey
+      })
+      await client.auth.setSession({ access_token: params.accessToken, refresh_token: params.refreshToken })
+      const jobSvc = new JobService(client)
+      const providerSvc = new ProviderService(client)
+      let recovered = false
+
+      // 1. 恢复崩溃残留：status='running' 且超时（>10min）→ 标记 failed
+      const { data: stuckJobs } = await client
+        .from('jobs')
+        .select('id, created_at')
+        .eq('user_id', params.userId)
+        .eq('status', 'running')
+        .order('created_at', { ascending: false })
+        .limit(20)
+      for (const j of (stuckJobs ?? [])) {
+        const ageMs = Date.now() - new Date(j.created_at).getTime()
+        if (ageMs > 10 * 60 * 1000) {
+          await jobSvc.updateJob(params.userId, j.id, {
+            status: 'failed',
+            error: '应用异常退出，任务中断',
+            completedAt: new Date().toISOString()
+          })
+          recovered = true
+        }
+      }
+
+      // 2. 追记未入账的成功任务（单 RPC 原子：检查→扣减→finalize 同一事务）
+      const unfinalized = await providerSvc.findUnfinalizedJobs(params.userId)
+      for (const u of unfinalized) {
+        try {
+          const { data, error } = await client.rpc('reconcile_consume_and_finalize', {
+            p_user_id: params.userId,
+            p_provider_id: 'doubao',
+            p_amount: u.costAmount,
+            p_key_id: u.keyId,
+            p_date: todayKey(),
+            p_job_id: u.jobId
+          })
+          if (error) throw error
+          const result = data as unknown as { ok: boolean; code?: string }
+          if (result.ok && result.code !== 'ALREADY_FINALIZED') {
+            recovered = true
+          }
+        } catch {
+          // RPC 整体失败（网络/DB 异常）→ 事务回滚，额度未扣 → 下次 reconcile 重试安全
+        }
+      }
+
+      return { ok: true, recovered }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
   })
   initProviders()

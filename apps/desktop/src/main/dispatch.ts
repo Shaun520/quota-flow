@@ -251,7 +251,8 @@ export async function runGenerate(
       const freshLedgers = await providerSvc.listLedger(input.userId)
       const remainingOf = (keyId: string): number => {
         const row = freshLedgers.find((l) => l.account_key_id === keyId && l.date === today)
-        return row ? Math.max(Number(row.remaining ?? 0), 0) : 0
+        // 用 daily_total - used - reserved 而非 remaining，与 RPC 原子扣减条件一致
+        return row ? Math.max(Number(row.daily_total) - Number(row.used) - Number(row.reserved ?? 0), 0) : 0
       }
       const sorted = [...doubaoKeys].sort((a, b) => {
         if (!!a.is_default !== !!b.is_default) return a.is_default ? -1 : 1
@@ -363,19 +364,35 @@ export async function runGenerate(
     return { ok: false, jobId: job.id, error: err }
   }
 
-  // 2) 成功：下载落盘（URL 时效）→ 写 jobs（含 account_id）→ 扣该账号额度
+  // 2) 成功：下载落盘 → 先扣额度 → 再写 job success
   let localPath: string | null = null
   try {
     localPath = await downloadVideo(result.videoUrl, job.id)
-  } catch {
-    localPath = null
+  } catch (e) {
+    emit({
+      jobId: job.id,
+      status: 'running',
+      message: '视频下载异常，继续使用远程 URL: ' + (e instanceof Error ? e.message : String(e))
+    })
   }
   const resultUrl = localPath || result.videoUrl
+
+  // 先扣额度（原子 RPC），成功后再写 job success；
+  // 失败则 job 标记 failed，通过 reconciliation 兜底追记
+  let consumed: Awaited<ReturnType<typeof providerSvc.consumeLedger>> | null = null
   try {
+    consumed = await providerSvc.consumeLedger(input.userId, 'doubao', cost, {
+      unitName: '点',
+      keyId: selectedKey?.id ?? undefined
+    })
+    if (selectedKey?.id && consumed) {
+      await providerSvc.insertQuotaOperation(job.id, consumed.id, 'finalize', cost)
+    }
+  } catch (e) {
+    const errMsg = '额度扣减失败: ' + (e instanceof Error ? e.message : String(e))
     await jobSvc.updateJob(input.userId, job.id, {
-      status: 'success',
-      providerId: 'doubao',
-      accountId: selectedKey?.id ?? null,
+      status: 'failed',
+      error: errMsg,
       resultUrl,
       costUnit: '点',
       costAmount: cost,
@@ -390,27 +407,28 @@ export async function runGenerate(
       },
       completedAt: new Date().toISOString()
     })
-  } catch (e) {
-    emit({
-      jobId: job.id,
-      status: 'success',
-      message: '生成成功，但历史记录保存失败: ' + (e instanceof Error ? e.message : String(e))
-    })
-    return { ok: true, jobId: job.id }
+    emit({ jobId: job.id, status: 'failed', message: errMsg })
+    return { ok: false, jobId: job.id, error: errMsg }
   }
-  try {
-    await providerSvc.consumeLedger(input.userId, 'doubao', cost, {
-      unitName: '点',
-      keyId: selectedKey?.id ?? undefined
-    })
-  } catch (e) {
-    emit({
-      jobId: job.id,
-      status: 'success',
-      message: '生成成功，但额度记账失败: ' + (e instanceof Error ? e.message : String(e))
-    })
-    return { ok: true, jobId: job.id }
-  }
+
+  await jobSvc.updateJob(input.userId, job.id, {
+    status: 'success',
+    providerId: 'doubao',
+    accountId: selectedKey?.id ?? null,
+    resultUrl,
+    costUnit: '点',
+    costAmount: cost,
+    attempts: result.attempts,
+    options: {
+      ...jobOptions,
+      remoteUrl: result.videoUrl,
+      localPath: localPath || null,
+      posterUrl: result.posterUrl ?? null,
+      accountId: selectedKey?.id ?? null,
+      accountName: selectedKey?.accountName ?? null
+    },
+    completedAt: new Date().toISOString()
+  })
   emit({
     jobId: job.id,
     status: 'success',

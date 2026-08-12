@@ -131,6 +131,28 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     })
   }, [reloadJobs])
 
+  // reconciliation：启动时恢复崩溃残留 + 追记未入账额度
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const auth = getAuthService()
+        const session = await auth?.getSession()
+        const cfg = getSupabaseConfig()
+        if (!auth || !session || !user || !cfg) return
+        await window.api.dispatch.reconcile({
+          supabaseUrl: cfg.url,
+          supabaseAnonKey: cfg.anonKey,
+          accessToken: session.access_token,
+          refreshToken: session.refresh_token,
+          userId: user.id
+        })
+      } catch {
+        // 静默失败，reconciliation 不影响正常使用
+      }
+    }
+    run()
+  }, [])
+
   // 解析最近生成视频的可播放地址（本地路径 → http://127.0.0.1 服务）
   useEffect(() => {
     let cancelled = false

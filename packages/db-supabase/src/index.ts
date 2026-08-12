@@ -49,6 +49,43 @@ export async function getTeamContext(
   return { id: data.team_id as string, role: data.role as TeamRole }
 }
 
+/* ================= 数据一致性：错误码 + Quota Operation ================= */
+
+export type LedgerErrorCode =
+  | 'CONSUMED'
+  | 'RELEASED'
+  | 'QUOTA_EXHAUSTED'
+  | 'LEDGER_NOT_FOUND'
+  | 'INVALID_AMOUNT'
+  | 'DB_ERROR'
+  | 'KEY_NOT_FOUND'
+  | 'DEFAULT_SET'
+
+export interface LedgerResult {
+  ok: boolean
+  code: LedgerErrorCode | string
+  message: string
+  row?: QuotaLedgerRow | null
+}
+
+export type QuotaOperationType = 'reserve' | 'finalize' | 'release'
+
+export interface QuotaOperationRow {
+  id: string
+  job_id: string
+  ledger_id: string
+  operation_type: QuotaOperationType
+  amount: number
+  created_at: string
+}
+
+/** 判断错误是否为唯一约束冲突（PostgreSQL error code 23505） */
+function isDuplicateKeyError(e: unknown): boolean {
+  if (e == null) return false
+  const msg = String((e as { message?: string }).message ?? '')
+  return msg.includes('23505') || msg.includes('duplicate key') || msg.includes('unique') || msg.includes('already exists')
+}
+
 /* ================= 厂商与绑定（Section P1） ================= */
 
 export interface ProviderMeta {
@@ -90,6 +127,7 @@ export interface QuotaLedgerRow {
   daily_total: number
   used: number
   remaining: number
+  reserved: number
   refreshed_at: string
 }
 
@@ -232,20 +270,15 @@ export class ProviderService {
     if (error) throw error
   }
 
-  /** 设为默认账号：先把同厂商所有账号置否，再置目标为默认（每厂商至多一个） */
-  async setDefaultKey(userId: string, providerId: string, keyId: string): Promise<void> {
-    const { error: clearError } = await this.client
-      .from('provider_keys')
-      .update({ is_default: false })
-      .eq('owner_user_id', userId)
-      .eq('provider_id', providerId)
-    if (clearError) throw clearError
-    const { error } = await this.client
-      .from('provider_keys')
-      .update({ is_default: true })
-      .eq('id', keyId)
-      .eq('owner_user_id', userId)
+  /** 设为默认账号：通过 RPC 事务化完成清旧+设新，消除中间态空窗 */
+  async setDefaultKey(userId: string, providerId: string, keyId: string): Promise<LedgerResult> {
+    const { data, error } = await this.client.rpc('set_default_key', {
+      p_user_id: userId,
+      p_provider_id: providerId,
+      p_key_id: keyId
+    })
     if (error) throw error
+    return (data ?? { ok: false, code: 'DB_ERROR', message: 'RPC 返回空' }) as unknown as LedgerResult
   }
 
   async listLedger(userId: string): Promise<QuotaLedgerRow[]> {
@@ -294,16 +327,34 @@ export class ProviderService {
     if (input.teamId) insertPayload.team_id = input.teamId
     if (input.keyId) insertPayload.account_key_id = input.keyId
 
-    const { data: created, error: insertError } = await this.client
-      .from('quota_ledger')
-      .insert(insertPayload)
-      .select()
-      .single()
-    if (insertError) throw insertError
-    return (created ?? null) as unknown as QuotaLedgerRow
+    // 无法用 ON CONFLICT DO NOTHING + RETURNING：
+    // - 个人账号原 UNIQUE 约束无效 (NULL team_id != NULL)
+    // - partial unique index 带 WHERE 子句，PostgREST 不支持 ON CONFLICT 指定
+    // - 团队行 (team_id NOT NULL) 可用 ON CONFLICT，但混合场景无统一方案
+    // 因此采用 SELECT → INSERT → catch duplicate → SELECT 的 TOCTOU 重试模式
+    try {
+      const { data: created, error: insertError } = await this.client
+        .from('quota_ledger')
+        .insert(insertPayload)
+        .select()
+        .single()
+      if (insertError) throw insertError
+      return (created ?? null) as unknown as QuotaLedgerRow
+    } catch (e) {
+      // TOCTOU 保护：并发 INSERT 可能触发 duplicate key → 重查返回已有行
+      if (isDuplicateKeyError(e)) {
+        const { data: retry, error: retryError } = await query.maybeSingle()
+        if (retryError) throw retryError
+        if (retry) return retry as unknown as QuotaLedgerRow
+      }
+      throw e
+    }
   }
 
-  /** 扣减今日额度：确保当日 ledger 行存在后累加 used / 扣减 remaining */
+  /** 原子扣减今日额度（统一走 RPC，消除 SELECT→JS计算→UPDATE 竞态）。
+   *  RPC 在 WHERE 中用 daily_total - used - reserved >= amount 判断，
+   *  不依赖 remaining 字段，避免手动改表 / 旧路径写入导致的不一致。
+   *  失败时抛出 Error，message 中包含错误码。 */
   async consumeLedger(
     userId: string,
     providerId: string,
@@ -311,39 +362,116 @@ export class ProviderService {
     opts: { unitName?: string; keyId?: string | null; teamId?: string | null } = {}
   ): Promise<QuotaLedgerRow> {
     const today = todayKey()
-    let row: QuotaLedgerRow | null = null
-    if (opts.keyId) {
-      const { data, error } = await this.client
-        .from('quota_ledger')
-        .select('*')
-        .eq('date', today)
-        .eq('owner_user_id', userId)
-        .eq('provider_id', providerId)
-        .eq('account_key_id', opts.keyId)
-        .maybeSingle()
+    const keyId = opts.keyId ?? null
+
+    const callRpc = async (): Promise<LedgerResult> => {
+      const { data, error } = await this.client.rpc('atomic_consume_ledger', {
+        p_user_id: userId,
+        p_provider_id: providerId,
+        p_amount: amount,
+        p_key_id: keyId,
+        p_date: today
+      })
       if (error) throw error
-      row = (data ?? null) as unknown as QuotaLedgerRow | null
+      return (data ?? { ok: false, code: 'DB_ERROR', message: 'RPC 返回空' }) as unknown as LedgerResult
     }
-    if (!row) {
-      row = await this.getOrInitLedger({
+
+    const result = await callRpc()
+    if (result.ok && result.row) {
+      return result.row as QuotaLedgerRow
+    }
+
+    // LEDGER_NOT_FOUND → 初始化后重试一次
+    if (result.code === 'LEDGER_NOT_FOUND') {
+      await this.getOrInitLedger({
         userId,
         providerId,
         unitName: opts.unitName ?? '',
         dailyTotal: 0,
-        keyId: opts.keyId ?? null,
+        keyId,
         teamId: opts.teamId ?? null
       })
+      const retryResult = await callRpc()
+      if (retryResult.ok && retryResult.row) {
+        return retryResult.row as QuotaLedgerRow
+      }
+      throw new Error(`[${retryResult.code || 'UNKNOWN'}] ${retryResult.message || '额度扣减失败'}`)
     }
-    const used = Number(row.used ?? 0) + amount
-    const remaining = Math.max(Number(row.remaining ?? 0) - amount, 0)
+
+    throw new Error(`[${result.code || 'UNKNOWN'}] ${result.message || '额度扣减失败'}`)
+  }
+
+  /** 释放预占额度（RPC 原子操作） */
+  async releaseLedger(
+    userId: string,
+    providerId: string,
+    amount: number,
+    keyId: string
+  ): Promise<LedgerResult> {
+    const { data, error } = await this.client.rpc('atomic_release_ledger', {
+      p_user_id: userId,
+      p_provider_id: providerId,
+      p_amount: amount,
+      p_key_id: keyId,
+      p_date: todayKey()
+    })
+    if (error) throw error
+    return (data ?? { ok: false, code: 'DB_ERROR', message: 'RPC 返回空' }) as unknown as LedgerResult
+  }
+
+  /** 记录 quota operation（幂等：ON CONFLICT DO NOTHING） */
+  async insertQuotaOperation(
+    jobId: string,
+    ledgerId: string,
+    operationType: QuotaOperationType,
+    amount: number
+  ): Promise<QuotaOperationRow | null> {
+    // upsert + ignoreDuplicates = INSERT ... ON CONFLICT DO NOTHING
     const { data, error } = await this.client
-      .from('quota_ledger')
-      .update({ used, remaining })
-      .eq('id', row.id)
+      .from('quota_operations')
+      .upsert(
+        { job_id: jobId, ledger_id: ledgerId, operation_type: operationType, amount },
+        { onConflict: 'job_id,operation_type', ignoreDuplicates: true }
+      )
       .select()
       .single()
     if (error) throw error
-    return (data ?? null) as unknown as QuotaLedgerRow
+    if (data) return data as unknown as QuotaOperationRow
+
+    // ignoreDuplicates 跳过了已存在行 → 读回已有记录
+    const { data: existing, error: readErr } = await this.client
+      .from('quota_operations')
+      .select('*')
+      .eq('job_id', jobId)
+      .eq('operation_type', operationType)
+      .maybeSingle()
+    if (readErr) throw readErr
+    return (existing ?? null) as unknown as QuotaOperationRow | null
+  }
+
+  /** reconciliation：查找已成功但未 finalize 的 job */
+  async findUnfinalizedJobs(userId: string): Promise<Array<{ jobId: string; costAmount: number; keyId: string | null }>> {
+    const { data, error } = await this.client
+      .from('jobs')
+      .select('id, cost_amount, account_id')
+      .eq('user_id', userId)
+      .eq('status', 'success')
+      .gt('cost_amount', 0)
+    if (error) throw error
+    if (!data || data.length === 0) return []
+
+    const jobIds = data.map((j: { id: string }) => j.id)
+    const { data: ops, error: opsError } = await this.client
+      .from('quota_operations')
+      .select('job_id')
+      .in('job_id', jobIds)
+      .eq('operation_type', 'finalize')
+    if (opsError) throw opsError
+    const finalizedIds = new Set((ops ?? []).map((o: { job_id: string }) => o.job_id))
+
+    return (data as Array<{ id: string; cost_amount: number; account_id: string | null }>)
+      .filter((j) => !finalizedIds.has(j.id))
+      .map((j) => ({ jobId: j.id, costAmount: Number(j.cost_amount ?? 0), keyId: j.account_id }))
   }
 }
 

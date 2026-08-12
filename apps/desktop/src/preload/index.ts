@@ -96,6 +96,7 @@ export interface DesktopApi {
   }
   dispatch: {
     generate: (input: GenerateRequest) => Promise<{ ok: boolean; jobId?: string; error?: string }>
+    reconcile: (params: { supabaseUrl: string; supabaseAnonKey: string; accessToken: string; refreshToken: string; userId: string }) => Promise<{ ok: boolean; recovered?: boolean; error?: string }>
     onEvent: (callback: (event: JobEvent) => void) => () => void
   }
   files: {
@@ -168,6 +169,7 @@ const api: DesktopApi = {
   },
   dispatch: {
     generate: (input) => ipcRenderer.invoke('dispatch:generate', input) as Promise<{ ok: boolean; jobId?: string; error?: string }>,
+    reconcile: (params) => ipcRenderer.invoke('dispatch:reconcile', params) as Promise<{ ok: boolean; recovered?: boolean; error?: string }>,
     onEvent: (callback) => {
       const listener = (_e: Electron.IpcRendererEvent, event: JobEvent): void => callback(event)
       ipcRenderer.on('job:event', listener)
