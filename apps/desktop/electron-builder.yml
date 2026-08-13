@@ -32,3 +32,8 @@ nsis:
   artifactName: ${productName} Setup ${version}.${ext}
 portable:
   artifactName: ${productName} Portable ${version}.${ext}
+publish:
+  provider: github
+  owner: Shaun520
+  repo: quota-flow
+  private: false

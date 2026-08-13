@@ -952,6 +952,19 @@ input:focus, select:focus, textarea:focus {
   margin-left: 2px;
 }
 
+.form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-foreground);
+  cursor: pointer;
+}
+
+.text-muted {
+  color: var(--color-muted-foreground);
+}
+
 .form-hint {
   font-size: 12px;
   color: #94A3B8;

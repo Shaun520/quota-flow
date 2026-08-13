@@ -56,6 +56,13 @@ export interface JobEvent {
   data?: unknown
 }
 
+export interface UpdaterStatus {
+  state: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+  version?: string
+  progress?: number
+  error?: string
+}
+
 export interface GenerateRequest {
   supabaseUrl: string
   supabaseAnonKey: string
@@ -114,6 +121,11 @@ export interface DesktopApi {
     configure: (config: CookieRenewConfig) => Promise<{ ok: boolean; error?: string }>
     setEnabled: (enabled: boolean) => Promise<{ ok: boolean; state: CookieRenewState }>
     getState: () => Promise<CookieRenewState>
+  }
+  updater: {
+    check: () => Promise<UpdaterStatus>
+    quitAndInstall: () => Promise<void>
+    onStatus: (callback: (status: UpdaterStatus) => void) => () => void
   }
   dispatch: {
     generate: (input: GenerateRequest) => Promise<{ ok: boolean; jobId?: string; error?: string }>
@@ -193,6 +205,18 @@ const api: DesktopApi = {
     configure: (config) => ipcRenderer.invoke('cookie-renew:configure', config) as Promise<{ ok: boolean; error?: string }>,
     setEnabled: (enabled) => ipcRenderer.invoke('cookie-renew:set-enabled', enabled) as Promise<{ ok: boolean; state: CookieRenewState }>,
     getState: () => ipcRenderer.invoke('cookie-renew:get-state') as Promise<CookieRenewState>
+  },
+  updater: {
+    check: () => ipcRenderer.invoke('updater:check') as Promise<UpdaterStatus>,
+    quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install') as Promise<void>,
+    onStatus: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, status: UpdaterStatus): void =>
+        callback(status)
+      ipcRenderer.on('updater:status', listener)
+      return () => {
+        ipcRenderer.removeListener('updater:status', listener)
+      }
+    }
   },
   dispatch: {
     generate: (input) => ipcRenderer.invoke('dispatch:generate', input) as Promise<{ ok: boolean; jobId?: string; error?: string }>,
