@@ -13,7 +13,7 @@ import {
   quitAndInstall as quitAndInstallUpdater
 } from './updater'
 import { runGenerate } from './dispatch'
-import type { DispatchEvent } from './dispatch'
+import type { DispatchEvent, QuotaUpdatedPayload } from './dispatch'
 import type { UpdaterStatus } from './updater'
 
 /** 活跃生成任务注册表：jobId → 取消/已提交状态（用于「终止生成」与「关闭确认」） */
@@ -43,6 +43,14 @@ function sendUpdaterStatus(status: UpdaterStatus): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.webContents.isDestroyed()) {
       win.webContents.send('updater:status', status)
+    }
+  }
+}
+
+function sendQuotaUpdated(payload: QuotaUpdatedPayload): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) {
+      win.webContents.send('quota:updated', payload)
     }
   }
 }
@@ -272,6 +280,9 @@ app.whenReady().then(() => {
     const emit = (ev: DispatchEvent): void => {
       if (!e.sender.isDestroyed()) e.sender.send('job:event', ev)
     }
+    const onQuotaUpdated = (payload: QuotaUpdatedPayload): void => {
+      sendQuotaUpdated(payload)
+    }
     let registeredJobId: string | null = null
     isGenerating = true
     pendingCancel = false
@@ -282,7 +293,7 @@ app.whenReady().then(() => {
         // 准备窗口用户已点停止 → 任务一注册立即标记取消
         if (pendingCancel) state.aborted = true
         pendingCancel = false
-      })
+      }, onQuotaUpdated)
     } catch (err) {
       // 主进程抛出任意值（如 Supabase PostgrestError 对象）时规范化为可读信息，
       // 避免 Electron 序列化成 [object Object] 导致 UI 看不到真实原因

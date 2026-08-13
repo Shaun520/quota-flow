@@ -74,10 +74,6 @@
 [data-theme="dark"] .main-content::after {
   opacity: 0.015;
 }
-[data-theme="dark"] .title-bar {
-  background: var(--bg-base);
-  border-bottom-color: #222;
-}
 [data-theme="dark"] .generate-panel,
 [data-theme="dark"] .provider-status-panel,
 [data-theme="dark"] .job-card,
@@ -240,8 +236,8 @@ body {
   align-items: center;
   height: 30px;
   padding: 0 8px;
-  background: #1a1a1a;
-  border-bottom: 1px solid #2a2a2a;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-light);
   -webkit-app-region: drag;
   user-select: none;
   flex-shrink: 0;
@@ -250,7 +246,7 @@ body {
   flex: 1;
   text-align: center;
   font-size: 0.92em;
-  color: #e0e0e0;
+  color: var(--fg-secondary);
   font-weight: 400;
   letter-spacing: 0.3px;
   white-space: nowrap;
@@ -270,7 +266,7 @@ body {
   border: none;
   border-radius: 0;
   background: transparent;
-  color: #b0b0b0;
+  color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -278,8 +274,8 @@ body {
   transition: background 0.1s ease, color 0.1s ease;
 }
 .title-bar .window-controls button:hover {
-  background: #333;
-  color: #fff;
+  background: var(--bg-hover);
+  color: var(--fg-primary);
 }
 .title-bar .window-controls .btn-close:hover {
   background: #e81123;

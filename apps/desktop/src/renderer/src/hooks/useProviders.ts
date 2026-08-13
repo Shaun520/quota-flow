@@ -4,6 +4,7 @@ import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
 import { getHealthCheckIntervalMs } from '../components/Modals'
+import { DEFAULT_SUPPORTED_DURATIONS } from '../spec'
 import type {
   ProviderKey,
   ProviderMeta,
@@ -33,6 +34,7 @@ export interface ProviderAgg {
   enabled: boolean
   unitName: string
   defaultDailyQuota: number
+  durations: number[]
   boundCount: number
   enabledCount: number
   health: 'online' | 'degraded' | 'offline' | 'unbound'
@@ -56,6 +58,15 @@ function todayShanghai(): string {
   }).formatToParts(new Date())
   const get = (t: string): string => parts.find((p) => p.type === t)?.value ?? ''
   return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function supportedDurations(meta: ProviderMeta): number[] {
+  const raw = meta.capabilities?.supported_durations
+  if (!Array.isArray(raw)) return [...DEFAULT_SUPPORTED_DURATIONS]
+  const durations = raw
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  return durations.length > 0 ? durations : [...DEFAULT_SUPPORTED_DURATIONS]
 }
 
 function bindHealth(bindings: BindingView[]): ProviderAgg['health'] {
@@ -274,6 +285,23 @@ export function useProviders(): ProvidersResult {
     }
   }, [user?.id])
 
+  useEffect(() => {
+    if (!user) return
+    return window.api.dispatch.onQuotaUpdated((payload) => {
+      if (payload.userId !== user.id) return
+      const ledger = payload.ledger
+      setLedgers((prev) => {
+        const idx = prev.findIndex((l) => l.id === ledger.id)
+        if (idx >= 0) {
+          const next = [...prev]
+          next[idx] = ledger
+          return next
+        }
+        return [ledger, ...prev]
+      })
+    })
+  }, [user?.id])
+
   // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
   useEffect(() => {
     if (!user || keys.length === 0) return
@@ -326,6 +354,7 @@ export function useProviders(): ProvidersResult {
         enabled: p.enabled !== false,
         unitName: p.unit_name ?? '',
         defaultDailyQuota: Number(p.default_daily_quota ?? 0),
+        durations: supportedDurations(p),
         boundCount: bindings.length,
         enabledCount: bindings.filter((b) => b.enabled).length,
         health,

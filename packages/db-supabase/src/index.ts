@@ -550,11 +550,12 @@ export interface UpdateJobInput {
 export class JobService {
   constructor(private readonly client: SupabaseClient) {}
 
-  /** 列出当前用户可见的任务（RLS 已按本人/团队隔离，无需显式过滤），最新在前 */
-  async listJobs(): Promise<JobRow[]> {
+  /** 列出当前用户的任务（明确按账号过滤，避免团队/其他记录混入时区），最新在前 */
+  async listJobs(userId: string): Promise<JobRow[]> {
     const { data, error } = await this.client
       .from('jobs')
       .select('*')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
     if (error) throw error
     return (data ?? []) as unknown as JobRow[]

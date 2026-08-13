@@ -6,6 +6,7 @@ import { copyFileSync, createWriteStream, mkdirSync, renameSync } from 'node:fs'
 import { get as httpsGet } from 'node:https'
 import { join } from 'node:path'
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
+import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
 import { runDoubaoGeneration } from './webview-engine'
 import type { ProviderCookie, OriginStorage } from './webview-engine'
 
@@ -71,8 +72,28 @@ export interface DispatchEvent {
   data?: unknown
 }
 
+export interface QuotaUpdatedPayload {
+  userId: string
+  ledger: QuotaLedgerRow
+}
+
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+
+const DEFAULT_SUPPORTED_DURATIONS = [5, 10]
+
+function resolveDispatchProvider(providerId: string): string {
+  return providerId === 'auto' ? 'doubao' : providerId
+}
+
+function parseSupportedDurations(meta: { capabilities?: Record<string, unknown> | null } | undefined): number[] {
+  const raw = meta?.capabilities?.supported_durations
+  if (!Array.isArray(raw)) return [...DEFAULT_SUPPORTED_DURATIONS]
+  const durations = raw
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  return durations.length > 0 ? durations : [...DEFAULT_SUPPORTED_DURATIONS]
+}
 
 function doubaoCost(durationSec: number): number {
   if (durationSec <= 5) return 1
@@ -149,7 +170,8 @@ function downloadVideo(url: string, jobId: string, redirects = 0): Promise<strin
 export async function runGenerate(
   input: GenerateInput,
   emit: (event: DispatchEvent) => void,
-  onJobCreated?: (jobId: string, state: { aborted: boolean; submitted: boolean }) => void
+  onJobCreated?: (jobId: string, state: { aborted: boolean; submitted: boolean }) => void,
+  onQuotaUpdated?: (payload: QuotaUpdatedPayload) => void
 ): Promise<{ ok: boolean; jobId?: string; error?: string }> {
   if (!input.supabaseUrl || !input.supabaseAnonKey) {
     return { ok: false, error: 'Supabase 未配置' }
@@ -166,6 +188,18 @@ export async function runGenerate(
   }
   const jobSvc = new JobService(client)
   const providerSvc = new ProviderService(client)
+
+  const resolvedProviderId = resolveDispatchProvider(input.providerId)
+  try {
+    const providers = await providerSvc.listAllProviders()
+    const meta = providers.find((p) => p.id === resolvedProviderId)
+    const supportedDurations = parseSupportedDurations(meta)
+    if (!supportedDurations.includes(input.durationSec)) {
+      return { ok: false, error: `当前厂商不支持 ${input.durationSec} 秒` }
+    }
+  } catch (e) {
+    return { ok: false, error: '校验厂商时长失败: ' + (e instanceof Error ? e.message : String(e)) }
+  }
   // 取消/已提交状态：由主进程注册表持有引用，IPC 侧可标记 aborted，引擎提交后置 submitted
   const runCancelState: { aborted: boolean; submitted: boolean } = { aborted: false, submitted: false }
 
@@ -421,6 +455,7 @@ export async function runGenerate(
     if (selectedKey?.id && consumed) {
       await providerSvc.insertQuotaOperation(job.id, consumed.id, 'finalize', cost)
     }
+    onQuotaUpdated?.({ userId: input.userId, ledger: consumed })
   } catch (e) {
     const errMsg = '额度扣减失败: ' + (e instanceof Error ? e.message : String(e))
     await jobSvc.updateJob(input.userId, job.id, {

@@ -10,7 +10,7 @@ export default function TitleBar() {
 
   return (
     <div className="title-bar">
-      <div className="title-bar-text">Quota-Flow · Unified LLM Router</div>
+      <div className="title-bar-text">Quota-Flow · Video Generation Router</div>
       <div className="window-controls">
         <button
           title="最小化"
