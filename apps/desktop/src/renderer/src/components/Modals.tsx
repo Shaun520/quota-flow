@@ -6,6 +6,14 @@ import { getProviderService } from '../auth/service'
 import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
 import type { TeamContext } from '@quota-flow/db-supabase'
+import desktopPackage from '../../../../package.json'
+
+export interface UpdaterStatusView {
+  state: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+  version?: string
+  progress?: number
+  error?: string
+}
 
 export type Theme = 'light' | 'dark'
 export type FontSize = '12' | '13' | '14' | '15' | '16'
@@ -185,7 +193,7 @@ export function ProfileModal({
   )
 }
 
-export function SettingsModal({ onClose }: { onClose: () => void }) {
+export function SettingsModal({ onClose, updater }: { onClose: () => void; updater: UpdaterStatusView }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [fontSize, setFontSize] = useState<FontSize>(getInitialFontSize)
   const [showWebview, setShowWebview] = useState<boolean>(getInitialShowWebview)
@@ -303,6 +311,46 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             { value: '每 12 小时', label: '每 12 小时' }
           ]}
         />
+      </div>
+      <div className="form-group updater-settings">
+        <label>检查更新</label>
+        <div className="updater-settings-row">
+          <span>当前版本：Quota-Flow v{desktopPackage.version}</span>
+          <button
+            className="btn-sm primary"
+            onClick={() => void window.api.updater.check()}
+            disabled={updater.state === 'checking' || updater.state === 'downloading'}
+          >
+            检查更新
+          </button>
+        </div>
+        <div className="updater-settings-state">
+          {updater.state === 'checking' ? (
+            '正在检查更新...'
+          ) : updater.state === 'available' ? (
+            `发现新版本 v${updater.version ?? ''}`
+          ) : updater.state === 'downloading' ? (
+            `正在下载更新 ${Math.round(updater.progress ?? 0)}%`
+          ) : updater.state === 'downloaded' ? (
+            `新版本 v${updater.version ?? ''} 已下载`
+          ) : updater.state === 'not-available' ? (
+            '当前已是最新版本'
+          ) : updater.state === 'error' ? (
+            `更新检查失败：${updater.error ?? ''}`
+          ) : (
+            '尚未检查更新'
+          )}
+        </div>
+        {updater.state === 'available' ? (
+          <button className="btn-sm" onClick={() => void window.api.updater.download()}>
+            下载更新
+          </button>
+        ) : null}
+        {updater.state === 'downloaded' ? (
+          <button className="btn-sm primary" onClick={() => void window.api.updater.quitAndInstall()}>
+            重启安装
+          </button>
+        ) : null}
       </div>
     </Modal>
   )

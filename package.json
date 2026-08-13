@@ -15,7 +15,8 @@
     "dev": "turbo run dev",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
-    "release": "pnpm --filter @quota-flow/desktop run release"
+    "release": "pnpm --filter @quota-flow/desktop run release",
+    "release:publish": "git fetch --tags origin && pnpm --filter @quota-flow/desktop run release:publish"
   },
   "devDependencies": {
     "turbo": "^2.1.0",

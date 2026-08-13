@@ -14,7 +14,15 @@ import type { AuthUser } from './hooks/useAuth'
 import { useProviders } from './hooks/useProviders'
 import { useJobs } from './hooks/useJobs'
 import type { TeamContext } from '@quota-flow/db-supabase'
-import { ProfileModal, SettingsModal, getInitialTheme, applyTheme, getInitialFontSize, applyFontSize } from './components/Modals'
+import {
+  Modal,
+  ProfileModal,
+  SettingsModal,
+  getInitialTheme,
+  applyTheme,
+  getInitialFontSize,
+  applyFontSize
+} from './components/Modals'
 import { getSupabaseConfig, getAuthService } from './auth/service'
 import {
   IconClock,
@@ -25,6 +33,7 @@ import {
   IconUser,
   IconUsers
 } from './components/icons'
+import desktopPackage from '../../../package.json'
 
 type TabId = 'dispatch' | 'providers' | 'history' | 'team'
 
@@ -53,6 +62,7 @@ interface MainAppProps {
   team: TeamContext | null
   fresh: boolean
   bannerVisible: boolean
+  updater: UpdaterStatusView
   onboardStep: 1 | 2 | 3
   completeStep: (n: 1 | 2 | 3) => void
   onFinishOnboarding: () => void
@@ -66,6 +76,7 @@ function MainApp({
   team,
   fresh,
   bannerVisible,
+  updater,
   onboardStep,
   completeStep,
   onFinishOnboarding,
@@ -86,6 +97,7 @@ function MainApp({
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const [renewText, setRenewText] = useState('自动续命：—')
+  const [updatePromptVisible, setUpdatePromptVisible] = useState(false)
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -93,16 +105,22 @@ function MainApp({
     toastTimer.current = window.setTimeout(() => setToast(null), 2200)
   }, [])
 
-  const [updater, setUpdater] = useState<UpdaterStatusView>({ state: 'idle' })
-
   useEffect(() => {
     applyTheme(getInitialTheme())
     applyFontSize(getInitialFontSize())
   }, [])
 
   useEffect(() => {
-    return window.api.updater.onStatus(setUpdater)
-  }, [])
+    if (updater.state !== 'available' || !updater.version) return
+    const key = `qf:update-prompt:${updater.version}`
+    try {
+      if (localStorage.getItem(key)) return
+      localStorage.setItem(key, '1')
+    } catch {
+      // 本地存储不可用时仍按弹一次处理
+    }
+    setUpdatePromptVisible(true)
+  }, [updater.state, updater.version])
 
   // Cookie 自动续命：配置主进程调度器（携带最新会话 token）+ 轮询状态更新状态栏
   useEffect(() => {
@@ -269,7 +287,7 @@ function MainApp({
           ) : updater.state === 'available' ? (
             <div className="status-item updater-item">
               <span>发现新版本 {updater.version}</span>
-              <button className="updater-action" onClick={() => void window.api.updater.check()}>
+              <button className="updater-action" onClick={() => void window.api.updater.download()}>
                 下载
               </button>
             </div>
@@ -282,10 +300,37 @@ function MainApp({
               更新检查失败
             </div>
           ) : null}
-          <div className="status-item">Quota-Flow v0.9.0</div>
+          <div className="status-item">Quota-Flow v{desktopPackage.version}</div>
         </div>
       </footer>
       {toast && <div className="app-toast">{toast}</div>}
+      {updatePromptVisible && updater.state === 'available' && (
+        <Modal
+          title="发现新版本"
+          onClose={() => setUpdatePromptVisible(false)}
+          footer={
+            <>
+              <button className="btn-sm" onClick={() => setUpdatePromptVisible(false)}>
+                稍后
+              </button>
+              <button
+                className="btn-sm primary"
+                onClick={() => {
+                  setUpdatePromptVisible(false)
+                  void window.api.updater.download()
+                }}
+              >
+                下载更新
+              </button>
+            </>
+          }
+        >
+          <div className="updater-prompt">
+            <p>当前版本为 Quota-Flow v{desktopPackage.version}，发现新版本 v{updater.version}。</p>
+            <p>点击“下载更新”后会后台下载安装包，下载完成后可在状态栏或设置中重启安装。</p>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -296,11 +341,12 @@ interface AppModalsProps {
   modalApiRef: MutableRefObject<{ open: (m: ModalKind) => void } | null>
   user: AuthUser
   team: TeamContext | null
+  updater: UpdaterStatusView
   onUpdateProfile: (name: string) => Promise<string | null>
 }
 
 /** 个人中心 / 设置弹窗：弹窗状态独立于此组件内部，开合不再触发 MainApp 及四个 Tab 树重渲染 */
-function AppModals({ modalApiRef, user, team, onUpdateProfile }: AppModalsProps) {
+function AppModals({ modalApiRef, user, team, updater, onUpdateProfile }: AppModalsProps) {
   const [modal, setModal] = useState<ModalKind | null>(null)
 
   useEffect(() => {
@@ -320,7 +366,7 @@ function AppModals({ modalApiRef, user, team, onUpdateProfile }: AppModalsProps)
           onSaveDisplayName={onUpdateProfile}
         />
       )}
-      {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} />}
+      {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} updater={updater} />}
     </>
   )
 }
@@ -362,8 +408,12 @@ export default function App() {
   const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile } =
     useAuth()
   const modalApiRef = useRef<{ open: (m: ModalKind) => void } | null>(null)
+  const [updater, setUpdater] = useState<UpdaterStatusView>({ state: 'idle' })
   const openModal = useCallback((m: ModalKind) => {
     modalApiRef.current?.open(m)
+  }, [])
+  useEffect(() => {
+    return window.api.updater.onStatus(setUpdater)
   }, [])
   const [submitting, setSubmitting] = useState(false)
   const [onboardStep, setOnboardStep] = useState<1 | 2 | 3>(() => {
@@ -469,6 +519,7 @@ export default function App() {
         team={team}
         fresh={fresh}
         bannerVisible={bannerVisible}
+        updater={updater}
         onboardStep={onboardStep}
         completeStep={completeStep}
         onFinishOnboarding={finishOnboarding}
@@ -476,7 +527,13 @@ export default function App() {
         onOpenModal={openModal}
         onSignOut={signOut}
       />
-      <AppModals modalApiRef={modalApiRef} user={user} team={team} onUpdateProfile={updateProfile} />
+      <AppModals
+        modalApiRef={modalApiRef}
+        user={user}
+        team={team}
+        updater={updater}
+        onUpdateProfile={updateProfile}
+      />
     </>
   )
 }

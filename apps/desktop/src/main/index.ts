@@ -6,7 +6,12 @@ import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
 import { initCookieRenew } from './cookie-renew'
-import { checkForUpdatesNow, initAutoUpdater, quitAndInstall as quitAndInstallUpdater } from './updater'
+import {
+  checkForUpdatesNow,
+  downloadUpdate,
+  initAutoUpdater,
+  quitAndInstall as quitAndInstallUpdater
+} from './updater'
 import { runGenerate } from './dispatch'
 import type { DispatchEvent } from './dispatch'
 import type { UpdaterStatus } from './updater'
@@ -259,6 +264,7 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('auth:clear-session', () => clearStoredSession())
   ipcMain.handle('updater:check', () => checkForUpdatesNow(sendUpdaterStatus))
+  ipcMain.handle('updater:download', () => downloadUpdate(sendUpdaterStatus))
   ipcMain.handle('updater:quit-and-install', () => {
     quitAndInstallUpdater()
   })
