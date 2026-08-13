@@ -114,7 +114,7 @@ export function useJobs(): JobsResult {
     if (!loadedRef.current) setLoading(true)
     setError(null)
     svc
-      .listJobs()
+      .listJobs(user.id)
       .then((rows) => {
         if (!cancelled) {
           loadedRef.current = true

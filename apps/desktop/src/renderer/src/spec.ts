@@ -28,33 +28,54 @@ export interface DurationOption {
   disabled?: boolean
 }
 
+export const DEFAULT_SUPPORTED_DURATIONS = [5, 10]
+
+const DURATION_ORDER = [5, 10, 15] as const
+
+export function intersectDurations(lists: number[][]): number[] {
+  if (lists.length === 0) return [...DEFAULT_SUPPORTED_DURATIONS]
+  const counts = new Map<number, number>()
+  for (const list of lists) {
+    const unique = Array.from(new Set(list.map(Number).filter((n) => Number.isFinite(n) && n > 0)))
+    for (const duration of unique) {
+      counts.set(duration, (counts.get(duration) ?? 0) + 1)
+    }
+  }
+  return DURATION_ORDER.filter((duration) => counts.get(duration) === lists.length)
+}
+
 export function durationOptions(
   provider: string,
   model: string,
   mode: string,
-  vip: boolean
+  vip: boolean,
+  supportedDurations: number[] = DEFAULT_SUPPORTED_DURATIONS
 ): DurationOption[] {
-  const durations: DurationOption[] = [
-    { value: 5, label: '5 秒' },
-    { value: 10, label: '10 秒' },
-    { value: 15, label: '15 秒' }
-  ]
+  const allowed = new Set(supportedDurations)
+  const durations: DurationOption[] = DURATION_ORDER.filter((d) => allowed.has(d)).map((d) => ({
+    value: d,
+    label: `${d} 秒`
+  }))
+  if (durations.length === 0) {
+    durations.push({ value: 5, label: '5 秒' })
+  }
   if (provider === 'yuanbao') {
     durations.length = 1
-    durations[0].label = '5 秒（固定）'
+    durations[0] = { value: 5, label: '5 秒（固定）' }
   }
-  if (provider === 'doubao' && !vip) {
-    durations[2].label = '15 秒（仅 VIP）'
-    durations[2].disabled = true
+  const d15 = durations.find((d) => d.value === 15)
+  if (provider === 'doubao' && d15 && !vip) {
+    d15.label = '15 秒（仅 VIP）'
+    d15.disabled = true
   }
-  if (provider === 'qwen') {
+  if (provider === 'qwen' && d15) {
     if (model === '万相 2.6' && mode === 'multi_ref') {
-      durations[2].label = '15 秒（多参考不支持）'
-      durations[2].disabled = true
+      d15.label = '15 秒（多参考不支持）'
+      d15.disabled = true
     }
     if (model === 'HappyHorse 1.0 Beta') {
-      durations[2].label = '15 秒（该模型不支持）'
-      durations[2].disabled = true
+      d15.label = '15 秒（该模型不支持）'
+      d15.disabled = true
     }
   }
   return durations

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
 
 export type ProviderId = 'yuanbao' | 'qwenwan'
 
@@ -54,6 +55,11 @@ export interface JobEvent {
   stage?: string
   message?: string
   data?: unknown
+}
+
+export interface QuotaUpdatedPayload {
+  userId: string
+  ledger: QuotaLedgerRow
 }
 
 export interface UpdaterStatus {
@@ -133,6 +139,7 @@ export interface DesktopApi {
     reconcile: (params: { supabaseUrl: string; supabaseAnonKey: string; accessToken: string; refreshToken: string; userId: string }) => Promise<{ ok: boolean; recovered?: boolean; error?: string }>
     cancel: (jobId?: string) => Promise<{ ok: boolean; reason?: string; submitted?: boolean }>
     onEvent: (callback: (event: JobEvent) => void) => () => void
+    onQuotaUpdated: (callback: (payload: QuotaUpdatedPayload) => void) => () => void
   }
   files: {
     getPath: (file: File) => string
@@ -229,6 +236,13 @@ const api: DesktopApi = {
       ipcRenderer.on('job:event', listener)
       return () => {
         ipcRenderer.removeListener('job:event', listener)
+      }
+    },
+    onQuotaUpdated: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, payload: QuotaUpdatedPayload): void => callback(payload)
+      ipcRenderer.on('quota:updated', listener)
+      return () => {
+        ipcRenderer.removeListener('quota:updated', listener)
       }
     }
   },

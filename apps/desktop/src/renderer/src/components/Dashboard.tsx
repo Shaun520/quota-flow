@@ -1,8 +1,10 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import {
+  DEFAULT_SUPPORTED_DURATIONS,
   MODELS,
   computeCost,
   durationOptions,
+  intersectDurations,
   resolutionOptions,
   uploadHint
 } from '../spec'
@@ -91,9 +93,22 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const durations = durationOptions(provider, model, mode, VIP)
+  const activeBoundAggs = useMemo(
+    () => provAggs.filter((a) => a.enabled && a.boundCount > 0),
+    [provAggs]
+  )
+  const providerDurations = useMemo(() => {
+    return new Map(provAggs.map((a) => [a.providerId, a.durations]))
+  }, [provAggs])
+  const selectedDurations = useMemo(() => {
+    if (provider === 'auto') {
+      return intersectDurations(activeBoundAggs.map((a) => a.durations))
+    }
+    return providerDurations.get(provider) ?? DEFAULT_SUPPORTED_DURATIONS
+  }, [provider, activeBoundAggs, providerDurations])
+  const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
   const resolutions = resolutionOptions(provider)
-  const cost = computeCost(provider, model, duration, resolution)
+  const cost = computeCost(provider === 'auto' ? 'doubao' : provider, model, duration, resolution)
   const upload = uploadHint(provider, mode)
 
   // 调度台状态面板不展示后台已停用的厂商，避免出现置灰/停用态干扰调度信息。
@@ -101,12 +116,12 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
 
   // 厂商选项只取「已启用且已绑定」的厂商；智能调度仅在至少绑定一家时提供
   const providerOptions = useMemo(() => {
-    const bound = provAggs
-      .filter((a) => a.enabled && a.boundCount > 0)
-      .map((a) => ({ value: a.providerId, label: a.name }))
-    if (bound.length === 0) return []
-    return [{ value: 'auto', label: '智能调度（推荐）' }, ...bound]
-  }, [provAggs])
+    if (activeBoundAggs.length === 0) return []
+    return [
+      { value: 'auto', label: '智能调度（推荐）' },
+      ...activeBoundAggs.map((a) => ({ value: a.providerId, label: a.name }))
+    ]
+  }, [activeBoundAggs])
 
   // 当前选择不在可用列表时（例如厂商被解绑），回退到智能调度或第一个可用厂商
   useEffect(() => {
@@ -249,6 +264,10 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       setGenError('图生视频需要先上传图片')
       return
     }
+    if (!durations.some((d) => d.value === duration)) {
+      setGenError('当前厂商不支持该时长')
+      return
+    }
     if (providerOptions.length === 0) {
       setGenError('尚未绑定厂商账号，请先到厂商页绑定后再生成')
       onGoProviders()
@@ -292,7 +311,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         resolution,
         audio,
         ratio,
-        images: imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
+        images: mode === 't2v' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -312,7 +331,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, duration, resolution, audio, ratio, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, duration, durations, resolution, audio, ratio, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -348,6 +367,14 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const onProviderChange = (value: string): void => {
     setProvider(value)
     setModel(MODELS[value]?.[0] ?? MODELS.auto[0])
+  }
+
+  const onModeChange = (value: string): void => {
+    setMode(value)
+    if (value === 't2v') {
+      setImages([])
+      setImageFiles([])
+    }
   }
 
   const onPickFiles = useCallback(() => {
@@ -424,7 +451,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
               <Select
                 id="mode"
                 value={mode}
-                onChange={setMode}
+                onChange={onModeChange}
                 options={[
                   { value: 't2v', label: '文生视频' },
                   { value: 'img', label: '图生视频' },
@@ -485,46 +512,48 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             </div>
           </div>
 
-          <div
-            className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
-            onClick={onPickFiles}
-          >
-            {images.length > 0 ? (
-              <div className="thumb-strip">
-                {images.map((src, idx) => (
-                  <div
-                    className="thumb-item"
-                    key={idx}
-                    title="点击预览图片"
-                    style={{ cursor: 'pointer' }}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setImagePreview(src)
-                    }}
-                  >
-                    <img src={src} alt="" />
-                    <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveImage(idx) }}>×</button>
-                  </div>
-                ))}
-                {images.length < 4 && (
-                  <div className="thumb-add">+</div>
-                )}
-              </div>
-            ) : (
-              <>
-                <IconUpload size={16} />
-                <span className="upload-text">{upload}</span>
-              </>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: 'none' }}
-              onChange={onFilesSelected}
-            />
-          </div>
+          {mode !== 't2v' && (
+            <div
+              className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
+              onClick={onPickFiles}
+            >
+              {images.length > 0 ? (
+                <div className="thumb-strip">
+                  {images.map((src, idx) => (
+                    <div
+                      className="thumb-item"
+                      key={idx}
+                      title="点击预览图片"
+                      style={{ cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setImagePreview(src)
+                      }}
+                    >
+                      <img src={src} alt="" />
+                      <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveImage(idx) }}>×</button>
+                    </div>
+                  ))}
+                  {images.length < 4 && (
+                    <div className="thumb-add">+</div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <IconUpload size={16} />
+                  <span className="upload-text">{upload}</span>
+                </>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={onFilesSelected}
+              />
+            </div>
+          )}
 
           <div className="generate-actions">
             {genError && (
@@ -682,7 +711,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             />
           ) : (
             <div className="job-list">
-              {jobItems.slice(0, 6).map((j) => {
+              {jobItems.slice(0, 10).map((j) => {
                 const r = j.record
                 const badgeCls = r.status === '成功' ? 'success' : r.status === '失败' ? 'error' : 'pending'
                 return (

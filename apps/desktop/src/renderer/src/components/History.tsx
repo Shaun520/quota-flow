@@ -148,7 +148,10 @@ export default function History({ jobs }: { jobs: JobsResult }) {
     if (confirm.kind === 'one') {
       setDeletingId(confirm.item.id)
       try {
-        await remove(confirm.item.id)
+        const ok = await remove(confirm.item.id)
+        if (!ok) {
+          setNotice('删除失败：只能删除当前账号下的历史记录，请确认这条记录归属后重试。')
+        }
       } finally {
         setDeletingId(null)
       }
@@ -156,7 +159,14 @@ export default function History({ jobs }: { jobs: JobsResult }) {
       setBatchDeleting(true)
       try {
         const n = await removeMany(confirm.ids)
-        if (n > 0) clearSelection()
+        if (n === confirm.ids.length) {
+          clearSelection()
+        } else if (n > 0) {
+          clearSelection()
+          setNotice(`已删除 ${n} 条，剩余 ${confirm.ids.length - n} 条不是当前账号记录，未删除。`)
+        } else {
+          setNotice('删除失败：只能删除当前账号下的历史记录，请确认这些记录归属后重试。')
+        }
       } finally {
         setBatchDeleting(false)
       }
