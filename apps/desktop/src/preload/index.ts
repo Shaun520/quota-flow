@@ -124,6 +124,7 @@ export interface DesktopApi {
   }
   updater: {
     check: () => Promise<UpdaterStatus>
+    download: () => Promise<UpdaterStatus>
     quitAndInstall: () => Promise<void>
     onStatus: (callback: (status: UpdaterStatus) => void) => () => void
   }
@@ -208,6 +209,7 @@ const api: DesktopApi = {
   },
   updater: {
     check: () => ipcRenderer.invoke('updater:check') as Promise<UpdaterStatus>,
+    download: () => ipcRenderer.invoke('updater:download') as Promise<UpdaterStatus>,
     quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install') as Promise<void>,
     onStatus: (callback) => {
       const listener = (_e: Electron.IpcRendererEvent, status: UpdaterStatus): void =>

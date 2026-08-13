@@ -1,6 +1,6 @@
 {
   "name": "@quota-flow/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Quota-Flow 桌面端（Electron + Vite + React）",
   "author": "Quota-Flow",
   "private": true,
@@ -11,6 +11,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "release": "pnpm run build && electron-builder --win",
+    "release:publish": "git fetch --tags origin && pnpm run build && electron-builder --win --publish always",
     "release:dir": "pnpm run build && electron-builder --dir"
   },
   "devDependencies": {

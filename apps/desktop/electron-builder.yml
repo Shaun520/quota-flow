@@ -37,3 +37,4 @@ publish:
   owner: Shaun520
   repo: quota-flow
   private: false
+  releaseType: release
