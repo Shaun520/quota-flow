@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { IconChevron, IconInfo, PROVIDER_ICONS } from './icons'
+import { useEffect, useRef, useState } from 'react'
+import { IconChevron, IconInfo, IconRefresh, PROVIDER_ICONS } from './icons'
 import { AddProviderModal } from './Modals'
 import Pagination from './Pagination'
 import { EmptyState } from './EmptyState'
@@ -24,13 +24,28 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, onBound, providers }: ProvidersProps) {
   const { user } = useAuth()
-  const { loading, error, aggs, reload, testHealth, rename, setDefault, setEnabled, unbind } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, unbind } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [showAddModal, setShowAddModal] = useState(false)
   const [addTarget, setAddTarget] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
+  const [justRefreshed, setJustRefreshed] = useState(false)
+  const wasRefreshing = useRef(false)
+
+  useEffect(() => {
+    if (refreshing) {
+      wasRefreshing.current = true
+      setJustRefreshed(false)
+      return
+    }
+    if (!wasRefreshing.current) return
+    wasRefreshing.current = false
+    setJustRefreshed(true)
+    const timer = window.setTimeout(() => setJustRefreshed(false), 1600)
+    return () => window.clearTimeout(timer)
+  }, [refreshing])
 
   const boundRows = aggs.filter((a) => a.boundCount > 0)
 
@@ -75,6 +90,10 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
               { value: 'unbound', label: '未绑定' }
             ]}
           />
+          <button className="btn-sm refresh-btn" onClick={reload} disabled={loading || refreshing}>
+            <IconRefresh size={14} className={loading || refreshing ? 'spin' : undefined} />
+            {loading || refreshing ? '\u5237\u65b0\u4e2d' : justRefreshed ? '\u5df2\u5237\u65b0' : '\u5237\u65b0'}
+          </button>
           <button className="btn-sm primary" onClick={() => openAdd()}>
             + 新增厂商
           </button>

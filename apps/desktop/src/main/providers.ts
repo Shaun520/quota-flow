@@ -14,6 +14,7 @@ export type ProviderId =
   | 'doubao'
   | 'jimeng'
   | 'qwen'
+  | 'qwenwan'
   | 'yuanbao'
   | 'kling'
   | 'hailuo'
@@ -36,6 +37,10 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
     healthUrl: 'https://jimeng.jianying.com/'
   },
   qwen: {
+    loginUrl: 'https://tongyi.aliyun.com/wanxiang/create',
+    healthUrl: 'https://tongyi.aliyun.com/'
+  },
+  qwenwan: {
     loginUrl: 'https://tongyi.aliyun.com/wanxiang/create',
     healthUrl: 'https://tongyi.aliyun.com/'
   },
@@ -232,6 +237,7 @@ const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtr
   doubao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   jimeng: { script: COMMON_FINGERPRINT_SCRIPT },
   qwen: { script: COMMON_FINGERPRINT_SCRIPT },
+  qwenwan: { script: COMMON_FINGERPRINT_SCRIPT },
   // 实测元宝分区 cookie：QQ 登录产生 pt2gguin(o+QQ号) 与 hy_user(元宝账号UUID)，均按账号稳定；
   // uin/wxuin/openid 实际不存在，cookie 标识已验证，优先于泛用 DOM 脚本
   yuanbao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
@@ -246,6 +252,7 @@ const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   doubao: ['flow_cur_user_sec_id', 'uid_tt', 'uid_tt_ss'],
   jimeng: ['user_id', 'uid', 'userId'],
   qwen: ['login_aliyunid', 'loginaliyunid'],
+  qwenwan: ['login_aliyunid', 'loginaliyunid'],
   // 实测值：pt2gguin = o<QQ号>（.ptlogin2.qq.com），hy_user = 元宝账号 UUID（.tencent.com）
   yuanbao: ['pt2gguin', 'hy_user'],
   kling: ['userId', 'user_id', 'kk_u'],
@@ -272,6 +279,27 @@ function providerSite(providerId: string): ProviderSite | undefined {
 }
 
 export { providerSite }
+
+function providerMainOrigin(providerId: string): string {
+  const site = providerSite(providerId)
+  const url = site?.loginUrl || site?.healthUrl
+  if (!url) return ''
+  try {
+    return new URL(url).origin
+  } catch {
+    return ''
+  }
+}
+
+function isProviderMainSite(providerId: string, currentUrl: string): boolean {
+  const origin = providerMainOrigin(providerId)
+  if (!origin) return false
+  try {
+    return new URL(currentUrl).origin === origin
+  } catch {
+    return currentUrl.startsWith(origin)
+  }
+}
 
 // 轻量诊断：仅记录来源与指纹哈希（不落明文标识），供各厂商提取脚本联调校准
 function appendFingerprintDebug(entry: Record<string, unknown>): void {
@@ -442,7 +470,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
             bar.id = 'qf-login-bar';
             bar.style.cssText = 'position:fixed;top:0;left:0;right:0;height:40px;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#1c1c1e;color:#fff;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3);';
             bar.innerHTML =
-              '<span>请在弹出的页面完成登录，扫码后请等待页面跳转回豆包主站再点击按钮</span>' +
+              '<span>请在弹出的页面完成登录，扫码后请等待页面跳转回厂商主站再点击按钮</span>' +
               '<button id="qf-login-done" style="padding:5px 14px;border:0;border-radius:6px;background:#e07a3e;color:#fff;font:600 13px/1.4 inherit;cursor:pointer;">已完成登录</button>';
             document.documentElement.style.marginTop = '40px';
             document.body.appendChild(bar);
@@ -467,7 +495,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
           if (!flag) return
           void collectPartitionCookies(providerId, keyId)
             .then(async (cookies) => {
-              // 1) 等待页面真正进入已登录状态，且确保跳转回 www.doubao.com（最多 20s）
+              // 1) 等待页面真正进入已登录状态，且确保跳转到该厂商主站（最多 20s）
               //    候选 D 优化 + 候选 A 校验：确保在主站而不是 SSO 中间页
               let loggedIn = false
               let onMainSite = false
@@ -488,7 +516,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                     true
                   )) as { hasLoginWall?: boolean; hasAvatar?: boolean; url?: string }
                   currentUrl = state.url || ''
-                  onMainSite = /^https:\/\/www\.doubao\.com(\/|$)/.test(currentUrl)
+                  onMainSite = isProviderMainSite(providerId, currentUrl)
                   if (state && !state.hasLoginWall && (state.hasAvatar || onMainSite)) {
                     loggedIn = true
                     break
@@ -500,7 +528,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                 done({
                   ok: false,
                   error: !onMainSite
-                    ? '登录后未跳转回豆包主站（当前在 ' + (currentUrl || '未知页') + '），请完成登录流程后重试'
+                    ? '登录后未跳转回厂商主站（当前在 ' + (currentUrl || '未知页') + '），请完成登录流程后重试'
                     : '未检测到有效登录状态，请确认已扫码登录后再试'
                 })
                 return

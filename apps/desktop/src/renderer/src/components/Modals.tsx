@@ -427,6 +427,21 @@ export function AddProviderModal({
   // 刷新已有账号时，登录后通过 migratePartition 把 cookie 迁移到目标分区
   const [loginTempId, setLoginTempId] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (providers.some((p) => p.providerId === providerId)) return
+    const next = providers.find((p) => p.providerId === 'doubao')?.providerId ?? providers[0]?.providerId ?? ''
+    setProviderId((prev) => (prev === next ? prev : next))
+    setStatus((prev) => (prev === 'idle' ? prev : 'idle'))
+    setError((prev) => (prev === null ? prev : null))
+    setNotice((prev) => (prev === null ? prev : null))
+    setCookieCount((prev) => (prev === 0 ? prev : 0))
+    setApiKey((prev) => (prev === '' ? prev : ''))
+    setPendingLogin((prev) => (prev === null ? prev : null))
+    setExistingKeys((prev) => (prev.length === 0 ? prev : []))
+    setRefreshTarget((prev) => (prev === 'new' ? prev : 'new'))
+    setLoginTempId((prev) => (prev === null ? prev : null))
+  }, [providers, providerId])
+
   const selected = providers.find((p) => p.providerId === providerId)
   const isApiKey = selected?.authType === 'apikey'
 
