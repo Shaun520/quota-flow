@@ -591,7 +591,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             </button>
             <div className="cost-estimate">
               <IconInfo size={12} />
-              {fresh ? '绑定账号后可查看预计额度消耗' : (
+              {providerOptions.length === 0 ? '绑定账号后可查看预计额度消耗' : (
                 <>
                   预计 <span className="cost-highlight">{cost.text}</span> ·{' '}
                   <span className="cost-highlight">{cost.who}</span>

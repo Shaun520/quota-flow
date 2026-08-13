@@ -198,7 +198,7 @@ function MainApp({
         <div className="user-area">
           <div className="team-badge">
             <IconUsers size={10} />
-            {team ? '团队 · ' + team.id.slice(0, 8) : fresh ? '新用户 · 未绑定' : '个人模式'}
+            {team ? '团队 · ' + team.id.slice(0, 8) : providers.totalBound > 0 || !fresh ? '个人模式' : '新用户 · 未绑定'}
           </div>
           <NotificationBell userId={user.id} />
           <div className="avatar-wrap">
@@ -252,7 +252,7 @@ function MainApp({
             />
           </div>
           <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
-            <Providers fresh={fresh} providers={providers} />
+            <Providers fresh={fresh} providers={providers} onBound={() => setBannerDismissed(false)} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
             <History jobs={jobs} />

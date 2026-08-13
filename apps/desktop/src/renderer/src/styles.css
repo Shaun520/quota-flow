@@ -2797,6 +2797,9 @@ textarea::-webkit-scrollbar {
   color: var(--fg-muted);
   line-height: 1.4;
 }
+.welcome-step-action {
+  margin-top: 8px;
+}
 .welcome-actions {
   display: flex;
   gap: 8px;

@@ -41,27 +41,31 @@ export default function WelcomeBanner({
                 <div>
                   <strong>{s.title}</strong>
                   <p>{s.desc}</p>
+                  {active && (
+                    <div className="welcome-step-action">
+                      {step === 1 && (
+                        <button className="btn-sm primary" onClick={onGoProviders}>
+                          去绑定账号 →
+                        </button>
+                      )}
+                      {step === 2 && (
+                        <button className="btn-sm primary" onClick={onGoDashboard}>
+                          去生成视频 →
+                        </button>
+                      )}
+                      {step === 3 && (
+                        <button className="btn-sm primary" onClick={onStep3Done}>
+                          完成，开始使用 ✓
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )
           })}
         </div>
         <div className="welcome-actions">
-          {step === 1 && (
-            <button className="btn-sm primary" onClick={onGoProviders}>
-              去绑定账号 →
-            </button>
-          )}
-          {step === 2 && (
-            <button className="btn-sm primary" onClick={onGoDashboard}>
-              去生成视频 →
-            </button>
-          )}
-          {step === 3 && (
-            <button className="btn-sm primary" onClick={onStep3Done}>
-              完成，开始使用 ✓
-            </button>
-          )}
           <button className="btn-sm" onClick={onDismiss}>
             稍后再说
           </button>
