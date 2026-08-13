@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentType, MutableRefObject } from 'react'
 import Dashboard from './components/Dashboard'
 import Providers from './components/Providers'
@@ -60,13 +60,7 @@ const TABS: TabDef[] = [
 interface MainAppProps {
   user: AuthUser
   team: TeamContext | null
-  fresh: boolean
-  bannerVisible: boolean
   updater: UpdaterStatusView
-  onboardStep: 1 | 2 | 3
-  completeStep: (n: 1 | 2 | 3) => void
-  onFinishOnboarding: () => void
-  onDismissBanner: () => void
   onOpenModal: (m: 'profile' | 'settings') => void
   onSignOut: () => Promise<void>
 }
@@ -74,19 +68,23 @@ interface MainAppProps {
 function MainApp({
   user,
   team,
-  fresh,
-  bannerVisible,
   updater,
-  onboardStep,
-  completeStep,
-  onFinishOnboarding,
-  onDismissBanner,
   onOpenModal,
   onSignOut
 }: MainAppProps) {
   // 厂商 / 任务数据提升到 MainApp 层：随 user 挂载/卸载，账号切换时整棵数据树重建，避免残留上一账号数据
   const providers = useProviders()
   const jobs = useJobs()
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const onboardStep = useMemo<1 | 2 | 3>(() => {
+    if (jobs.items.some((j) => j.record.status === '成功')) return 3
+    if (providers.totalBound > 0) return 2
+    return 1
+  }, [jobs.items, providers.totalBound])
+  const fresh = onboardStep < 3
+  const bannerVisible = fresh && !bannerDismissed
+  const hideBanner = useCallback(() => setBannerDismissed(true), [])
+  const finishOnboarding = useCallback(() => setBannerDismissed(true), [])
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -237,8 +235,8 @@ function MainApp({
               step={onboardStep}
               onGoProviders={() => setTab('providers')}
               onGoDashboard={() => setTab('dispatch')}
-              onStep3Done={onFinishOnboarding}
-              onDismiss={onDismissBanner}
+              onStep3Done={finishOnboarding}
+              onDismiss={hideBanner}
             />
           )}
           {/* 各 tab 常驻挂载，仅用 display 切换：保留表单/筛选等本地状态，避免切 tab 丢失 */}
@@ -247,7 +245,6 @@ function MainApp({
               fresh={fresh}
               banner={bannerVisible}
               step={onboardStep}
-              onGenerate={() => completeStep(2)}
               onGoHistory={() => setTab('history')}
               onGoProviders={() => setTab('providers')}
               providers={providers}
@@ -255,7 +252,7 @@ function MainApp({
             />
           </div>
           <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
-            <Providers fresh={fresh} onBound={() => completeStep(1)} providers={providers} />
+            <Providers fresh={fresh} providers={providers} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
             <History jobs={jobs} />
@@ -416,48 +413,6 @@ export default function App() {
     return window.api.updater.onStatus(setUpdater)
   }, [])
   const [submitting, setSubmitting] = useState(false)
-  const [onboardStep, setOnboardStep] = useState<1 | 2 | 3>(() => {
-    try {
-      const v = Number(localStorage.getItem('quota-flow:onboard-step'))
-      return (v === 1 || v === 2 || v === 3) ? v : 1
-    } catch {
-      return 1
-    }
-  })
-  const fresh = onboardStep < 3
-  // 关闭引导只对本次会话生效，重启后重新出现（直到完成全部引导）
-  const [bannerDismissed, setBannerDismissed] = useState(false)
-  const bannerVisible = fresh && !bannerDismissed
-
-  const completeStep = useCallback((n: 1 | 2 | 3) => {
-    setOnboardStep((prev) => {
-      const next = n >= prev ? ((n + 1) as 1 | 2 | 3) : prev
-      try {
-        localStorage.setItem('quota-flow:onboard-step', String(next))
-      } catch {
-        // ignore
-      }
-      return next
-    })
-  }, [])
-
-  const hideBanner = useCallback(() => {
-    setBannerDismissed(true)
-  }, [])
-
-  const finishOnboarding = useCallback(() => {
-    hideBanner()
-    try {
-      localStorage.setItem('quota-flow:onboard-step', '3')
-    } catch {
-      // ignore
-    }
-  }, [hideBanner])
-
-  // Hiding the banner (dismiss/close) keeps real user data; only the layout
-  // stays aligned with the demo mode. It does NOT switch to mock data.
-  const dismissBanner = hideBanner
-
   if (loading) return <SplashScreen />
   if (!configured) return <ConfigWarning />
 
@@ -517,13 +472,7 @@ export default function App() {
         key={user.id}
         user={user}
         team={team}
-        fresh={fresh}
-        bannerVisible={bannerVisible}
         updater={updater}
-        onboardStep={onboardStep}
-        completeStep={completeStep}
-        onFinishOnboarding={finishOnboarding}
-        onDismissBanner={dismissBanner}
         onOpenModal={openModal}
         onSignOut={signOut}
       />
