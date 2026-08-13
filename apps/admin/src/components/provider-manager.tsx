@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
 import { PROVIDER_ICONS } from "./provider-icons";
@@ -94,6 +94,11 @@ interface ProviderCreateValues extends ProviderEditValues {
 
 export function ProviderManager({ providers: initialProviders }: { providers: ProviderRow[] }) {
   const [providers, setProviders] = useState(() => sortProviders(initialProviders));
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"" | "enabled" | "disabled">("");
+  const [authFilter, setAuthFilter] = useState<"" | "cookie" | "apikey">("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<ToggleMessage | null>(null);
   const [creating, setCreating] = useState(false);
@@ -101,6 +106,37 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
   const [deleting, setDeleting] = useState<ProviderRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingBusy, setDeletingBusy] = useState(false);
+
+  const loadProviders = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const supabase = createAdminBrowserClient();
+      const { data, error } = await supabase.from("providers").select("*");
+      if (error) throw error;
+      setProviders(sortProviders((data ?? []) as ProviderRow[]));
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "加载 Provider 数据失败");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProviders();
+  }, [loadProviders]);
+
+  const filteredProviders = providers.filter((provider) => {
+    const query = search.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      provider.name.toLowerCase().includes(query) ||
+      provider.id.toLowerCase().includes(query);
+    const matchesStatus =
+      !statusFilter || (statusFilter === "enabled" ? provider.enabled : !provider.enabled);
+    const matchesAuth = !authFilter || provider.auth_type === authFilter;
+    return matchesSearch && matchesStatus && matchesAuth;
+  });
 
   async function toggleProvider(provider: ProviderRow) {
     const nextEnabled = !provider.enabled;
@@ -399,27 +435,81 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
         </div>
       ) : null}
 
-      {providers.length === 0 ? (
-        <div className="card">
-          <div className="card-body">暂无 Provider 数据</div>
+      <div className="filter-bar">
+        <div className="filter-group">
+          <span className="filter-label">状态</span>
+          <select
+            className="form-select"
+            style={{ width: 120 }}
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as "" | "enabled" | "disabled")}
+          >
+            <option value="">全部</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+          </select>
         </div>
-      ) : (
-        <div className="table-container">
-          <table className="table provider-table">
-            <thead>
+
+        <div className="filter-group">
+          <span className="filter-label">认证方式</span>
+          <select
+            className="form-select"
+            style={{ width: 120 }}
+            value={authFilter}
+            onChange={(e) => setAuthFilter(e.target.value as "" | "cookie" | "apikey")}
+          >
+            <option value="">全部</option>
+            <option value="cookie">cookie</option>
+            <option value="apikey">apikey</option>
+          </select>
+        </div>
+
+        <div className="filter-group" style={{ marginLeft: "auto" }}>
+          <input
+            type="text"
+            placeholder="搜索厂商名称或 ID..."
+            style={{ width: 220 }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="table-container">
+        <table className="table provider-table">
+          <thead>
+            <tr>
+              <th>厂商</th>
+              <th>认证方式</th>
+              <th>单位</th>
+              <th>等效除数</th>
+              <th>默认日额度</th>
+              <th>成功率</th>
+              <th>状态</th>
+              <th style={{ textAlign: "right" }}>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && providers.length === 0 ? (
               <tr>
-                <th>厂商</th>
-                <th>认证方式</th>
-                <th>单位</th>
-                <th>等效除数</th>
-                <th>默认日额度</th>
-                <th>成功率</th>
-                <th>状态</th>
-                <th style={{ textAlign: "right" }}>操作</th>
+                <td colSpan={8} className="empty-state" style={{ textAlign: "center" }}>
+                  加载中...
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {providers.map((provider) => (
+            ) : loadError ? (
+              <tr>
+                <td colSpan={8} className="empty-state" style={{ textAlign: "center", color: "var(--color-destructive)" }}>
+                  {loadError}
+                </td>
+              </tr>
+            ) : filteredProviders.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="empty-state" style={{ textAlign: "center" }}>
+                  暂无匹配的 Provider
+                </td>
+              </tr>
+            ) : (
+              filteredProviders.map((provider) => (
                 <ProviderRowItem
                   key={provider.id}
                   provider={provider}
@@ -428,11 +518,11 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
                   onEdit={() => setEditing(provider)}
                   onDelete={() => setDeleting(provider)}
                 />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {creating ? (
         <ProviderCreateModal
