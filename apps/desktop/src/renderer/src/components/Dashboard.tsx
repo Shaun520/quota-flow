@@ -40,7 +40,8 @@ const STAGE_LABEL: Record<string, string> = {
   'risk-verify': '需要验证，请在弹窗完成…',
   'risk-resolved': '验证完成，继续生成…',
   'account-failed': '当前账号失败，尝试切换…',
-  blocked: '豆包拒绝了本次生成（见左侧错误）'
+  blocked: '豆包拒绝了本次生成（见左侧错误）',
+  watermark: '本地去水印中…'
 }
 
 /** 进入这些阶段说明提示词已发送，不能再终止生成 */
@@ -77,6 +78,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const [resolution, setResolution] = useState('720')
   const [audio, setAudio] = useState('on')
   const [ratio, setRatio] = useState('9:16')
+  const [watermark, setWatermark] = useState(true)
   const [images, setImages] = useState<string[]>([])
   const [imageFiles, setImageFiles] = useState<File[]>([])
   const [prompt, setPrompt] = useState('')
@@ -200,11 +202,12 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
     const tasks: Promise<void>[] = []
     for (const item of jobItems) {
       const r = item.record
-      if (!r.resultUrl) continue
-      if (/^https?:/i.test(r.resultUrl)) {
-        map[item.id] = r.resultUrl
+      const sourcePath = r.cleanLocalPath || r.localPath || r.resultUrl
+      if (!sourcePath) continue
+      if (/^https?:/i.test(sourcePath)) {
+        map[item.id] = sourcePath
       } else {
-        const name = r.resultUrl.replace(/\\/g, '/').split('/').pop() || ''
+        const name = sourcePath.replace(/\\/g, '/').split('/').pop() || ''
         tasks.push(
           window.api.media
             .getUrl(name)
@@ -311,6 +314,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         resolution,
         audio,
         ratio,
+        watermarkEnabled: watermark,
         images: mode === 't2v' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
         showWebview: getInitialShowWebview()
       })
@@ -331,7 +335,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, duration, durations, resolution, audio, ratio, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, duration, durations, resolution, audio, ratio, watermark, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -481,7 +485,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
             </div>
           </div>
 
-          <div className="param-row">
+          <div className="param-row ratio-row">
             <div className="param-field">
               <label htmlFor="audio">智能配音</label>
               <Select
@@ -506,6 +510,21 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
                   { value: '1:1', label: '1:1' }
                 ]}
               />
+            </div>
+            <div className="param-field">
+              <label htmlFor="watermark">去水印</label>
+              <label className="switch watermark-switch">
+                <input
+                  id="watermark"
+                  type="checkbox"
+                  checked={watermark}
+                  onChange={(e) => setWatermark(e.target.checked)}
+                />
+                <span className="switch-track">
+                  <span className="switch-thumb" />
+                </span>
+                <span className="switch-label">{watermark ? '开' : '关'}</span>
+              </label>
             </div>
             <div className="param-field">
               <span className="field-hint">配音 / 比例不影响额度</span>

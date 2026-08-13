@@ -58,17 +58,15 @@ export default function WelcomeBanner({
                           完成，开始使用 ✓
                         </button>
                       )}
+                      <button className="btn-sm" onClick={onDismiss}>
+                        稍后再说
+                      </button>
                     </div>
                   )}
                 </div>
               </div>
             )
           })}
-        </div>
-        <div className="welcome-actions">
-          <button className="btn-sm" onClick={onDismiss}>
-            稍后再说
-          </button>
         </div>
       </div>
       <button className="welcome-close" onClick={onDismiss} aria-label="关闭引导">

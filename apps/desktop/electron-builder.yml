@@ -3,6 +3,12 @@ productName: Quota-Flow
 electronDist: node_modules/electron/dist
 directories:
   output: release
+extraResources:
+  - from: node_modules/ffmpeg-static
+    to: ffmpeg
+    filter:
+      - ffmpeg.exe
+      - LICENSE
 files:
   - out/**
   - "!node_modules/@quota-flow/*/src/**"

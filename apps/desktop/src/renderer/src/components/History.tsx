@@ -1,9 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import type { JobItem, JobsResult } from '../hooks/useJobs'
+import type { WatermarkBBox } from '../../../shared/history'
 import { IconEye, IconFolder, IconInfo, IconTrash } from './icons'
 import Pagination from './Pagination'
 import Select from './Select'
 import { VideoThumb } from './VideoThumb'
+import { useAuth } from '../hooks/useAuth'
+import { getAuthService, getSupabaseConfig } from '../auth/service'
 
 const PAGE_SIZE = 10
 
@@ -21,6 +24,93 @@ function previewLabel(status: string): string {
   if (status === '未生成') return '未生成'
   if (status === '意外中断') return '中断'
   return '预览'
+}
+
+function watermarkLabel(status?: string | null, hasManualBBox = false): string {
+  if (status === 'none') return '未开启'
+  if (!status) return '未处理'
+  if (status === 'processing' || status === 'pending') return '处理中'
+  if (status === 'done') return hasManualBBox ? '已处理' : '默认处理'
+  if (status === 'failed') return '失败'
+  if (status === 'needs_bbox') return '需框选'
+  if (status === 'cancelled') return '已取消'
+  return status
+}
+
+interface DisplayRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+function videoDisplayRect(video: HTMLVideoElement, frame: HTMLElement): DisplayRect | null {
+  if (!video.videoWidth || !video.videoHeight) return null
+  const frameRect = frame.getBoundingClientRect()
+  const videoAspect = video.videoWidth / video.videoHeight
+  const frameAspect = frameRect.width / frameRect.height
+  let left = 0
+  let top = 0
+  let width = frameRect.width
+  let height = frameRect.width / videoAspect
+  if (height > frameRect.height) {
+    height = frameRect.height
+    width = frameRect.height * videoAspect
+    left = (frameRect.width - width) / 2
+  } else {
+    top = (frameRect.height - height) / 2
+  }
+  return { left, top, width, height }
+}
+
+function formatBBox(bbox: WatermarkBBox | null): string {
+  if (!bbox) return '未选择'
+  return `${bbox.width}x${bbox.height} @ ${bbox.x},${bbox.y}`
+}
+
+function formatBBoxes(bboxes: WatermarkBBox[] | null): string {
+  if (!bboxes || bboxes.length === 0) return '未选择'
+  return bboxes.map((bbox, index) => `${index + 1}: ${formatBBox(bbox)}`).join('；')
+}
+
+function dragBoxStyle(start: { x: number; y: number } | null, end: { x: number; y: number } | null): CSSProperties | undefined {
+  if (!start || !end) return undefined
+  const left = Math.min(start.x, end.x)
+  const top = Math.min(start.y, end.y)
+  return {
+    position: 'absolute',
+    left,
+    top,
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+    border: '2px solid rgba(255,255,255,0.95)',
+    background: 'rgba(239,68,68,0.18)',
+    pointerEvents: 'none',
+    zIndex: 2
+  }
+}
+
+function savedBBoxStyle(
+  video: HTMLVideoElement | null,
+  frame: HTMLElement | null,
+  bbox: WatermarkBBox | null,
+  border: string
+): CSSProperties | undefined {
+  if (!video || !frame || !bbox) return undefined
+  const display = videoDisplayRect(video, frame)
+  if (!display) return undefined
+  const sx = display.width / video.videoWidth
+  const sy = display.height / video.videoHeight
+  return {
+    position: 'absolute',
+    left: display.left + bbox.x * sx,
+    top: display.top + bbox.y * sy,
+    width: bbox.width * sx,
+    height: bbox.height * sy,
+    border,
+    pointerEvents: 'none',
+    zIndex: 1
+  }
 }
 
 function timeAgo(iso: string): string {
@@ -42,6 +132,7 @@ function timeAgo(iso: string): string {
 
 export default function History({ jobs }: { jobs: JobsResult }) {
   const { loading, error, items, reload, remove, removeMany } = jobs
+  const { user } = useAuth()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [batchDeleting, setBatchDeleting] = useState(false)
   const [confirm, setConfirm] = useState<{ kind: 'one'; item: JobItem } | { kind: 'many'; ids: string[] } | null>(null)
@@ -53,6 +144,18 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   const [detailImgUrls, setDetailImgUrls] = useState<string[]>([])
   const [zoomImg, setZoomImg] = useState<string | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
+  const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [boxSelectItem, setBoxSelectItem] = useState<JobItem | null>(null)
+  const [boxVideoUrl, setBoxVideoUrl] = useState<string | null>(null)
+  const [boxBBoxes, setBoxBBoxes] = useState<WatermarkBBox[]>([])
+  const [boxDrawing, setBoxDrawing] = useState(false)
+  const [boxStart, setBoxStart] = useState<{ x: number; y: number } | null>(null)
+  const [boxEnd, setBoxEnd] = useState<{ x: number; y: number } | null>(null)
+  const [boxPlaying, setBoxPlaying] = useState(false)
+  const [boxTime, setBoxTime] = useState(0)
+  const [boxDuration, setBoxDuration] = useState(0)
+  const boxVideoRef = useRef<HTMLVideoElement | null>(null)
+  const boxFrameRef = useRef<HTMLDivElement | null>(null)
   const [text, setText] = useState('')
   const [provider, setProvider] = useState('')
   const [status, setStatus] = useState('')
@@ -142,6 +245,142 @@ export default function History({ jobs }: { jobs: JobsResult }) {
     }
   }
 
+  const closeBoxSelect = (): void => {
+    const video = boxVideoRef.current
+    if (video) {
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+    setBoxPlaying(false)
+    setBoxTime(0)
+    setBoxDuration(0)
+    setBoxSelectItem(null)
+    setBoxVideoUrl(null)
+    setBoxBBoxes([])
+    setBoxDrawing(false)
+    setBoxStart(null)
+    setBoxEnd(null)
+  }
+
+  const retryWatermark = async (item: JobItem, bboxes?: WatermarkBBox[]): Promise<void> => {
+    if (retryingId) return
+    try {
+      const auth = getAuthService()
+      const cfg = getSupabaseConfig()
+      const session = await auth?.getSession()
+      if (!auth || !cfg || !session || !user) {
+        setNotice('登录状态异常，无法重试去水印')
+        return
+      }
+      setRetryingId(item.id)
+      const res = await window.api.watermark.retry({
+        supabaseUrl: cfg.url,
+        supabaseAnonKey: cfg.anonKey,
+        accessToken: session.access_token,
+        refreshToken: session.refresh_token,
+        userId: user.id,
+        jobId: item.id,
+        bboxes: bboxes ?? item.record.watermarkBBoxes ?? (item.record.watermarkBBox ? [item.record.watermarkBBox] : undefined)
+      })
+      if (!res.ok) {
+        setNotice(res.error ?? '去水印重试失败')
+      }
+      if (boxSelectItem?.id === item.id) {
+        closeBoxSelect()
+      }
+      reload()
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRetryingId(null)
+    }
+  }
+
+  const openBoxSelect = async (item: JobItem): Promise<void> => {
+    const sourcePath = item.record.localPath
+    if (!sourcePath || /^https?:/i.test(sourcePath)) {
+      setNotice('没有本地原视频，无法框选水印')
+      return
+    }
+    try {
+      const name = sourcePath.replace(/\\/g, '/').split('/').pop() || ''
+      const url = await window.api.media.getUrl(name)
+      setBoxSelectItem(item)
+      setBoxVideoUrl(url)
+      setBoxBBoxes(item.record.watermarkBBoxes ?? (item.record.watermarkBBox ? [item.record.watermarkBBox] : []))
+      setBoxStart(null)
+      setBoxEnd(null)
+      setBoxDrawing(false)
+      setBoxTime(0)
+      setBoxDuration(0)
+      setBoxPlaying(false)
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const toggleBoxPlay = (): void => {
+    const video = boxVideoRef.current
+    if (!video) return
+    if (video.paused) {
+      void video.play().catch(() => {})
+    } else {
+      video.pause()
+    }
+  }
+
+  const seekBox = (value: number): void => {
+    const video = boxVideoRef.current
+    if (!video) return
+    video.currentTime = value
+    setBoxTime(value)
+  }
+
+  const beginBoxDraw = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!boxFrameRef.current || retryingId) return
+    e.preventDefault()
+    const rect = boxFrameRef.current.getBoundingClientRect()
+    const point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    setBoxStart(point)
+    setBoxEnd(point)
+    setBoxDrawing(true)
+  }
+
+  const moveBoxDraw = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!boxDrawing || !boxStart || !boxFrameRef.current) return
+    e.preventDefault()
+    const rect = boxFrameRef.current.getBoundingClientRect()
+    setBoxEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+  }
+
+  const endBoxDraw = (): void => {
+    if (!boxDrawing) return
+    setBoxDrawing(false)
+    const video = boxVideoRef.current
+    const frame = boxFrameRef.current
+    if (!video || !frame || !boxStart || !boxEnd) return
+    const display = videoDisplayRect(video, frame)
+    if (!display) return
+    const sx = video.videoWidth / display.width
+    const sy = video.videoHeight / display.height
+    const left = Math.max(display.left, Math.min(display.left + display.width, Math.min(boxStart.x, boxEnd.x)))
+    const top = Math.max(display.top, Math.min(display.top + display.height, Math.min(boxStart.y, boxEnd.y)))
+    const right = Math.max(display.left, Math.min(display.left + display.width, Math.max(boxStart.x, boxEnd.x)))
+    const bottom = Math.max(display.top, Math.min(display.top + display.height, Math.max(boxStart.y, boxEnd.y)))
+    const x = Math.max(0, Math.round((left - display.left) * sx))
+    const y = Math.max(0, Math.round((top - display.top) * sy))
+    const width = Math.max(1, Math.round((right - left) * sx))
+    const height = Math.max(1, Math.round((bottom - top) * sy))
+    const next = {
+      x,
+      y,
+      width: Math.min(width, video.videoWidth - x),
+      height: Math.min(height, video.videoHeight - y)
+    }
+    setBoxBBoxes((prev) => [...prev, next])
+  }
+
   // 确认弹层：确认后执行删除（应用内弹层，避免 window.confirm 原生对话框导致窗口丢焦点/输入框不可编辑）
   const doDelete = async (): Promise<void> => {
     if (!confirm) return
@@ -181,11 +420,12 @@ export default function History({ jobs }: { jobs: JobsResult }) {
     const tasks: Promise<void>[] = []
     for (const item of items) {
       const r = item.record
-      if (!r.resultUrl) continue
-      if (/^https?:/i.test(r.resultUrl)) {
-        map[item.id] = r.resultUrl
+      const sourcePath = r.cleanLocalPath || r.localPath || r.resultUrl
+      if (!sourcePath) continue
+      if (/^https?:/i.test(sourcePath)) {
+        map[item.id] = sourcePath
       } else {
-        const name = r.resultUrl.replace(/\\/g, '/').split('/').pop() || ''
+        const name = sourcePath.replace(/\\/g, '/').split('/').pop() || ''
         tasks.push(
           window.api.media
             .getUrl(name)
@@ -226,7 +466,7 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const pagedItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
-  const colSpan = batchMode ? 10 : 9
+  const colSpan = batchMode ? 11 : 10
   const selectedCount = filtered.filter((i) => selectedIds.has(i.id)).length
   const allSelected = filtered.length > 0 && selectedCount === filtered.length
 
@@ -366,6 +606,7 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                 <th>模式</th>
                 <th>消耗</th>
                 <th>状态</th>
+                <th>去水印</th>
                 <th style={{ width: '120px' }}>操作</th>
               </tr>
             </thead>
@@ -373,6 +614,8 @@ export default function History({ jobs }: { jobs: JobsResult }) {
               {pagedItems.map((item) => {
                 const r = item.record
                 const localPath = r.localPath
+                const wmStatus = r.watermarkStatus
+                const hasManualBBox = (r.watermarkBBoxes?.length ?? 0) > 0
                 return (
                   <Fragment key={item.id}>
                     <tr>
@@ -405,6 +648,35 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                       <td>{r.cost}</td>
                       <td>
                         <span className={'badge ' + badgeFor(r.status)}>{r.status}</span>
+                      </td>
+                      <td>
+                        <div className="watermark-cell">
+                          <span className={'watermark-pill ' + (wmStatus === 'done' ? 'done' : wmStatus === 'failed' || wmStatus === 'needs_bbox' ? 'error' : wmStatus === 'processing' || wmStatus === 'pending' ? 'pending' : '')}>
+                            {watermarkLabel(wmStatus, hasManualBBox)}
+                          </span>
+                          {localPath && wmStatus !== 'processing' && wmStatus !== 'pending' && wmStatus !== 'none' && (
+                            <button
+                              className="btn-sm"
+                              title="框选水印区域并重新处理"
+                              aria-label="框选去水印"
+                              disabled={retryingId === item.id}
+                              onClick={() => void openBoxSelect(item)}
+                            >
+                              框选
+                            </button>
+                          )}
+                          {(wmStatus === 'failed' || wmStatus === 'needs_bbox' || wmStatus === 'cancelled') && localPath && (
+                            <button
+                              className="btn-sm"
+                              title="重试去水印"
+                              aria-label="重试去水印"
+                              disabled={retryingId === item.id}
+                              onClick={() => void retryWatermark(item)}
+                            >
+                              {retryingId === item.id ? '…' : '重试'}
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="col-actions">
                         <div className="action-btns">
@@ -618,6 +890,113 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                   <span style={{ color: 'var(--error)', wordBreak: 'break-word', minWidth: 0 }}>{detail.record.errorMessage}</span>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 框选去水印：使用原视频预览并绘制水印区域 */}
+      {boxSelectItem && boxVideoUrl && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 350 }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeBoxSelect() }}
+        >
+          <div
+            className="modal-card"
+            style={{ width: 'min(94vw, 880px)', maxHeight: '88vh', overflow: 'auto', padding: 20 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>框选去水印</div>
+              <button className="btn-sm" onClick={closeBoxSelect}>关闭</button>
+            </div>
+            <p style={{ margin: '0 0 12px', color: 'var(--fg-secondary)', lineHeight: 1.7, fontSize: 13 }}>
+              在原始视频上把水印覆盖区域框出来，可以连续框多个；点“重新处理”会保存这些区域并按它们重跑本地 FFmpeg 去水印。
+            </p>
+            <div
+              ref={boxFrameRef}
+              onMouseDown={beginBoxDraw}
+              onMouseMove={moveBoxDraw}
+              onMouseUp={endBoxDraw}
+              onMouseLeave={endBoxDraw}
+              style={{ position: 'relative', borderRadius: 8, overflow: 'hidden', background: '#000', cursor: 'crosshair', marginBottom: 10 }}
+            >
+              <video
+                ref={boxVideoRef}
+                src={boxVideoUrl}
+                preload="auto"
+                onPlay={() => setBoxPlaying(true)}
+                onPause={() => setBoxPlaying(false)}
+                onTimeUpdate={(e) => setBoxTime(e.currentTarget.currentTime)}
+                onLoadedMetadata={(e) => setBoxDuration(e.currentTarget.duration || 0)}
+                style={{ width: '100%', maxHeight: '56vh', display: 'block', pointerEvents: 'none', objectFit: 'contain' }}
+              />
+              {boxBBoxes
+                .map((bbox) => savedBBoxStyle(boxVideoRef.current, boxFrameRef.current, bbox, '2px solid rgba(74,222,128,0.95)'))
+                .filter((style): style is CSSProperties => !!style)
+                .map((style, index) => (
+                  <div key={index} style={style} />
+                ))}
+              {dragBoxStyle(boxStart, boxEnd) && (
+                <div style={dragBoxStyle(boxStart, boxEnd)} />
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+              <button className="btn-sm" onClick={toggleBoxPlay} disabled={!boxDuration}>
+                {boxPlaying ? '暂停' : '播放'}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={boxDuration || 0}
+                step={0.1}
+                value={boxTime}
+                onChange={(e) => seekBox(Number(e.target.value))}
+                style={{ flex: 1, minWidth: 180 }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {boxTime.toFixed(1)} / {boxDuration.toFixed(1)}s
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>选择区域：{formatBBoxes(boxBBoxes)}</span>
+                {boxBBoxes.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {boxBBoxes.map((bbox, index) => (
+                      <span key={index} className="watermark-bbox-chip">
+                        {index + 1}: {formatBBox(bbox)}
+                        <button
+                          className="btn-sm"
+                          title="删除该区域"
+                          disabled={retryingId === boxSelectItem.id}
+                          onClick={() => setBoxBBoxes((prev) => prev.filter((_, i) => i !== index))}
+                        >
+                          删除
+                        </button>
+                      </span>
+                    ))}
+                    <button
+                      className="btn-sm"
+                      title="清空所有框选区域"
+                      disabled={retryingId === boxSelectItem.id}
+                      onClick={() => setBoxBBoxes([])}
+                    >
+                      清空
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn-sm" onClick={closeBoxSelect}>取消</button>
+                <button
+                  className="btn-sm primary"
+                  disabled={boxBBoxes.length === 0 || retryingId === boxSelectItem.id}
+                  onClick={() => void retryWatermark(boxSelectItem, boxBBoxes)}
+                >
+                  {retryingId === boxSelectItem.id ? '处理中…' : '重新处理'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
