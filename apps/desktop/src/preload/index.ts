@@ -57,6 +57,49 @@ export interface JobEvent {
   data?: unknown
 }
 
+export type WatermarkStatus = 'none' | 'pending' | 'processing' | 'done' | 'failed' | 'needs_bbox' | 'cancelled'
+
+export interface WatermarkProgress {
+  jobId: string
+  stage: 'detect' | 'ffmpeg' | 'inpaint' | 'done' | 'failed' | 'cancelled'
+  progress: number
+  message?: string
+}
+
+export interface WatermarkProcessInput {
+  supabaseUrl: string
+  supabaseAnonKey: string
+  accessToken: string
+  refreshToken: string
+  userId: string
+  jobId: string
+  bbox?: { x: number; y: number; width: number; height: number } | null
+  bboxes?: Array<{ x: number; y: number; width: number; height: number }> | null
+}
+
+export interface WatermarkProcessResult {
+  ok: boolean
+  outputPath?: string
+  bbox?: { x: number; y: number; width: number; height: number } | null
+  bboxes?: Array<{ x: number; y: number; width: number; height: number }> | null
+  method?: string
+  status: WatermarkStatus
+  error?: string
+}
+
+export interface WatermarkStatusResult {
+  ok: boolean
+  jobId: string
+  watermarkStatus?: WatermarkStatus | null
+  cleanLocalPath?: string | null
+  originalLocalPath?: string | null
+  watermarkMethod?: string | null
+  watermarkError?: string | null
+  watermarkBBox?: { x: number; y: number; width: number; height: number } | null
+  watermarkBBoxes?: Array<{ x: number; y: number; width: number; height: number }> | null
+  error?: string
+}
+
 export interface QuotaUpdatedPayload {
   userId: string
   ledger: QuotaLedgerRow
@@ -84,6 +127,8 @@ export interface GenerateRequest {
   ratio?: string
   /** 本地图片路径（图生视频） */
   images?: string[]
+  /** 本地去水印开关，默认 true */
+  watermarkEnabled?: boolean
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -148,6 +193,13 @@ export interface DesktopApi {
     getUrl: (name: string) => Promise<string>
     getImageUrl: (name: string) => Promise<string>
     showInFolder: (filePath: string) => Promise<{ ok: boolean; error?: string }>
+  }
+  watermark: {
+    process: (input: WatermarkProcessInput) => Promise<WatermarkProcessResult>
+    retry: (input: WatermarkProcessInput) => Promise<WatermarkProcessResult>
+    cancel: (jobId: string) => Promise<{ ok: boolean }>
+    getStatus: (input: Omit<WatermarkProcessInput, 'bbox' | 'bboxes'>) => Promise<WatermarkStatusResult>
+    onProgress: (callback: (progress: WatermarkProgress) => void) => () => void
   }
   windowControls: {
     minimize: () => Promise<void>
@@ -254,6 +306,20 @@ const api: DesktopApi = {
     getImageUrl: (name) => ipcRenderer.invoke('media:get-image-url', name) as Promise<string>,
     showInFolder: (filePath) =>
       ipcRenderer.invoke('media:show-in-folder', filePath) as Promise<{ ok: boolean; error?: string }>
+  },
+  watermark: {
+    process: (input) => ipcRenderer.invoke('watermark:process', input) as Promise<WatermarkProcessResult>,
+    retry: (input) => ipcRenderer.invoke('watermark:retry', input) as Promise<WatermarkProcessResult>,
+    cancel: (jobId) => ipcRenderer.invoke('watermark:cancel', jobId) as Promise<{ ok: boolean }>,
+    getStatus: (input) => ipcRenderer.invoke('watermark:get-status', input) as Promise<WatermarkStatusResult>,
+    onProgress: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, progress: WatermarkProgress): void =>
+        callback(progress)
+      ipcRenderer.on('watermark:progress', listener)
+      return () => {
+        ipcRenderer.removeListener('watermark:progress', listener)
+      }
+    }
   },
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),

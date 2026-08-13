@@ -2,6 +2,15 @@
 
 export type HistoryStatus = '成功' | '排队' | '失败' | '未生成' | '意外中断'
 
+export type WatermarkStatus = 'none' | 'pending' | 'processing' | 'done' | 'failed' | 'needs_bbox' | 'cancelled'
+
+export interface WatermarkBBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface JobRecord {
   at: string // ISO 时间戳
   provider: string // 中文名：豆包、即梦...
@@ -15,6 +24,18 @@ export interface JobRecord {
   resultUrl: string | null
   /** 本地视频文件绝对路径（生成后落盘 userData/videos/<jobId>.mp4），无本地文件时为 null */
   localPath: string | null
+  /** 去水印后本地视频绝对路径（userData/videos/<jobId>.clean.mp4），无结果时为 null */
+  cleanLocalPath: string | null
+  /** 去水印状态；旧记录或未开启时可为 null */
+  watermarkStatus: WatermarkStatus | null
+  /** 去水印方法，例如 delogo */
+  watermarkMethod: string | null
+  /** 去水印失败原因 */
+  watermarkError: string | null
+  /** 用户框选的水印区域；无手动框选时为 null */
+  watermarkBBox: WatermarkBBox | null
+  /** 用户框选的多个水印区域；无手动框选时为 null */
+  watermarkBBoxes: WatermarkBBox[] | null
   /** 生成参数（模式/时长/比例/配音/分辨率），无记录时为 null */
   params: { mode?: string; durationSec?: number; ratio?: string; audio?: string; resolution?: string } | null
   /** 上传的本地图片副本路径（userData/images/<jobId>-<n>.<ext>），无图片时为空数组 */

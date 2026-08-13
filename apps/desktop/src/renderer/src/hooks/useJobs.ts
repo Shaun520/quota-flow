@@ -4,7 +4,7 @@ import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
 import type { JobRow } from '@quota-flow/db-supabase'
-import type { HistoryStatus, JobRecord } from '../../../shared/history'
+import type { HistoryStatus, JobRecord, WatermarkBBox, WatermarkStatus } from '../../../shared/history'
 
 const PROVIDER_NAME: Record<string, string> = {
   mathmind: 'MathMind', qwenwan: '通义万相', qwen: '通义万相', yuanbao: '元宝混元',
@@ -39,6 +39,8 @@ function toJobItem(row: JobRow): JobItem {
   const pid = row.provider_id ?? ''
   const quotaUsed = Number(row.cost_amount ?? 0)
   const opts = (row.options ?? {}) as Record<string, unknown>
+  const watermarkBBox = readWatermarkBBox(opts.watermarkBBox)
+  const watermarkBBoxes = readWatermarkBBoxes(opts.watermarkBBoxes, watermarkBBox)
   const accountName = typeof opts.accountName === 'string' && opts.accountName ? opts.accountName : null
   const localPath =
     typeof opts.localPath === 'string' && opts.localPath
@@ -46,6 +48,16 @@ function toJobItem(row: JobRow): JobItem {
       : row.result_url && !/^https?:/i.test(row.result_url)
         ? row.result_url
         : null
+  const cleanLocalPath =
+    typeof opts.cleanLocalPath === 'string' && opts.cleanLocalPath
+      ? opts.cleanLocalPath
+      : null
+  const watermarkStatus =
+    typeof opts.watermarkStatus === 'string' ? opts.watermarkStatus as WatermarkStatus : null
+  const watermarkMethod =
+    typeof opts.watermarkMethod === 'string' ? opts.watermarkMethod : null
+  const watermarkError =
+    typeof opts.watermarkError === 'string' ? opts.watermarkError : null
   const params =
     opts.mode || opts.durationSec || opts.ratio || opts.audio || opts.resolution
       ? {
@@ -72,11 +84,50 @@ function toJobItem(row: JobRow): JobItem {
       traceId: row.trace_id ?? null,
       resultUrl: row.result_url ?? null,
       localPath,
+      cleanLocalPath,
+      watermarkStatus,
+      watermarkMethod,
+      watermarkError,
+      watermarkBBox,
+      watermarkBBoxes,
       params,
       images,
       errorMessage: row.error ?? null
     }
   }
+}
+
+function readWatermarkBBox(value: unknown): WatermarkBBox | null {
+  if (!value || typeof value !== 'object') return null
+  const bbox = value as Record<string, unknown>
+  if (
+    typeof bbox.x !== 'number' ||
+    typeof bbox.y !== 'number' ||
+    typeof bbox.width !== 'number' ||
+    typeof bbox.height !== 'number' ||
+    !Number.isFinite(bbox.x) ||
+    !Number.isFinite(bbox.y) ||
+    !Number.isFinite(bbox.width) ||
+    !Number.isFinite(bbox.height)
+  ) {
+    return null
+  }
+  return {
+    x: Math.max(0, Math.round(bbox.x)),
+    y: Math.max(0, Math.round(bbox.y)),
+    width: Math.max(0, Math.round(bbox.width)),
+    height: Math.max(0, Math.round(bbox.height))
+  }
+}
+
+function readWatermarkBBoxes(value: unknown, fallback: WatermarkBBox | null): WatermarkBBox[] | null {
+  if (Array.isArray(value)) {
+    const boxes = value
+      .map((item) => readWatermarkBBox(item))
+      .filter((bbox): bbox is WatermarkBBox => bbox !== null)
+    return boxes.length > 0 ? boxes : fallback ? [fallback] : null
+  }
+  return fallback ? [fallback] : null
 }
 
 export interface JobsResult {

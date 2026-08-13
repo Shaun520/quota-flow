@@ -50,6 +50,28 @@ interface UpdaterStatusView {
   error?: string
 }
 
+function welcomeDismissedKey(userId: string): string {
+  return `qf:welcome-dismissed:${userId}`
+}
+
+function readWelcomeDismissed(userId: string): boolean {
+  try {
+    return localStorage.getItem(welcomeDismissedKey(userId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeWelcomeDismissed(userId: string, dismissed: boolean): void {
+  try {
+    const key = welcomeDismissedKey(userId)
+    if (dismissed) localStorage.setItem(key, '1')
+    else localStorage.removeItem(key)
+  } catch {
+    // 本地存储不可用时保持当前会话行为
+  }
+}
+
 const TABS: TabDef[] = [
   { id: 'dispatch', label: '调度台', icon: IconGrid },
   { id: 'providers', label: '厂商', icon: IconMonitor },
@@ -75,16 +97,31 @@ function MainApp({
   // 厂商 / 任务数据提升到 MainApp 层：随 user 挂载/卸载，账号切换时整棵数据树重建，避免残留上一账号数据
   const providers = useProviders()
   const jobs = useJobs()
-  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [bannerDismissed, setBannerDismissed] = useState(() => readWelcomeDismissed(user.id))
   const onboardStep = useMemo<1 | 2 | 3>(() => {
     if (jobs.items.some((j) => j.record.status === '成功')) return 3
     if (providers.totalBound > 0) return 2
     return 1
   }, [jobs.items, providers.totalBound])
   const fresh = onboardStep < 3
-  const bannerVisible = fresh && !bannerDismissed
-  const hideBanner = useCallback(() => setBannerDismissed(true), [])
-  const finishOnboarding = useCallback(() => setBannerDismissed(true), [])
+  const onboardingReady = !providers.loading && !jobs.loading
+  const bannerVisible = onboardingReady && fresh && !bannerDismissed
+
+  useEffect(() => {
+    if (onboardStep === 3 && !bannerDismissed) {
+      setBannerDismissed(true)
+      writeWelcomeDismissed(user.id, true)
+    }
+  }, [onboardStep, bannerDismissed, user.id])
+
+  const hideBanner = useCallback(() => {
+    setBannerDismissed(true)
+    writeWelcomeDismissed(user.id, true)
+  }, [user.id])
+  const finishOnboarding = useCallback(() => {
+    setBannerDismissed(true)
+    writeWelcomeDismissed(user.id, true)
+  }, [user.id])
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
@@ -252,7 +289,7 @@ function MainApp({
             />
           </div>
           <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
-            <Providers fresh={fresh} providers={providers} onBound={() => setBannerDismissed(false)} />
+            <Providers fresh={fresh} providers={providers} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
             <History jobs={jobs} />

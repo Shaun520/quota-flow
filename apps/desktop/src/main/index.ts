@@ -15,6 +15,9 @@ import {
 import { runGenerate } from './dispatch'
 import type { DispatchEvent, QuotaUpdatedPayload } from './dispatch'
 import type { UpdaterStatus } from './updater'
+import { getWatermarkStatus, processWatermarkJob } from './watermark-remover/job'
+import type { WatermarkJobInput } from './watermark-remover/job'
+import type { WatermarkProgress } from './watermark-remover/engine'
 
 /** 活跃生成任务注册表：jobId → 取消/已提交状态（用于「终止生成」与「关闭确认」） */
 interface ActiveRunState {
@@ -22,6 +25,7 @@ interface ActiveRunState {
   submitted: boolean
 }
 const activeRuns = new Map<string, ActiveRunState>()
+const activeWatermarkAborters = new Map<string, AbortController>()
 let allowClose = false
 /** 是否有生成在跑（含任务注册前的准备窗口） */
 let isGenerating = false
@@ -83,7 +87,7 @@ function startMediaServer(): Promise<number> {
           return
         }
         const name = path.replace(/^\//, '')
-        if (!/^[0-9a-fA-F-]+\.mp4$/.test(name)) {
+        if (!/^[0-9a-fA-F-]+(\.clean(?:-[A-Za-z0-9-]+)?)?\.mp4$/.test(name)) {
           res.writeHead(400)
           res.end()
           return
@@ -220,7 +224,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   void startMediaServer()
   ipcMain.handle('media:get-url', async (_e, name: unknown) => {
-    if (typeof name !== 'string' || !/^[0-9a-fA-F-]+\.mp4$/.test(name)) {
+    if (typeof name !== 'string' || !/^[0-9a-fA-F-]+(\.clean(?:-[A-Za-z0-9-]+)?)?\.mp4$/.test(name)) {
       throw new Error('invalid media name')
     }
     const port = await startMediaServer()
@@ -333,6 +337,68 @@ app.whenReady().then(() => {
     if (state.submitted) return { ok: false, reason: '提示词已发送，无法终止', submitted: true }
     state.aborted = true
     return { ok: true }
+  })
+
+  const sendWatermarkProgress = (progress: WatermarkProgress): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) {
+        win.webContents.send('watermark:progress', progress)
+      }
+    }
+  }
+
+  ipcMain.handle('watermark:process', async (e, input: WatermarkJobInput) => {
+    if (!input || typeof input.jobId !== 'string' || typeof input.userId !== 'string') {
+      throw new Error('invalid watermark input')
+    }
+    const controller = new AbortController()
+    activeWatermarkAborters.set(input.jobId, controller)
+    try {
+      return await processWatermarkJob({
+        ...input,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          sendWatermarkProgress(progress)
+          if (!e.sender.isDestroyed()) e.sender.send('watermark:progress', progress)
+        }
+      })
+    } finally {
+      activeWatermarkAborters.delete(input.jobId)
+    }
+  })
+
+  ipcMain.handle('watermark:retry', async (e, input: WatermarkJobInput) => {
+    if (!input || typeof input.jobId !== 'string' || typeof input.userId !== 'string') {
+      throw new Error('invalid watermark input')
+    }
+    const controller = new AbortController()
+    activeWatermarkAborters.set(input.jobId, controller)
+    try {
+      return await processWatermarkJob({
+        ...input,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          sendWatermarkProgress(progress)
+          if (!e.sender.isDestroyed()) e.sender.send('watermark:progress', progress)
+        }
+      })
+    } finally {
+      activeWatermarkAborters.delete(input.jobId)
+    }
+  })
+
+  ipcMain.handle('watermark:cancel', (_e, jobId: unknown) => {
+    if (typeof jobId !== 'string' || !jobId) throw new Error('invalid watermark job id')
+    const controller = activeWatermarkAborters.get(jobId)
+    controller?.abort()
+    return { ok: !!controller }
+  })
+
+  ipcMain.handle('watermark:get-status', async (_e, input: Omit<WatermarkJobInput, 'bbox' | 'bboxes' | 'signal' | 'onProgress'>) => {
+    if (!input || typeof input.jobId !== 'string' || typeof input.userId !== 'string') {
+      throw new Error('invalid watermark input')
+    }
+    return getWatermarkStatus(input)
   })
 
   // reconciliation：启动时恢复崩溃残留 + 追记账本

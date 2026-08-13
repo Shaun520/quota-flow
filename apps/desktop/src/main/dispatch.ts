@@ -9,6 +9,7 @@ import { createSupabaseClient, JobService, ProviderService, todayKey } from '@qu
 import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
 import { runDoubaoGeneration } from './webview-engine'
 import type { ProviderCookie, OriginStorage } from './webview-engine'
+import { processWatermarkJob } from './watermark-remover/job'
 
 export interface GenerateInput {
   supabaseUrl: string
@@ -23,6 +24,8 @@ export interface GenerateInput {
   resolution?: string
   audio?: string
   ratio?: string
+  /** 本地去水印开关，默认开启 */
+  watermarkEnabled?: boolean
   /** 本地图片路径（图生视频，仅允许常见图片格式） */
   images?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
@@ -244,7 +247,8 @@ export async function runGenerate(
     durationSec: input.durationSec,
     ratio: input.ratio,
     audio: input.audio,
-    resolution: input.resolution
+    resolution: input.resolution,
+    watermarkEnabled: input.watermarkEnabled !== false
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
   const keys = await providerSvc.listProviderKeys(input.userId)
@@ -469,6 +473,11 @@ export async function runGenerate(
         ...jobOptions,
         remoteUrl: result.videoUrl,
         localPath: localPath || null,
+        cleanLocalPath: null,
+        originalLocalPath: localPath || null,
+        watermarkStatus: localPath && input.watermarkEnabled !== false ? 'processing' : 'none',
+        watermarkMethod: localPath && input.watermarkEnabled !== false ? 'delogo' : null,
+        watermarkError: null,
         posterUrl: result.posterUrl ?? null,
         accountId: selectedKey?.id ?? null,
         accountName: selectedKey?.accountName ?? null
@@ -491,6 +500,11 @@ export async function runGenerate(
       ...jobOptions,
       remoteUrl: result.videoUrl,
       localPath: localPath || null,
+      cleanLocalPath: null,
+      originalLocalPath: localPath || null,
+      watermarkStatus: localPath && input.watermarkEnabled !== false ? 'processing' : 'none',
+      watermarkMethod: localPath && input.watermarkEnabled !== false ? 'delogo' : null,
+      watermarkError: null,
       posterUrl: result.posterUrl ?? null,
       accountId: selectedKey?.id ?? null,
       accountName: selectedKey?.accountName ?? null
@@ -503,5 +517,37 @@ export async function runGenerate(
     message: '生成成功',
     data: { resultUrl, cost, localPath, accountId: selectedKey?.id ?? null }
   })
+
+  if (localPath && input.watermarkEnabled !== false) {
+    emit({
+      jobId: job.id,
+      status: 'running',
+      stage: 'watermark',
+      message: '本地去水印中…'
+    })
+    const wmResult = await processWatermarkJob({
+      supabaseUrl: input.supabaseUrl,
+      supabaseAnonKey: input.supabaseAnonKey,
+      accessToken: input.accessToken,
+      refreshToken: input.refreshToken,
+      userId: input.userId,
+      jobId: job.id,
+      onProgress: (progress) =>
+        emit({
+          jobId: job.id,
+          status: 'running',
+          stage: 'watermark',
+          message: progress.message ?? '本地去水印中…',
+          data: progress
+        })
+    })
+    emit({
+      jobId: job.id,
+      status: 'success',
+      stage: 'watermark',
+      message: wmResult.ok ? '去水印完成' : (wmResult.error || '去水印失败')
+    })
+  }
+
   return { ok: true, jobId: job.id }
 }
