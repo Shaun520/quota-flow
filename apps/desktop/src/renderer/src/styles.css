@@ -1754,6 +1754,16 @@ body {
   background: var(--bg-elevated);
   box-shadow: none;
 }
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 78px;
+}
+.refresh-btn .spin {
+  animation: spin 0.9s linear infinite;
+}
 .btn-sm.primary {
   background: var(--accent);
   border-color: var(--accent);

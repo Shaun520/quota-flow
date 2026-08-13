@@ -1039,6 +1039,36 @@ input:focus, select:focus, textarea:focus {
   gap: var(--space-4);
 }
 
+.provider-table .provider-cell-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.provider-icon-box {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.provider-icon-box svg {
+  display: block;
+}
+
+.provider-table .provider-name {
+  line-height: 1.35;
+}
+
+.provider-table .provider-id {
+  line-height: 1.3;
+}
+
 .provider-card {
   background: #fff;
   border: 1px solid var(--color-border);

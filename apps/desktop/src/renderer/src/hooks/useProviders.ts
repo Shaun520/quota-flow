@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getProviderService } from '../auth/service'
+import { getAuthService, getProviderService } from '../auth/service'
 import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
@@ -132,6 +132,7 @@ function resolveHealthAfterCheck(checked: string, expiresAt: string | null, now:
 
 export interface ProvidersResult {
   loading: boolean
+  refreshing: boolean
   error: string | null
   aggs: ProviderAgg[]
   anyBound: boolean
@@ -147,6 +148,7 @@ export interface ProvidersResult {
 export function useProviders(): ProvidersResult {
   const { user } = useAuth()
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [providers, setProviders] = useState<ProviderMeta[]>([])
   const [keys, setKeys] = useState<ProviderKey[]>([])
@@ -173,11 +175,13 @@ export function useProviders(): ProvidersResult {
     const svc = getProviderService()
     if (!svc || !user) {
       setLoading(false)
+      setRefreshing(false)
       return
     }
     // 仅首次加载显示 loading；reload 时保留旧数据，避免保存/操作后列表闪空白等待
     const isFirstLoad = providers.length === 0 && keys.length === 0
     if (isFirstLoad) setLoading(true)
+    else setRefreshing(true)
     setError(null)
     Promise.all([svc.listProviders(), svc.listProviderKeys(user.id), svc.listLedger(user.id)])
       .then(([p, k, l]) => {
@@ -229,12 +233,45 @@ export function useProviders(): ProvidersResult {
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       })
     return () => {
       cancelled = true
     }
   }, [user?.id, reloadKey])
+
+  // 后台停用/启用 providers.enabled 时，通过 Supabase Realtime 拉取最新启用的厂商列表。
+  // 不做置灰/停用态展示，直接从 providers 中移除，桌面端各页和新增厂商弹窗会同步消失。
+  useEffect(() => {
+    if (!user) return
+    const auth = getAuthService()
+    if (!auth) return
+    const client = auth.getClient()
+    const channel = client
+      .channel('providers-enabled-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'providers' },
+        () => {
+          const svc = getProviderService()
+          if (!svc) return
+          void svc
+            .listProviders()
+            .then(setProviders)
+            .catch(() => {
+              // 实时事件失败不打断当前 UI，下次 reload / 重新登录会恢复。
+            })
+        }
+      )
+      .subscribe()
+
+    return () => {
+      void client.removeChannel(channel)
+    }
+  }, [user?.id])
 
   // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
   useEffect(() => {
@@ -379,5 +416,5 @@ export function useProviders(): ProvidersResult {
     [user]
   )
 
-  return { loading, error, aggs, anyBound, totalBound, reload, testHealth, rename, setDefault, setEnabled, unbind }
+  return { loading, refreshing, error, aggs, anyBound, totalBound, reload, testHealth, rename, setDefault, setEnabled, unbind }
 }
