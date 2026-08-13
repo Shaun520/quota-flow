@@ -10,6 +10,7 @@ import { useAuth } from '../hooks/useAuth'
 const PAGE_SIZE = 10
 
 function statusBadge(p: ProviderAgg): { cls: string; label: string } {
+  if (!p.enabled) return { cls: 'badge-muted', label: '已停用' }
   if (p.health === 'offline') return { cls: 'badge-error', label: '离线' }
   if (p.health === 'degraded') return { cls: 'badge-pending', label: p.healthLabel }
   if (p.health === 'unbound') return { cls: 'badge-muted', label: '未绑定' }
@@ -197,7 +198,7 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
       </div>
       {showAddModal && user && (
         <AddProviderModal
-          providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, authType: a.authType, boundCount: a.boundCount }))}
+          providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, authType: a.authType, enabled: a.enabled, boundCount: a.boundCount }))}
           userId={user.id}
           initialProviderId={addTarget}
           onClose={() => setShowAddModal(false)}
@@ -247,7 +248,7 @@ function ProviderRow({
 
   return (
     <>
-      <tr>
+      <tr className={!agg.enabled ? 'provider-disabled' : ''}>
         <td>
           <button className={'expand-btn' + (expanded ? ' expanded' : '')} onClick={onToggle} aria-label="展开账号">
             <IconChevron size={12} />
@@ -266,7 +267,14 @@ function ProviderRow({
           <span className={'badge ' + badge.cls}>{badge.label}</span>
         </td>
         <td>
-          <button className="btn-sm primary" onClick={onBind}>绑定账号</button>
+          <button
+            className="btn-sm primary"
+            onClick={onBind}
+            disabled={!agg.enabled}
+            title={agg.enabled ? undefined : '厂商已停用，暂不能绑定账号'}
+          >
+            {agg.enabled ? '绑定账号' : '已停用'}
+          </button>
         </td>
       </tr>
       {expanded && (

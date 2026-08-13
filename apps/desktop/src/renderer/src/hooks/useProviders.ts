@@ -30,6 +30,7 @@ export interface ProviderAgg {
   name: string
   logo: string
   authType: string
+  enabled: boolean
   unitName: string
   defaultDailyQuota: number
   boundCount: number
@@ -183,7 +184,7 @@ export function useProviders(): ProvidersResult {
     if (isFirstLoad) setLoading(true)
     else setRefreshing(true)
     setError(null)
-    Promise.all([svc.listProviders(), svc.listProviderKeys(user.id), svc.listLedger(user.id)])
+    Promise.all([svc.listAllProviders(), svc.listProviderKeys(user.id), svc.listLedger(user.id)])
       .then(([p, k, l]) => {
         if (cancelled) return
         setProviders(p)
@@ -243,8 +244,8 @@ export function useProviders(): ProvidersResult {
     }
   }, [user?.id, reloadKey])
 
-  // 后台停用/启用 providers.enabled 时，通过 Supabase Realtime 拉取最新启用的厂商列表。
-  // 不做置灰/停用态展示，直接从 providers 中移除，桌面端各页和新增厂商弹窗会同步消失。
+  // 后台停用/启用 providers.enabled 时，通过 Supabase Realtime 拉取最新厂商列表。
+  // 桌面端保留全部 admin 配置的厂商；停用厂商在新增厂商弹窗中置灰不可选。
   useEffect(() => {
     if (!user) return
     const auth = getAuthService()
@@ -259,7 +260,7 @@ export function useProviders(): ProvidersResult {
           const svc = getProviderService()
           if (!svc) return
           void svc
-            .listProviders()
+            .listAllProviders()
             .then(setProviders)
             .catch(() => {
               // 实时事件失败不打断当前 UI，下次 reload / 重新登录会恢复。
@@ -316,18 +317,19 @@ export function useProviders(): ProvidersResult {
 
     return providers.map((p) => {
       const bindings = map.get(p.id) ?? []
-      const health = bindHealth(bindings)
+      const health = p.enabled === false ? 'offline' : bindHealth(bindings)
       return {
         providerId: p.id,
         name: p.name,
         logo: p.logo ?? p.name.slice(0, 1),
         authType: p.auth_type,
+        enabled: p.enabled !== false,
         unitName: p.unit_name ?? '',
         defaultDailyQuota: Number(p.default_daily_quota ?? 0),
         boundCount: bindings.length,
         enabledCount: bindings.filter((b) => b.enabled).length,
         health,
-        healthLabel: HEALTH_LABEL[health],
+        healthLabel: p.enabled === false ? '已停用' : HEALTH_LABEL[health],
         bindings
       }
     })

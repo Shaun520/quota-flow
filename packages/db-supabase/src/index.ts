@@ -159,6 +159,15 @@ export class ProviderService {
     return (data ?? []) as unknown as ProviderMeta[]
   }
 
+  async listAllProviders(): Promise<ProviderMeta[]> {
+    const { data, error } = await this.client
+      .from('providers')
+      .select('*')
+      .order('name')
+    if (error) throw error
+    return (data ?? []) as unknown as ProviderMeta[]
+  }
+
   async listProviderKeys(userId: string): Promise<ProviderKey[]> {
     const { data, error } = await this.client
       .from('provider_keys')

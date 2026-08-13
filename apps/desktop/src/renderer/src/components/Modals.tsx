@@ -312,7 +312,12 @@ interface ProviderOption {
   providerId: string
   name: string
   authType: string
+  enabled: boolean
   boundCount?: number
+}
+
+function firstEnabledProvider(providers: ProviderOption[]): ProviderOption | undefined {
+  return providers.find((p) => p.enabled !== false)
 }
 
 function ProviderSelect({
@@ -363,13 +368,20 @@ function ProviderSelect({
         <div className="provider-select-list" role="listbox" aria-label="选择厂商">
           {providers.map((p) => {
             const Icon = PROVIDER_ICONS[p.providerId]
+            const disabled = p.enabled === false
             return (
               <button
                 type="button"
                 key={p.providerId}
                 role="option"
-                aria-selected={p.providerId === value}
-                className={'provider-select-item' + (p.providerId === value ? ' active' : '')}
+                aria-selected={!disabled && p.providerId === value}
+                aria-disabled={disabled}
+                className={
+                  'provider-select-item' +
+                  (p.providerId === value ? ' active' : '') +
+                  (disabled ? ' disabled' : '')
+                }
+                disabled={disabled}
                 onClick={() => {
                   onChange(p.providerId)
                   setOpen(false)
@@ -377,7 +389,8 @@ function ProviderSelect({
               >
                 {Icon ? <Icon size={16} /> : null}
                 <span>{p.name}</span>
-                {p.providerId === value && (
+                {disabled && <span className="provider-select-disabled-label">已停用</span>}
+                {!disabled && p.providerId === value && (
                   <svg className="provider-select-check" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M5 13l4 4 10-10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -405,7 +418,9 @@ export function AddProviderModal({
   onDone?: () => void
 }) {
   const [providerId, setProviderId] = useState(
-    initialProviderId ?? providers.find((p) => p.providerId === 'doubao')?.providerId ?? providers[0]?.providerId ?? ''
+    initialProviderId && providers.some((p) => p.providerId === initialProviderId && p.enabled !== false)
+      ? initialProviderId
+      : (firstEnabledProvider(providers)?.providerId ?? '')
   )
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
   const [apiKey, setApiKey] = useState('')
@@ -428,9 +443,11 @@ export function AddProviderModal({
   const [loginTempId, setLoginTempId] = useState<string | null>(null)
 
   useEffect(() => {
-    if (providers.some((p) => p.providerId === providerId)) return
-    const next = providers.find((p) => p.providerId === 'doubao')?.providerId ?? providers[0]?.providerId ?? ''
-    setProviderId((prev) => (prev === next ? prev : next))
+    const current = providers.find((p) => p.providerId === providerId)
+    if (current && current.enabled !== false) return
+    const next = firstEnabledProvider(providers)?.providerId ?? ''
+    if (next === providerId) return
+    setProviderId(next)
     setStatus((prev) => (prev === 'idle' ? prev : 'idle'))
     setError((prev) => (prev === null ? prev : null))
     setNotice((prev) => (prev === null ? prev : null))

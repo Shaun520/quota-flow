@@ -972,6 +972,59 @@ input:focus, select:focus, textarea:focus {
   width: 100%;
 }
 
+.logo-upload-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-background);
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.logo-upload-control:hover {
+  background: var(--color-muted);
+  border-color: var(--color-primary);
+}
+
+.logo-upload-control input {
+  display: none;
+}
+
+.logo-upload-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.logo-upload-preview img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  padding: 4px;
+}
+
+.logo-upload-preview span {
+  font-size: 12px;
+  color: #475569;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .toggle {
   position: relative;
   display: inline-block;
@@ -1059,6 +1112,14 @@ input:focus, select:focus, textarea:focus {
 
 .provider-icon-box svg {
   display: block;
+}
+
+.provider-icon-box .provider-icon-img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .provider-table .provider-name {

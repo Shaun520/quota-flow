@@ -96,10 +96,13 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
   const cost = computeCost(provider, model, duration, resolution)
   const upload = uploadHint(provider, mode)
 
-  // 厂商选项只取「厂商页已绑定」的厂商；智能调度仅在至少绑定一家时提供
+  // 调度台状态面板不展示后台已停用的厂商，避免出现置灰/停用态干扰调度信息。
+  const visibleAggs = useMemo(() => provAggs.filter((p) => p.enabled !== false), [provAggs])
+
+  // 厂商选项只取「已启用且已绑定」的厂商；智能调度仅在至少绑定一家时提供
   const providerOptions = useMemo(() => {
     const bound = provAggs
-      .filter((a) => a.boundCount > 0)
+      .filter((a) => a.enabled && a.boundCount > 0)
       .map((a) => ({ value: a.providerId, label: a.name }))
     if (bound.length === 0) return []
     return [{ value: 'auto', label: '智能调度（推荐）' }, ...bound]
@@ -574,15 +577,26 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           <div className="panel-header">
             <h2>厂商实时状态</h2>
             <span className="panel-meta">
-              {provAggs.some((a) => a.enabledCount > 0)
-                ? provAggs.reduce((s, a) => s + a.enabledCount, 0) + ' 个可用账号'
+              {visibleAggs.some((a) => a.enabledCount > 0)
+                ? visibleAggs.reduce((s, a) => s + a.enabledCount, 0) + ' 个可用账号'
                 : '未绑定'}
             </span>
           </div>
-          {provAggs.every((a) => a.boundCount === 0) ? (
+          {visibleAggs.length === 0 ? (
+            <EmptyState
+              className="ps-empty"
+              title="没有可用厂商"
+              description="请先到后台管理系统启用厂商"
+              action={
+                <button className="btn-sm primary" onClick={onGoProviders}>
+                  去绑定账号 →
+                </button>
+              }
+            />
+          ) : visibleAggs.every((a) => a.boundCount === 0) ? (
             <>
               <div className="provider-status-list">
-                {provAggs.map((p) => {
+                {visibleAggs.map((p) => {
                   const IconComp = PROVIDER_ICONS[p.providerId]
                   return (
                     <div className="ps-item unbound" key={p.providerId}>
@@ -615,7 +629,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
           ) : (
             <>
               <div className="provider-status-list">
-                {provAggs.map((p) => {
+                {visibleAggs.map((p) => {
                   const IconComp = PROVIDER_ICONS[p.providerId]
                   const used = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.used, 0)
                   const remaining = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.remaining, 0)

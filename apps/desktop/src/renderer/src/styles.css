@@ -1002,6 +1002,14 @@ body {
 .ps-item .ps-state.offline .dot {
   background: var(--error);
 }
+.ps-item.disabled {
+  opacity: 0.62;
+  filter: grayscale(1);
+}
+.ps-item.disabled:hover {
+  transform: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
 
 .quota-bar {
   width: 100%;
@@ -1269,6 +1277,12 @@ body {
 }
 .provider-table tbody tr:hover {
   background: var(--bg-hover);
+}
+.provider-table tbody tr.provider-disabled {
+  opacity: 0.62;
+}
+.provider-table tbody tr.provider-disabled:hover {
+  background: transparent;
 }
 .provider-table .col-name {
   font-weight: 600;
@@ -2067,27 +2081,29 @@ textarea::-webkit-scrollbar {
   color: var(--accent);
   flex-shrink: 0;
 }
+.provider-select-disabled-label {
+  margin-left: auto;
+  font-size: 0.82em;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
 
-/* 新增厂商下拉：仅开放豆包，其余厂商置灰不可选（纯 CSS，无 JS 改动）
-   豆包以官方 logo 标志色 #1E37FC 识别（IconDoubao），order:-1 保证无论列表顺序如何都排第一 */
+/* 新增厂商下拉：后台停用的厂商置灰不可选，启用状态保持可选 */
 .provider-select-list {
   display: flex;
   flex-direction: column;
 }
-.provider-select-item:has(path[fill="#1E37FC"]) {
-  order: -1;
-}
-.provider-select-item:not(:has(path[fill="#1E37FC"])) {
+.provider-select-item.disabled {
   opacity: 0.45;
   filter: grayscale(1);
   color: var(--fg-muted);
   cursor: not-allowed;
   pointer-events: none;
 }
-.provider-select-item:not(:has(path[fill="#1E37FC"])).active {
+.provider-select-item.disabled.active {
   background: transparent;
 }
-.provider-select-item:not(:has(path[fill="#1E37FC"])) .provider-select-check {
+.provider-select-item.disabled .provider-select-check {
   display: none;
 }
 

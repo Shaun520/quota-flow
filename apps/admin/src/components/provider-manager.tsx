@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { AlertTriangle, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { ChangeEvent, FormEvent, useState } from "react";
+import { AlertTriangle, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
 import { PROVIDER_ICONS } from "./provider-icons";
 
@@ -47,6 +47,10 @@ function formatNumber(value: number | null | undefined): string {
   return Number(value).toLocaleString("zh-CN");
 }
 
+function isRemoteLogo(logo: string | null | undefined): logo is string {
+  return typeof logo === "string" && /^(https?:\/\/|data:image\/)/i.test(logo);
+}
+
 async function insertAuditLog(
   action: string,
   target: string,
@@ -83,10 +87,16 @@ interface ProviderEditValues {
   enabled: boolean;
 }
 
+interface ProviderCreateValues extends ProviderEditValues {
+  id: string;
+  logoFile?: File | null;
+}
+
 export function ProviderManager({ providers: initialProviders }: { providers: ProviderRow[] }) {
   const [providers, setProviders] = useState(() => sortProviders(initialProviders));
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<ToggleMessage | null>(null);
+  const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ProviderRow | null>(null);
   const [deleting, setDeleting] = useState<ProviderRow | null>(null);
   const [saving, setSaving] = useState(false);
@@ -218,6 +228,122 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
     }
   }
 
+  async function createProvider(values: ProviderCreateValues) {
+    const id = values.id.trim().toLowerCase();
+    const name = values.name.trim();
+    if (!id) {
+      setMessage({ tone: "danger", text: "Provider ID 不能为空。" });
+      return;
+    }
+    if (!/^[a-z0-9_]+$/.test(id)) {
+      setMessage({ tone: "danger", text: "Provider ID 只能包含小写字母、数字和下划线。" });
+      return;
+    }
+    if (!name) {
+      setMessage({ tone: "danger", text: "厂商名称不能为空。" });
+      return;
+    }
+    if (providers.some((row) => row.id === id)) {
+      setMessage({ tone: "danger", text: `Provider ID 已存在：${id}` });
+      return;
+    }
+
+    setSaving(true);
+    setMessage(null);
+
+    try {
+      const supabase = createAdminBrowserClient();
+      const { error } = await supabase.from("providers").insert({
+        id,
+        name,
+        logo: null,
+        capabilities: null,
+        auth_type: values.auth_type,
+        unit_name: values.unit_name,
+        default_daily_quota: values.default_daily_quota,
+        equivalent_count_divisor: values.equivalent_count_divisor,
+        enabled: values.enabled
+      });
+
+      if (error) throw error;
+
+      let logo: string | null = null;
+      if (values.logoFile) {
+        const file = values.logoFile;
+        const ext = (file.name.split(".").pop() || "png")
+          .replace(/[^a-z0-9]/gi, "")
+          .toLowerCase() || "png";
+        const storagePath = `${id}-${Date.now()}.${ext}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("provider-logos")
+          .upload(storagePath, file, {
+            cacheControl: "3600",
+            contentType: file.type || undefined,
+            upsert: true
+          });
+
+        if (uploadError) {
+          await supabase.from("providers").delete().eq("id", id);
+          throw uploadError;
+        }
+
+        const { data: publicUrlData } = supabase.storage
+          .from("provider-logos")
+          .getPublicUrl(storagePath);
+        logo = publicUrlData.publicUrl;
+
+        const { error: logoUpdateError } = await supabase
+          .from("providers")
+          .update({ logo })
+          .eq("id", id);
+
+        if (logoUpdateError) {
+          await supabase.storage.from("provider-logos").remove([storagePath]);
+          await supabase.from("providers").delete().eq("id", id);
+          throw logoUpdateError;
+        }
+      }
+
+      const newRow: ProviderRow = {
+        id,
+        name,
+        logo,
+        capabilities: null,
+        auth_type: values.auth_type,
+        unit_name: values.unit_name,
+        default_daily_quota: values.default_daily_quota,
+        equivalent_count_divisor: values.equivalent_count_divisor,
+        enabled: values.enabled
+      };
+      setProviders((prev) => sortProviders([...prev, newRow]));
+
+      const auditWarning = await insertAuditLog("provider.create", `providers:${id}`, {
+        provider_id: id,
+        name,
+        auth_type: values.auth_type,
+        unit_name: values.unit_name,
+        default_daily_quota: values.default_daily_quota,
+        equivalent_count_divisor: values.equivalent_count_divisor,
+        enabled: values.enabled
+      });
+
+      setMessage(
+        auditWarning
+          ? { tone: "warning", text: `已创建 ${name}，但${auditWarning}` }
+          : { tone: "success", text: `已创建 ${name}。` }
+      );
+      setCreating(false);
+    } catch (e) {
+      setMessage({
+        tone: "danger",
+        text: e instanceof Error ? `操作失败：${e.message}` : "操作失败，请稍后重试。"
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function confirmDelete() {
     if (!deleting) return;
 
@@ -260,7 +386,7 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
           <p className="page-subtitle">管理厂商配置、全局启用/禁用与健康监控</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-secondary btn-sm" type="button" disabled>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setCreating(true)}>
             <Plus />
             新增 Provider
           </button>
@@ -308,6 +434,14 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
         </div>
       )}
 
+      {creating ? (
+        <ProviderCreateModal
+          busy={saving}
+          onSave={createProvider}
+          onClose={() => setCreating(false)}
+        />
+      ) : null}
+
       {editing ? (
         <ProviderEditModal
           provider={editing}
@@ -329,6 +463,179 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
   );
 }
 
+function ProviderCreateModal({
+  busy,
+  onSave,
+  onClose
+}: {
+  busy: boolean;
+  onSave: (values: ProviderCreateValues) => void;
+  onClose: () => void;
+}) {
+  const [id, setId] = useState("");
+  const [name, setName] = useState("");
+  const [authType, setAuthType] = useState("cookie");
+  const [unitName, setUnitName] = useState("");
+  const [defaultDailyQuota, setDefaultDailyQuota] = useState("0");
+  const [equivalentCountDivisor, setEquivalentCountDivisor] = useState("1");
+  const [enabled, setEnabled] = useState(true);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    onSave({
+      id,
+      name,
+      auth_type: authType,
+      unit_name: unitName,
+      default_daily_quota: Number(defaultDailyQuota) || 0,
+      equivalent_count_divisor: Number(equivalentCountDivisor) || 1,
+      enabled,
+      logoFile
+    });
+  }
+
+  function handleLogoChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    setLogoFile(file);
+    if (logoPreview) URL.revokeObjectURL(logoPreview);
+    setLogoPreview(file ? URL.createObjectURL(file) : null);
+  }
+
+  return (
+    <div className="modal-overlay show" role="dialog" aria-modal="true">
+      <div className="modal">
+        <div className="modal-header">
+          <div className="modal-title">新增 Provider</div>
+          <button className="modal-close" type="button" onClick={onClose} disabled={busy} aria-label="关闭">
+            <X />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            <div className="form-group">
+              <label className="form-label">
+                Provider ID<span className="required">*</span>
+              </label>
+              <input
+                className="form-input"
+                value={id}
+                onChange={(e) => setId(e.target.value)}
+                placeholder="doubao"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">
+                厂商名称<span className="required">*</span>
+              </label>
+              <input
+                className="form-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">图标上传</label>
+              <label className="logo-upload-control">
+                <Upload size={16} />
+                <span>{logoFile ? "已选择图标" : "选择图标文件"}</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  onChange={handleLogoChange}
+                  disabled={busy}
+                />
+              </label>
+              <p className="form-hint">上传后保存到 Supabase Storage，公网可访问。</p>
+              {logoPreview ? (
+                <div className="logo-upload-preview">
+                  <img src={logoPreview} alt="" />
+                  <span>{logoFile?.name}</span>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">认证方式</label>
+                <select
+                  className="form-select"
+                  value={authType}
+                  onChange={(e) => setAuthType(e.target.value)}
+                >
+                  <option value="cookie">cookie</option>
+                  <option value="apikey">apikey</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">额度单位</label>
+                <input
+                  className="form-input"
+                  value={unitName}
+                  onChange={(e) => setUnitName(e.target.value)}
+                  placeholder="count"
+                />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">默认日额度</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={defaultDailyQuota}
+                  onChange={(e) => setDefaultDailyQuota(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">等效除数</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={equivalentCountDivisor}
+                  onChange={(e) => setEquivalentCountDivisor(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">启用状态</label>
+              <label className="toggle" title={enabled ? "已启用" : "已停用"}>
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                />
+                <span className="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button className="btn btn-secondary btn-sm" type="button" onClick={onClose} disabled={busy}>
+              取消
+            </button>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>
+              <Plus />
+              {busy ? "保存中..." : "新增"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function ProviderRowItem({
   provider,
   busy,
@@ -343,6 +650,7 @@ function ProviderRowItem({
   onDelete: () => void;
 }) {
   const IconComp = PROVIDER_ICONS[provider.id];
+  const logoUrl = isRemoteLogo(provider.logo) ? provider.logo : null;
   const enabled = provider.enabled;
 
   return (
@@ -350,7 +658,13 @@ function ProviderRowItem({
       <td>
         <div className="provider-cell-name">
           <span className="provider-icon-box" style={{ background: "#EFF6FF" }}>
-            {IconComp ? <IconComp size={20} /> : <span>{provider.name.slice(0, 1)}</span>}
+            {logoUrl ? (
+              <img className="provider-icon-img" src={logoUrl} alt={provider.name} />
+            ) : IconComp ? (
+              <IconComp size={20} />
+            ) : (
+              <span>{provider.name.slice(0, 1)}</span>
+            )}
           </span>
           <span>
             <div className="provider-name">{provider.name}</div>
