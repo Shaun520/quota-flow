@@ -81,7 +81,7 @@ interface ModalProps {
   footer: ReactNode
 }
 
-function Modal({ title, onClose, children, footer }: ModalProps) {
+export function Modal({ title, onClose, children, footer }: ModalProps) {
   return (
     <div
       className="modal-overlay"

@@ -6,8 +6,10 @@ import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
 import { initCookieRenew } from './cookie-renew'
+import { checkForUpdatesNow, initAutoUpdater, quitAndInstall as quitAndInstallUpdater } from './updater'
 import { runGenerate } from './dispatch'
 import type { DispatchEvent } from './dispatch'
+import type { UpdaterStatus } from './updater'
 
 /** 活跃生成任务注册表：jobId → 取消/已提交状态（用于「终止生成」与「关闭确认」） */
 interface ActiveRunState {
@@ -31,6 +33,14 @@ app.disableHardwareAcceleration()
 //  - 根路径：userData/videos 下 <uuid>.mp4（视频，支持 Range）
 //  - /images/：userData/images 下 <jobId>-<n>.<ext>（图生视频上传的图片副本）
 let mediaPortPromise: Promise<number> | null = null
+
+function sendUpdaterStatus(status: UpdaterStatus): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) {
+      win.webContents.send('updater:status', status)
+    }
+  }
+}
 
 function startMediaServer(): Promise<number> {
   if (!mediaPortPromise) {
@@ -248,6 +258,10 @@ app.whenReady().then(() => {
     })
   })
   ipcMain.handle('auth:clear-session', () => clearStoredSession())
+  ipcMain.handle('updater:check', () => checkForUpdatesNow(sendUpdaterStatus))
+  ipcMain.handle('updater:quit-and-install', () => {
+    quitAndInstallUpdater()
+  })
   ipcMain.handle('dispatch:generate', async (e, input: Parameters<typeof runGenerate>[0]) => {
     const emit = (ev: DispatchEvent): void => {
       if (!e.sender.isDestroyed()) e.sender.send('job:event', ev)
@@ -363,6 +377,7 @@ app.whenReady().then(() => {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
   })
+  initAutoUpdater(sendUpdaterStatus)
   initProviders()
   initCookieRenew()
   createWindow()

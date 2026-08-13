@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@quota-flow/auth": "workspace:^",
-    "@quota-flow/db-supabase": "workspace:^"
+    "@quota-flow/db-supabase": "workspace:^",
+    "electron-updater": "^6.6.2"
   }
 }

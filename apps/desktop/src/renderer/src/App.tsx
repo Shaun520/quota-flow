@@ -6,6 +6,7 @@ import History from './components/History'
 import Team from './components/Team'
 import TitleBar from './components/TitleBar'
 import WelcomeBanner from './components/WelcomeBanner'
+import { NotificationBell } from './components/NotificationBell'
 import { BrandMark } from './components/Brand'
 import AuthScreen from './auth/AuthScreen'
 import { useAuth } from './hooks/useAuth'
@@ -31,6 +32,13 @@ interface TabDef {
   id: TabId
   label: string
   icon: ComponentType<{ size?: number }>
+}
+
+interface UpdaterStatusView {
+  state: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+  version?: string
+  progress?: number
+  error?: string
 }
 
 const TABS: TabDef[] = [
@@ -85,9 +93,15 @@ function MainApp({
     toastTimer.current = window.setTimeout(() => setToast(null), 2200)
   }, [])
 
+  const [updater, setUpdater] = useState<UpdaterStatusView>({ state: 'idle' })
+
   useEffect(() => {
     applyTheme(getInitialTheme())
     applyFontSize(getInitialFontSize())
+  }, [])
+
+  useEffect(() => {
+    return window.api.updater.onStatus(setUpdater)
   }, [])
 
   // Cookie 自动续命：配置主进程调度器（携带最新会话 token）+ 轮询状态更新状态栏
@@ -170,6 +184,7 @@ function MainApp({
             <IconUsers size={10} />
             {team ? '团队 · ' + team.id.slice(0, 8) : fresh ? '新用户 · 未绑定' : '个人模式'}
           </div>
+          <NotificationBell userId={user.id} />
           <div className="avatar-wrap">
             <div className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</div>
             <div className="avatar-dropdown">
@@ -244,6 +259,29 @@ function MainApp({
           <div className="status-item">{renewText}</div>
         </div>
         <div className="status-right">
+          {updater.state === 'downloaded' ? (
+            <div className="status-item updater-item">
+              <span>新版本已下载</span>
+              <button className="updater-action" onClick={() => void window.api.updater.quitAndInstall()}>
+                重启安装
+              </button>
+            </div>
+          ) : updater.state === 'available' ? (
+            <div className="status-item updater-item">
+              <span>发现新版本 {updater.version}</span>
+              <button className="updater-action" onClick={() => void window.api.updater.check()}>
+                下载
+              </button>
+            </div>
+          ) : updater.state === 'downloading' ? (
+            <div className="status-item">下载更新 {Math.round(updater.progress ?? 0)}%</div>
+          ) : updater.state === 'checking' ? (
+            <div className="status-item">检查更新...</div>
+          ) : updater.state === 'error' ? (
+            <div className="status-item" title={updater.error ?? ''}>
+              更新检查失败
+            </div>
+          ) : null}
           <div className="status-item">Quota-Flow v0.9.0</div>
         </div>
       </footer>
