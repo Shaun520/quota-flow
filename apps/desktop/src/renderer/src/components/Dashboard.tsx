@@ -15,6 +15,7 @@ import type { JobItem } from '../hooks/useJobs'
 import { useAuth } from '../hooks/useAuth'
 import type { ProvidersResult } from '../hooks/useProviders'
 import type { JobsResult } from '../hooks/useJobs'
+import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
 import { ensureFreshSession } from '../auth/session'
 import { VideoThumb } from './VideoThumb'
@@ -60,6 +61,9 @@ interface DashboardProps {
   fresh: boolean
   banner: boolean
   step: 1 | 2 | 3
+  viewScope: ViewScope
+  usageScope: UsageScope
+  onUsageScopeChange: (scope: UsageScope) => void
   onGenerate?: () => void
   onGoHistory: () => void
   onGoProviders: () => void
@@ -67,9 +71,21 @@ interface DashboardProps {
   jobs: JobsResult
 }
 
-export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory, onGoProviders, providers, jobs }: DashboardProps) {
+export default function Dashboard({
+  fresh,
+  banner,
+  step,
+  viewScope,
+  usageScope,
+  onUsageScopeChange,
+  onGenerate,
+  onGoHistory,
+  onGoProviders,
+  providers,
+  jobs
+}: DashboardProps) {
   const { aggs: provAggs } = providers
-  const { user } = useAuth()
+  const { user, team } = useAuth()
   const { items: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('auto')
   const [model, setModel] = useState(MODELS.auto[0])
@@ -307,6 +323,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
         accessToken: session.access_token,
         refreshToken: session.refresh_token,
         userId: user.id,
+        teamId: usageScope === 'team' ? team?.id ?? null : null,
         prompt: prompt.trim(),
         providerId: provider === 'auto' ? 'doubao' : provider,
         durationSec: duration,
@@ -335,7 +352,7 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, duration, durations, resolution, audio, ratio, watermark, imageFiles, user, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, duration, durations, resolution, audio, ratio, watermark, imageFiles, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -511,6 +528,20 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
                 ]}
               />
             </div>
+            {viewScope === 'global' && team ? (
+              <div className="param-field">
+                <label htmlFor="usage-scope">生成额度</label>
+                <Select
+                  id="usage-scope"
+                  value={usageScope}
+                  onChange={(v) => onUsageScopeChange(v as UsageScope)}
+                  options={[
+                    { value: 'personal', label: '个人额度' },
+                    { value: 'team', label: '团队额度' }
+                  ]}
+                />
+              </div>
+            ) : null}
             <div className="param-field">
               <label htmlFor="watermark">去水印</label>
               <label className="switch watermark-switch">
@@ -526,9 +557,11 @@ export default function Dashboard({ fresh, banner, step, onGenerate, onGoHistory
                 <span className="switch-label">{watermark ? '开' : '关'}</span>
               </label>
             </div>
-            <div className="param-field">
-              <span className="field-hint">配音 / 比例不影响额度</span>
-            </div>
+            {!(viewScope === 'global' && team) ? (
+              <div className="param-field">
+                <span className="field-hint">配音 / 比例不影响额度</span>
+              </div>
+            ) : null}
           </div>
 
           {mode !== 't2v' && (

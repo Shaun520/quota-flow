@@ -437,14 +437,26 @@ app.whenReady().then(() => {
       const unfinalized = await providerSvc.findUnfinalizedJobs(params.userId)
       for (const u of unfinalized) {
         try {
-          const { data, error } = await client.rpc('reconcile_consume_and_finalize', {
-            p_user_id: params.userId,
-            p_provider_id: 'doubao',
-            p_amount: u.costAmount,
-            p_key_id: u.keyId,
-            p_date: todayKey(),
-            p_job_id: u.jobId
-          })
+          const rpcName = u.teamId ? 'team_consume_quota_and_finalize' : 'reconcile_consume_and_finalize'
+          const rpcArgs = u.teamId
+            ? {
+                p_team_id: u.teamId,
+                p_user_id: params.userId,
+                p_provider_id: 'doubao',
+                p_amount: u.costAmount,
+                p_account_key_id: u.keyId,
+                p_date: todayKey(),
+                p_job_id: u.jobId
+              }
+            : {
+                p_user_id: params.userId,
+                p_provider_id: 'doubao',
+                p_amount: u.costAmount,
+                p_key_id: u.keyId,
+                p_date: todayKey(),
+                p_job_id: u.jobId
+              }
+          const { data, error } = await client.rpc(rpcName, rpcArgs)
           if (error) throw error
           const result = data as unknown as { ok: boolean; code?: string }
           if (result.ok && result.code !== 'ALREADY_FINALIZED') {

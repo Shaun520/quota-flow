@@ -455,13 +455,17 @@ function ProviderSelect({
 export function AddProviderModal({
   providers,
   userId,
+  team,
   initialProviderId,
+  defaultScope = 'personal',
   onClose,
   onDone
 }: {
   providers: ProviderOption[]
   userId: string
+  team?: TeamContext | null
   initialProviderId?: string
+  defaultScope?: 'personal' | 'team'
   onClose: () => void
   onDone?: () => void
 }) {
@@ -469,6 +473,9 @@ export function AddProviderModal({
     initialProviderId && providers.some((p) => p.providerId === initialProviderId && p.enabled !== false)
       ? initialProviderId
       : (firstEnabledProvider(providers)?.providerId ?? '')
+  )
+  const [accountScope, setAccountScope] = useState<'personal' | 'team'>(
+    defaultScope === 'team' && !!team ? 'team' : 'personal'
   )
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
   const [apiKey, setApiKey] = useState('')
@@ -535,6 +542,10 @@ export function AddProviderModal({
     try {
       const svc = getProviderService()
       if (!svc) throw new Error('数据库服务未配置')
+      const targetTeamId = accountScope === 'team' && team ? team.id : null
+      const scopeKeys = accountScope === 'team' && team
+        ? await svc.listTeamProviderKeys(team.id)
+        : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
 
       // 用户明确选择「刷新已有账号」：直接更新该 key 的 cookie（保留 keyId 与额度归属）
       if (refreshKeyId) {
@@ -558,8 +569,14 @@ export function AddProviderModal({
 
       // P2 去重：同一账号指纹已存在则拦截（指纹为 null 时跳过）
       if (accountFingerprint) {
-        const dup = await svc.findDuplicateFingerprint(userId, providerId, accountFingerprint)
+        const dup =
+          scopeKeys.find(
+            (k) => k.provider_id === providerId && k.account_fingerprint === accountFingerprint
+          ) ?? null
         if (dup) {
+          if (accountScope === 'team' && team && dup.owner_user_id !== userId) {
+            throw new Error('该账号已由其他成员绑定，请由绑定成员刷新')
+          }
           // 同一账号重新登录：刷新 cookie，保留 keyId 与额度归属
           await svc.refreshProviderKey(userId, dup.id, {
             encryptedKey: encrypted,
@@ -579,7 +596,7 @@ export function AddProviderModal({
       }
 
       // 备注为空时兜底自动命名：<厂商名> 账号 N（按该厂商第 N 个绑定递增）
-      const allKeys = await svc.listProviderKeys(userId)
+      const allKeys = scopeKeys
       const sameProvider = allKeys.filter((k) => k.provider_id === providerId)
       const seq = sameProvider.length + 1
       const name = accountName.trim() || `${selected?.name ?? providerId} 账号 ${seq}`
@@ -588,6 +605,7 @@ export function AddProviderModal({
       const saved = await svc.addProviderKey({
         providerId,
         ownerUserId: userId,
+        teamId: targetTeamId,
         encryptedKey: encrypted,
         accountName: name,
         authType,
@@ -606,7 +624,8 @@ export function AddProviderModal({
           providerId,
           unitName: p?.unit_name ?? '',
           dailyTotal: Number(p?.default_daily_quota ?? 0),
-          keyId: saved.id
+          keyId: saved.id,
+          teamId: targetTeamId
         })
       }
     } catch (e) {
@@ -655,9 +674,12 @@ export function AddProviderModal({
       let existing: Array<{ id: string; accountName: string }> = []
       if (svc) {
         try {
-          const keys = await svc.listProviderKeys(userId)
+          const keys = accountScope === 'team' && team
+            ? await svc.listTeamProviderKeys(team.id)
+            : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
           existing = keys
             .filter((k) => k.provider_id === selected.providerId)
+            .filter((k) => accountScope !== 'team' || k.owner_user_id === userId)
             .map((k) => ({ id: k.id, accountName: k.account_name ?? '未命名账号' }))
         } catch {}
       }
@@ -665,8 +687,19 @@ export function AddProviderModal({
       // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；指纹能识别且无重复 → 暂存待「完成」时保存
       if (res.accountFingerprint && svc) {
         try {
-          const dup = await svc.findDuplicateFingerprint(userId, selected.providerId, res.accountFingerprint)
+          const scopeKeys = accountScope === 'team' && team
+            ? await svc.listTeamProviderKeys(team.id)
+            : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
+          const dup =
+            scopeKeys.find(
+              (k) => k.provider_id === selected.providerId && k.account_fingerprint === res.accountFingerprint
+            ) ?? null
           if (dup) {
+            if (accountScope === 'team' && team && dup.owner_user_id !== userId) {
+              setError('该账号已由其他成员绑定，请由绑定成员刷新')
+              setStatus('login-fail')
+              return
+            }
             await svc.refreshProviderKey(userId, dup.id, {
               encryptedKey: res.encrypted,
               expiresAt: res.expiresAt ? new Date(res.expiresAt).toISOString() : null,
@@ -756,6 +789,22 @@ export function AddProviderModal({
           </p>
         )}
       </div>
+      {team ? (
+        <div className="form-group">
+          <label>账号归属</label>
+          <Select
+            value={accountScope}
+            onChange={(v) => setAccountScope(v as 'personal' | 'team')}
+            options={[
+              { value: 'personal', label: '个人账号（使用个人额度）' },
+              { value: 'team', label: '团队账号（共享给团队，使用团队额度）' }
+            ]}
+          />
+          <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--fg-muted)' }}>
+            团队账号会显示给团队内成员，并进入团队额度调度。
+          </p>
+        </div>
+      ) : null}
       <div className="form-group">
         <label>账号备注</label>
         <input

@@ -12,6 +12,14 @@ export interface AdminTeamSubscription {
   current_period_end: string | null;
 }
 
+export interface AdminTeamQuota {
+  provider_id: string;
+  daily_total: number;
+  used: number;
+  remaining: number;
+  reserved: number;
+}
+
 export interface AdminTeam {
   id: string;
   name: string;
@@ -26,6 +34,7 @@ export interface AdminTeam {
   member_count: number;
   active_member_count: number;
   subscription: AdminTeamSubscription | null;
+  quota: AdminTeamQuota | null;
   month_usage: number;
   total_usage: number;
   key_count: number;
@@ -126,6 +135,17 @@ export async function updateTeamSettings(teamId: string, input: TeamSettingsInpu
   }
 }
 
+export async function resetTeamQuota(teamId: string): Promise<void> {
+  const supabase = createAdminBrowserClient();
+  const { data, error } = await supabase.rpc("admin_reset_team_quota", {
+    p_team_id: teamId
+  });
+  if (error) throw error;
+
+  const raw = (data ?? { ok: false }) as { ok?: boolean };
+  if (!raw.ok) throw new Error("重置团队额度失败");
+}
+
 export function statusLabel(status: TeamStatus | string): string {
   if (status === "banned") return "已封禁";
   if (status === "exhausted") return "额度耗尽";
@@ -166,9 +186,21 @@ function normalizeTeam(it: Record<string, unknown>): AdminTeam {
     member_count: Number(it.member_count ?? 0),
     active_member_count: Number(it.active_member_count ?? 0),
     subscription: normalizeSubscription(it.subscription as Record<string, unknown> | null),
+    quota: normalizeQuota(it.quota as Record<string, unknown> | null),
     month_usage: Number(it.month_usage ?? 0),
     total_usage: Number(it.total_usage ?? 0),
     key_count: Number(it.key_count ?? 0)
+  };
+}
+
+function normalizeQuota(it: Record<string, unknown> | null | undefined): AdminTeamQuota | null {
+  if (!it) return null;
+  return {
+    provider_id: String(it.provider_id ?? ""),
+    daily_total: Number(it.daily_total ?? 0),
+    used: Number(it.used ?? 0),
+    remaining: Number(it.remaining ?? 0),
+    reserved: Number(it.reserved ?? 0)
   };
 }
 

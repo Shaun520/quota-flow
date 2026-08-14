@@ -5,6 +5,7 @@ import type { AdminTeam, AdminTeamMember, TeamStatus } from "@/lib/api/teams";
 import {
   listTeamMembers,
   planLabel,
+  resetTeamQuota,
   statusLabel,
   subscriptionLabel,
   updateTeamSettings
@@ -29,6 +30,8 @@ export function TeamDetailModal({
   const [status, setStatus] = useState<TeamStatus>("active");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [resettingQuota, setResettingQuota] = useState(false);
+  const [resetNotice, setResetNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!team) return;
@@ -37,6 +40,7 @@ export function TeamDetailModal({
     setSeats(String(team.seats_limit || 3));
     setStatus(team.status);
     setSaveError(null);
+    setResetNotice(null);
 
     let cancelled = false;
     setLoadingMembers(true);
@@ -86,6 +90,30 @@ export function TeamDetailModal({
       setSaveError(e instanceof Error ? e.message : "保存失败");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleResetQuota() {
+    if (!currentTeam) return;
+    setResettingQuota(true);
+    setSaveError(null);
+    setResetNotice(null);
+    try {
+      await resetTeamQuota(currentTeam.id);
+      const quota = currentTeam.quota
+        ? { ...currentTeam.quota, used: 0, remaining: currentTeam.quota.daily_total }
+        : currentTeam.quota;
+      const next = {
+        ...currentTeam,
+        quota,
+        status: currentTeam.status === "exhausted" ? "active" : currentTeam.status
+      };
+      onSaved(next);
+      setResetNotice("今日额度已重置");
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "重置额度失败");
+    } finally {
+      setResettingQuota(false);
     }
   }
 
@@ -153,7 +181,21 @@ export function TeamDetailModal({
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">成员 / 席位</label>
-              <div style={{ fontSize: 14, paddingTop: 9 }}>{team.active_member_count}/{team.seats_limit} 可用</div>
+              <div style={{ fontSize: 14, paddingTop: 9 }}>{team.active_member_count}/{team.seats_limit}</div>
+            </div>
+          </div>
+
+          <div className="form-row" style={{ marginBottom: 20 }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">共享额度</label>
+              <div className="cell-mono" style={{ fontSize: 14 }}>
+                {team.quota ? `${Math.round(team.quota.used)}/${Math.round(team.quota.daily_total)}` : "-"}
+              </div>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0, display: "flex", alignItems: "flex-end" }}>
+              <button className="btn btn-secondary btn-sm" disabled={resettingQuota} onClick={() => void handleResetQuota()}>
+                {resettingQuota ? "重置中..." : "重置今日额度"}
+              </button>
             </div>
           </div>
 
@@ -248,6 +290,11 @@ export function TeamDetailModal({
           {saveError ? (
             <div style={{ marginTop: 12, fontSize: 13, color: "var(--color-destructive)" }}>
               {saveError}
+            </div>
+          ) : null}
+          {resetNotice ? (
+            <div style={{ marginTop: 12, fontSize: 13, color: "var(--color-success)" }}>
+              {resetNotice}
             </div>
           ) : null}
         </div>

@@ -9,11 +9,14 @@ import type {
   ProviderKey,
   ProviderMeta,
   ProviderService,
-  QuotaLedgerRow
+  QuotaLedgerRow,
+  ViewScope
 } from '@quota-flow/db-supabase'
 
 export interface BindingView {
   keyId: string
+  teamId: string | null
+  ownerUserId: string
   accountName: string
   authType: string
   health: 'healthy' | 'expiring' | 'expired' | 'unknown'
@@ -154,11 +157,12 @@ export interface ProvidersResult {
   rename: (keyId: string, name: string) => Promise<void>
   setDefault: (providerId: string, keyId: string) => Promise<void>
   setEnabled: (keyId: string, enabled: boolean) => Promise<void>
+  setProviderKeyScope: (keyId: string, teamId: string | null) => Promise<void>
   unbind: (keyId: string) => Promise<void>
 }
 
-export function useProviders(): ProvidersResult {
-  const { user } = useAuth()
+export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
+  const { user, team } = useAuth()
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -195,8 +199,46 @@ export function useProviders(): ProvidersResult {
     if (isFirstLoad) setLoading(true)
     else setRefreshing(true)
     setError(null)
-    Promise.all([svc.listAllProviders(), svc.listProviderKeys(user.id), svc.listLedger(user.id)])
-      .then(([p, k, l]) => {
+    const loadScopedData = async (): Promise<{
+      providers: ProviderMeta[]
+      keys: ProviderKey[]
+      ledgers: QuotaLedgerRow[]
+    }> => {
+      const [p] = await Promise.all([svc.listAllProviders()])
+      if (viewScope === 'personal') {
+        const personalKeys = (await svc.listProviderKeys(user.id)).filter((k) => !k.team_id)
+        const personalLedgers = await svc.listTodayLedger(user.id)
+        return { providers: p, keys: personalKeys, ledgers: personalLedgers }
+      }
+      if (viewScope === 'team') {
+        if (!team) return { providers: p, keys: [], ledgers: [] }
+        const teamKeys = await svc.listTeamProviderKeys(team.id)
+        const teamLedgers = await svc.listTeamTodayLedger(team.id)
+        return { providers: p, keys: teamKeys, ledgers: teamLedgers }
+      }
+      const [personalKeys, teamKeys, personalLedgers, teamLedgers] = await Promise.all([
+        svc.listProviderKeys(user.id).then((all) => all.filter((k) => !k.team_id)),
+        team ? svc.listTeamProviderKeys(team.id) : Promise.resolve<ProviderKey[]>([]),
+        svc.listTodayLedger(user.id),
+        team ? svc.listTeamTodayLedger(team.id) : Promise.resolve<QuotaLedgerRow[]>([])
+      ])
+      const seenKeys = new Set<string>()
+      const keys = [...personalKeys, ...teamKeys].filter((k) => {
+        if (seenKeys.has(k.id)) return false
+        seenKeys.add(k.id)
+        return true
+      })
+      const seenLedgers = new Set<string>()
+      const ledgers = [...personalLedgers, ...teamLedgers].filter((l) => {
+        if (seenLedgers.has(l.id)) return false
+        seenLedgers.add(l.id)
+        return true
+      })
+      return { providers: p, keys, ledgers }
+    }
+
+    loadScopedData()
+      .then(async ({ providers: p, keys: k, ledgers: l }) => {
         if (cancelled) return
         setProviders(p)
         setKeys(k)
@@ -207,27 +249,34 @@ export function useProviders(): ProvidersResult {
         // 对已绑定但缺今日 ledger 行的账号自动初始化额度（按账号，每天 0 点重置）
         const today = todayShanghai()
         const existingTodayKeys = new Set(
-          l.filter((row) => row.date === today && row.account_key_id != null).map((row) => row.account_key_id)
+          l
+            .filter((row) => row.date === today && row.account_key_id != null)
+            .map((row) => `${row.account_key_id}:${row.team_id ?? 'personal'}`)
         )
-        const toInit = k.filter((key) => !existingTodayKeys.has(key.id))
+        const toInit = k.filter((key) => !existingTodayKeys.has(`${key.id}:${key.team_id ?? 'personal'}`))
         if (toInit.length > 0) {
-          const providerMap = new Map(p.map((pr) => [pr.id, pr]))
-          Promise.all(
-            toInit.map((key) => {
-              const meta = providerMap.get(key.provider_id)
-              return svc.getOrInitLedger({
-                userId: user.id,
-                providerId: key.provider_id,
-                unitName: meta?.unit_name ?? '',
-                dailyTotal: Number(meta?.default_daily_quota ?? 0),
-                keyId: key.id
-              })
+          const personalToInit = toInit.filter((key) => !key.team_id)
+          const teamToInit = toInit.filter((key) => key.team_id)
+          const initRows: QuotaLedgerRow[] = []
+          if (personalToInit.length > 0) {
+            const rows = await svc.ensureProviderLedgerRows(user.id, null, personalToInit.map((key) => key.id))
+            initRows.push(...rows)
+          }
+          if (teamToInit.length > 0 && team) {
+            const rows = await svc.ensureProviderLedgerRows(user.id, team.id, teamToInit.map((key) => key.id))
+            initRows.push(...rows)
+          }
+          if (cancelled) return
+          const nextLedgers = new Map<string, QuotaLedgerRow>()
+          for (const row of [...l, ...initRows]) nextLedgers.set(row.id, row)
+          setLedgers(
+            [...nextLedgers.values()].sort((a, b) => {
+              const dateDiff = b.date.localeCompare(a.date)
+              if (dateDiff !== 0) return dateDiff
+              return String(a.account_key_id ?? '').localeCompare(String(b.account_key_id ?? ''))
             })
-          ).then(() => {
-            if (!cancelled) setReloadKey((k) => k + 1)
-          })
+          )
         }
-
       })
       .catch(async (e: unknown) => {
         if (cancelled) return
@@ -253,7 +302,7 @@ export function useProviders(): ProvidersResult {
     return () => {
       cancelled = true
     }
-  }, [user?.id, reloadKey])
+  }, [user?.id, team?.id, viewScope, reloadKey])
 
   // 后台停用/启用 providers.enabled 时，通过 Supabase Realtime 拉取最新厂商列表。
   // 桌面端保留全部 admin 配置的厂商；停用厂商在新增厂商弹窗中置灰不可选。
@@ -322,13 +371,19 @@ export function useProviders(): ProvidersResult {
     const map = new Map<string, BindingView[]>()
     for (const k of keys) {
       const list = map.get(k.provider_id) ?? []
-      // 按账号取今日 ledger 行（listLedger 按日期倒序，首条即今天）
-      const ledger = ledgers.find((l) => l.account_key_id === k.id)
+      // 按账号取今日 ledger 行
+      const ledger = ledgers.find(
+        (l) =>
+          l.account_key_id === k.id &&
+          (k.team_id == null ? l.team_id == null : l.team_id === k.team_id)
+      )
       const dailyTotal = Number(ledger?.daily_total ?? 0)
       const used = Number(ledger?.used ?? 0)
       const defaultTotal = dailyTotal || 0
       list.push({
         keyId: k.id,
+        teamId: k.team_id ?? null,
+        ownerUserId: k.owner_user_id,
         accountName: k.account_name ?? '绑定账号',
         authType: k.auth_type,
         health: (healthOverrides[k.id] ?? k.health_status) as BindingView['health'],
@@ -447,5 +502,40 @@ export function useProviders(): ProvidersResult {
     [user]
   )
 
-  return { loading, refreshing, error, aggs, anyBound, totalBound, reload, testHealth, rename, setDefault, setEnabled, unbind }
+  const setProviderKeyScope = useCallback(
+    async (keyId: string, teamId: string | null) => {
+      const svc = getProviderService()
+      if (!svc || !user) return
+      try {
+        await svc.setProviderKeyScope(keyId, teamId)
+        setKeys((prev) => {
+          const next = prev.map((k) => (k.id === keyId ? { ...k, team_id: teamId } : k))
+          if (viewScope === 'personal') return next.filter((k) => !k.team_id)
+          if (viewScope === 'team') return next.filter((k) => k.team_id === team?.id)
+          return next
+        })
+        // 归属变化会影响账号对应的 ledger 行，直接重拉并补初始化目标作用域的今日额度。
+        reload()
+      } catch (e) {
+        setError(errMsg(e))
+      }
+    },
+    [user, viewScope, team?.id, reload]
+  )
+
+  return {
+    loading,
+    refreshing,
+    error,
+    aggs,
+    anyBound,
+    totalBound,
+    reload,
+    testHealth,
+    rename,
+    setDefault,
+    setEnabled,
+    setProviderKeyScope,
+    unbind
+  }
 }

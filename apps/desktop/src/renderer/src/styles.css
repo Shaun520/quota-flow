@@ -377,17 +377,6 @@ body {
   flex-shrink: 0;
   z-index: 50;
 }
-.user-area .team-badge {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-base);
-  border: 1px solid var(--border-light);
-  font-size: 0.85em;
-  color: var(--fg-secondary);
-}
 .avatar-wrap {
   position: relative;
   z-index: 50;
@@ -1437,6 +1426,7 @@ body {
 
 .provider-table-wrap {
   flex: 1;
+  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-top-color: rgba(255, 255, 255, 0.6);
@@ -1446,6 +1436,11 @@ body {
   flex-direction: column;
   min-height: 0;
   box-shadow: var(--shadow-card);
+}
+.provider-table-wrap .table-refresh-overlay {
+  background: var(--bg-card);
+  color: var(--fg-secondary);
+  pointer-events: auto;
 }
 .provider-table {
   width: 100%;
@@ -1507,6 +1502,7 @@ body {
   padding: 6px 12px 6px 36px;
   border-bottom: 1px solid var(--border-light);
   color: var(--fg-secondary);
+  vertical-align: middle;
 }
 .account-subtable tr:last-child td {
   border-bottom: none;
@@ -1641,6 +1637,7 @@ body {
 /* ===== 历史 Tab：筛选 + 视频预览 + 操作 ===== */
 .history-table-wrap {
   flex: 1;
+  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-top-color: rgba(255, 255, 255, 0.6);
@@ -1650,6 +1647,19 @@ body {
   flex-direction: column;
   min-height: 0;
   box-shadow: var(--shadow-card);
+}
+.table-refresh-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--fg-secondary);
+  font-size: 0.9em;
+  pointer-events: none;
 }
 .history-table {
   width: 100%;
@@ -3053,4 +3063,177 @@ textarea::-webkit-scrollbar {
   background: var(--bg-card);
   color: var(--fg-secondary);
   font-size: 0.84em;
+}
+
+/* ===== 个人/团队/全局模式 ===== */
+.scope-switcher {
+  position: relative;
+  z-index: 70;
+}
+.scope-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--fg-secondary);
+  font-family: var(--font-body);
+  font-size: 0.85em;
+  line-height: 1;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+.scope-trigger:hover,
+.scope-switcher.open .scope-trigger {
+  border-color: var(--accent);
+  color: var(--fg-primary);
+}
+.scope-trigger svg {
+  flex-shrink: 0;
+}
+.scope-trigger .scope-chevron {
+  transition: transform 0.15s ease;
+}
+.scope-switcher.open .scope-trigger .scope-chevron {
+  transform: rotate(180deg);
+}
+.scope-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 168px;
+  max-width: 230px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  padding: 4px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: all 0.2s ease;
+  z-index: 120;
+}
+.scope-switcher.open .scope-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.scope-menu::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  right: 12px;
+  width: 10px;
+  height: 10px;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border-light);
+  border-top: 1px solid var(--border-light);
+  transform: rotate(45deg);
+}
+.scope-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: var(--font-body);
+  font-size: 0.92em;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+.scope-option:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+.scope-option.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+.scope-option:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.scope-option-check {
+  flex-shrink: 0;
+  font-size: 0.9em;
+}
+
+/* ===== 账号归属标签 ===== */
+.account-scope-suffix {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.account-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 220px;
+}
+.account-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.account-name-line strong {
+  color: var(--fg-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.account-name-line .link-btn {
+  flex-shrink: 0;
+}
+.account-badge-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.account-badge-line .link-btn {
+  padding: 0;
+  font-size: 0.78em;
+}
+.account-flag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.account-flag-default {
+  color: var(--accent);
+  border: 1px solid currentColor;
+}
+.account-readonly-note {
+  color: var(--fg-muted);
+  font-size: 0.82em;
+}
+
+.btn-sm.danger {
+  color: var(--error);
+  border-color: rgba(196, 77, 77, 0.4);
 }
