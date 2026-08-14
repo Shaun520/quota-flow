@@ -131,6 +131,16 @@ function encryptCookies(
 export { encryptCookies }
 
 function defaultStorageOrigin(providerId: string): string {
+  const site = providerSite(providerId)
+  const url = site?.loginUrl || site?.healthUrl
+  if (url) {
+    try {
+      const origin = new URL(url).origin
+      if (origin) return origin
+    } catch {
+      // fallthrough to legacy defaults
+    }
+  }
   return providerId === 'qwenwan' ? 'https://www.qianwen.com' : 'https://www.doubao.com'
 }
 
@@ -174,6 +184,13 @@ function exportCookies(cookies: Cookie[]): ProviderCookie[] {
     secure: c.secure ?? false,
     expires: typeof c.expirationDate === 'number' ? c.expirationDate * 1000 : 0
   }))
+}
+
+function hasSessionCookie(providerId: string, cookies: ProviderCookie[]): boolean {
+  const generic = /session|sso|passport|token|uid|sid/i
+  const tencent =
+    providerId === 'yuanbao' ? /^hy_|^(uin|skey|pt4_token|pt2gguin)$/i : null
+  return cookies.some((c) => generic.test(c.name) || (tencent ? tencent.test(c.name) : false))
 }
 
 async function collectPartitionCookies(providerId: string, keyId?: string): Promise<ProviderCookie[]> {
@@ -560,7 +577,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                 done({ ok: false, error: '未检测到登录 Cookie，请确认已登录后重试' })
                 return
               }
-              const hasSession = cookies.some((c) => /session|sso|passport|token|uid|sid/i.test(c.name))
+              const hasSession = hasSessionCookie(providerId, cookies)
               if (!hasSession) {
                 done({ ok: false, error: '未检测到会话 Cookie（可能登录未完成），请重试' })
                 return

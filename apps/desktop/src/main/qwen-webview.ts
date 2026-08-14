@@ -17,6 +17,7 @@ const CHAT_API_URLS = ['*://*.qianwen.com/api/*', '*://qianwen.com/api/*']
 const DETAIL_API_URL = 'https://chat2-api.qianwen.com/api/v1/session/req/detail'
 const BLOCKED_PATTERN = /违[规法]|内容审核|无法生成|版权|侵权|肖像|敏感|检测到.*(风险|违规)|拒绝生成|请勿生成/
 const QWEN_IMAGE_MODES = new Set(['multi_ref', 'first_last', 'first_frame', 'firstlast'])
+const MAX_QWEN_IMAGES = 5
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -1001,9 +1002,11 @@ export async function runQwenGeneration(options: QwenGenerateOptions): Promise<Q
   if (!QWEN_IMAGE_MODES.has(qwenMode)) {
     return failWith('千问当前仅支持多参考/首帧/首尾帧生成（需至少上传一张素材图片）')
   }
-  if (!options.images || options.images.length === 0) {
+  const images = (options.images ?? []).slice(0, MAX_QWEN_IMAGES)
+  if (images.length === 0) {
     return failWith('千问多参考/首帧/首尾帧生成需要至少上传一张素材图片')
   }
+  options.images = images
   options.mode = qwenMode
 
   const partition = options.keyId ? `persist:qf-p:qwenwan:${options.keyId}` : 'persist:qf-p:qwenwan'

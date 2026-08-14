@@ -129,8 +129,6 @@ export interface GenerateRequest {
   ratio?: string
   /** 本地图片路径（图生视频） */
   images?: string[]
-  /** 本地去水印开关，默认 true */
-  watermarkEnabled?: boolean
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }

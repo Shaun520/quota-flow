@@ -24,8 +24,14 @@ import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
 
 const VIP = false
-/** 本轮 auto 仍只走豆包；避免只绑千问时把 auto 展示成可用项 */
+/** 本轮 auto 仍只走豆包；避免只绑千问/元宝时把 auto 展示成可用项 */
 const AUTO_CAPABLE_PROVIDER_IDS = new Set(['doubao'])
+
+function maxImageUploadCount(provider: string): number {
+  if (provider === 'yuanbao') return 10
+  if (provider === 'doubao') return 4
+  return 5
+}
 
 /** 生成阶段 → 用户可见文案 */
 const STAGE_LABEL: Record<string, string> = {
@@ -45,8 +51,7 @@ const STAGE_LABEL: Record<string, string> = {
   'risk-verify': '需要验证，请在弹窗完成…',
   'risk-resolved': '验证完成，继续生成…',
   'account-failed': '当前账号失败，尝试切换…',
-  blocked: '厂商拒绝了本次生成（见左侧错误）',
-  watermark: '本地去水印中…'
+  blocked: '厂商拒绝了本次生成（见左侧错误）'
 }
 
 /** 进入这些阶段说明提示词已发送，不能再终止生成 */
@@ -98,7 +103,6 @@ export default function Dashboard({
   const [resolution, setResolution] = useState('720')
   const [audio, setAudio] = useState('on')
   const [ratio, setRatio] = useState('9:16')
-  const [watermark, setWatermark] = useState(true)
   const [images, setImages] = useState<string[]>([])
   const [imageFiles, setImageFiles] = useState<File[]>([])
   const [prompt, setPrompt] = useState('')
@@ -355,8 +359,7 @@ export default function Dashboard({
         resolution,
         audio,
         ratio,
-        watermarkEnabled: watermark,
-        images: mode === 't2v' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
+        images: mode === 't2v' && provider !== 'yuanbao' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -376,7 +379,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, duration, durations, resolution, audio, ratio, watermark, imageFiles, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, duration, durations, resolution, audio, ratio, imageFiles, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -421,7 +424,7 @@ export default function Dashboard({
 
   const onModeChange = (value: string): void => {
     setMode(value)
-    if (value === 't2v') {
+    if (value === 't2v' && provider !== 'yuanbao') {
       setImages([])
       setImageFiles([])
     }
@@ -444,10 +447,11 @@ export default function Dashboard({
   const onFilesSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
     const urls = files.map((f) => URL.createObjectURL(f))
-    setImages((prev) => [...prev, ...urls].slice(0, 4))
-    setImageFiles((prev) => [...prev, ...files].slice(0, 4))
+    const max = maxImageUploadCount(provider)
+    setImages((prev) => [...prev, ...urls].slice(0, max))
+    setImageFiles((prev) => [...prev, ...files].slice(0, max))
     e.target.value = ''
-  }, [])
+  }, [provider])
 
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
@@ -574,21 +578,6 @@ export default function Dashboard({
                 />
               </div>
             ) : null}
-            <div className="param-field">
-              <label htmlFor="watermark">去水印</label>
-              <label className="switch watermark-switch">
-                <input
-                  id="watermark"
-                  type="checkbox"
-                  checked={watermark}
-                  onChange={(e) => setWatermark(e.target.checked)}
-                />
-                <span className="switch-track">
-                  <span className="switch-thumb" />
-                </span>
-                <span className="switch-label">{watermark ? '开' : '关'}</span>
-              </label>
-            </div>
             {!(viewScope === 'global' && team) ? (
               <div className="param-field">
                 <span className="field-hint">配音 / 比例不影响额度</span>
@@ -596,7 +585,7 @@ export default function Dashboard({
             ) : null}
           </div>
 
-          {mode !== 't2v' && (
+          {(mode !== 't2v' || provider === 'yuanbao') && (
             <div
               className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
               onClick={onPickFiles}
@@ -618,7 +607,7 @@ export default function Dashboard({
                       <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveImage(idx) }}>×</button>
                     </div>
                   ))}
-                  {images.length < 4 && (
+                  {images.length < maxImageUploadCount(provider) && (
                     <div className="thumb-add">+</div>
                   )}
                 </div>
