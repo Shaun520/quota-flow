@@ -49,6 +49,210 @@ export async function getTeamContext(
   return { id: data.team_id as string, role: data.role as TeamRole }
 }
 
+export interface TeamDetail {
+  id: string
+  name: string
+  owner_id: string
+  owner_email: string | null
+  owner_name: string | null
+  owner_status: string | null
+  plan: string
+  seats_limit: number
+  status: string
+  created_at: string
+  member_count: number
+  active_member_count: number
+  subscription: {
+    plan: string | null
+    status: string | null
+    seats: number | null
+    current_period_start: string | null
+    current_period_end: string | null
+  } | null
+  month_usage: number
+  total_usage: number
+  key_count: number
+  current_user_role: TeamRole
+}
+
+export interface TeamMemberView {
+  team_id: string
+  user_id: string
+  email: string | null
+  display_name: string | null
+  status: string | null
+  role: TeamRole
+  daily_quota_limit_equivalent: number | null
+  joined_at: string
+  today_usage: number
+  month_usage: number
+  total_usage: number
+}
+
+export interface TeamInvitation {
+  id: string
+  team_id: string
+  email: string | null
+  role: TeamRole | string
+  token: string
+  expires_at: string
+  created_at: string
+}
+
+export interface CreateTeamInviteOptions {
+  email?: string | null
+  role?: TeamRole | string
+  expiresAt?: string
+}
+
+export class TeamService {
+  constructor(private readonly client: SupabaseClient) {}
+
+  async createTeam(name: string): Promise<TeamContext> {
+    const { data, error } = await this.client.rpc('create_team', { p_name: name })
+    if (error) throw error
+    const raw = data as { ok?: boolean; team?: { id?: string; role?: string } } | null
+    if (!raw?.team?.id) throw new Error('create_team RPC returned no team')
+    return {
+      id: raw.team.id,
+      role: (raw.team.role === 'admin' ? 'admin' : 'member') as TeamRole
+    }
+  }
+
+  async joinTeam(token: string): Promise<TeamContext> {
+    const { data, error } = await this.client.rpc('join_team_by_invite', { p_token: token })
+    if (error) throw error
+    const raw = data as { ok?: boolean; team?: { id?: string; role?: string } } | null
+    if (!raw?.team?.id) throw new Error('join_team_by_invite RPC returned no team')
+    return {
+      id: raw.team.id,
+      role: (raw.team.role === 'admin' ? 'admin' : 'member') as TeamRole
+    }
+  }
+
+  async getTeamDetail(teamId: string): Promise<TeamDetail | null> {
+    const { data, error } = await this.client.rpc('get_team_detail', { p_team_id: teamId })
+    if (error) throw error
+    const raw = data as { team?: Record<string, unknown> } | null
+    if (!raw?.team) return null
+    return normalizeTeamDetail(raw.team)
+  }
+
+  async listMembers(teamId: string): Promise<TeamMemberView[]> {
+    const { data, error } = await this.client.rpc('get_team_members', { p_team_id: teamId })
+    if (error) throw error
+    const raw = data as { items?: Array<Record<string, unknown>> } | null
+    return (raw?.items ?? []).map((it) => normalizeTeamMember(it))
+  }
+
+  async createInvite(teamId: string, opts: CreateTeamInviteOptions = {}): Promise<TeamInvitation> {
+    const { data, error } = await this.client.rpc('create_team_invite', {
+      p_team_id: teamId,
+      p_email: opts.email ?? null,
+      p_role: opts.role ?? 'member',
+      p_expires_at: opts.expiresAt ?? null
+    })
+    if (error) throw error
+    const raw = data as { invite?: Record<string, unknown> } | null
+    if (!raw?.invite) throw new Error('create_team_invite RPC returned no invite')
+    return normalizeInvitation(raw.invite)
+  }
+
+  async listInvitations(teamId: string): Promise<TeamInvitation[]> {
+    const { data, error } = await this.client
+      .from('team_invitations')
+      .select('id, team_id, email, role, token, expires_at, created_at')
+      .eq('team_id', teamId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return (data ?? []).map((it) => normalizeInvitation(it as Record<string, unknown>))
+  }
+
+  async removeMember(teamId: string, targetUserId: string): Promise<boolean> {
+    const { error, count } = await this.client
+      .from('team_members')
+      .delete({ count: 'exact' })
+      .eq('team_id', teamId)
+      .eq('user_id', targetUserId)
+    if (error) throw error
+    return (count ?? 0) > 0
+  }
+
+  async updateMemberLimit(teamId: string, targetUserId: string, limit: number | null): Promise<void> {
+    const { error } = await this.client
+      .from('team_members')
+      .update({ daily_quota_limit_equivalent: limit })
+      .eq('team_id', teamId)
+      .eq('user_id', targetUserId)
+    if (error) throw error
+  }
+}
+
+function normalizeTeamDetail(it: Record<string, unknown>): TeamDetail {
+  return {
+    id: String(it.id ?? ''),
+    name: String(it.name ?? ''),
+    owner_id: String(it.owner_id ?? ''),
+    owner_email: (it.owner_email as string | null) ?? null,
+    owner_name: (it.owner_name as string | null) ?? null,
+    owner_status: (it.owner_status as string | null) ?? null,
+    plan: String(it.plan ?? ''),
+    seats_limit: Number(it.seats_limit ?? 0),
+    status: String(it.status ?? ''),
+    created_at: String(it.created_at ?? ''),
+    member_count: Number(it.member_count ?? 0),
+    active_member_count: Number(it.active_member_count ?? 0),
+    subscription: normalizeSubscription(it.subscription as Record<string, unknown> | null),
+    month_usage: Number(it.month_usage ?? 0),
+    total_usage: Number(it.total_usage ?? 0),
+    key_count: Number(it.key_count ?? 0),
+    current_user_role: (it.current_user_role === 'admin' ? 'admin' : 'member') as TeamRole
+  }
+}
+
+function normalizeSubscription(
+  it: Record<string, unknown> | null | undefined
+): TeamDetail['subscription'] {
+  if (!it) return null
+  return {
+    plan: (it.plan as string | null) ?? null,
+    status: (it.status as string | null) ?? null,
+    seats: it.seats == null ? null : Number(it.seats),
+    current_period_start: (it.current_period_start as string | null) ?? null,
+    current_period_end: (it.current_period_end as string | null) ?? null
+  }
+}
+
+function normalizeTeamMember(it: Record<string, unknown>): TeamMemberView {
+  return {
+    team_id: String(it.team_id ?? ''),
+    user_id: String(it.user_id ?? ''),
+    email: (it.email as string | null) ?? null,
+    display_name: (it.display_name as string | null) ?? null,
+    status: (it.status as string | null) ?? null,
+    role: (it.role === 'admin' ? 'admin' : 'member') as TeamRole,
+    daily_quota_limit_equivalent: it.daily_quota_limit_equivalent == null
+      ? null
+      : Number(it.daily_quota_limit_equivalent),
+    joined_at: String(it.joined_at ?? ''),
+    today_usage: Number(it.today_usage ?? 0),
+    month_usage: Number(it.month_usage ?? 0),
+    total_usage: Number(it.total_usage ?? 0)
+  }
+}
+
+function normalizeInvitation(it: Record<string, unknown>): TeamInvitation {
+  return {
+    id: String(it.id ?? ''),
+    team_id: String(it.team_id ?? ''),
+    email: (it.email as string | null) ?? null,
+    role: String(it.role ?? 'member'),
+    token: String(it.token ?? ''),
+    expires_at: String(it.expires_at ?? ''),
+    created_at: String(it.created_at ?? '')
+  }
+}
+
 /* ================= 数据一致性：错误码 + Quota Operation ================= */
 
 export type LedgerErrorCode =

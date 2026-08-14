@@ -85,6 +85,7 @@ interface MainAppProps {
   updater: UpdaterStatusView
   onOpenModal: (m: 'profile' | 'settings') => void
   onSignOut: () => Promise<void>
+  onRefreshTeam: () => Promise<void>
 }
 
 function MainApp({
@@ -92,7 +93,8 @@ function MainApp({
   team,
   updater,
   onOpenModal,
-  onSignOut
+  onSignOut,
+  onRefreshTeam
 }: MainAppProps) {
   // 厂商 / 任务数据提升到 MainApp 层：随 user 挂载/卸载，账号切换时整棵数据树重建，避免残留上一账号数据
   const providers = useProviders()
@@ -125,7 +127,7 @@ function MainApp({
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
-    return (['dispatch', 'providers', 'history'] as TabId[]).includes(t as TabId)
+    return (['dispatch', 'providers', 'history', 'team'] as TabId[]).includes(t as TabId)
       ? (t as TabId)
       : 'dispatch'
   })
@@ -218,10 +220,6 @@ function MainApp({
               key={t.id}
               className={'nav-tab' + (tab === t.id ? ' active' : '')}
               onClick={() => {
-                if (t.id === 'team') {
-                  showToast('系统暂未实现')
-                  return
-                }
                 setTab(t.id)
                 location.hash = 'tab=' + t.id
               }}
@@ -295,7 +293,12 @@ function MainApp({
             <History jobs={jobs} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'team' ? 'flex' : 'none' }}>
-            <Team fresh={fresh} />
+            <Team
+              fresh={fresh}
+              userId={user.id}
+              team={team}
+              onTeamChanged={onRefreshTeam}
+            />
           </div>
         </div>
       </main>
@@ -439,7 +442,7 @@ function ConfigWarning() {
 }
 
 export default function App() {
-  const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile } =
+  const { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile, refreshTeam } =
     useAuth()
   const modalApiRef = useRef<{ open: (m: ModalKind) => void } | null>(null)
   const [updater, setUpdater] = useState<UpdaterStatusView>({ state: 'idle' })
@@ -512,6 +515,7 @@ export default function App() {
         updater={updater}
         onOpenModal={openModal}
         onSignOut={signOut}
+        onRefreshTeam={refreshTeam}
       />
       <AppModals
         modalApiRef={modalApiRef}
