@@ -55,13 +55,15 @@ export function getInitialFontSize(): FontSize {
   return '13'
 }
 
-/** 调试开关：生成时是否显示豆包 WebView 窗口（默认隐藏，本地缓存） */
+const IS_DEV = import.meta.env.DEV
+
+/** 调试开关：仅开发模式可设置，生成时是否显示厂商 WebView 窗口（默认隐藏，本地缓存） */
 export function applyShowWebview(show: boolean): void {
   localStorage.setItem('qf-show-webview', show ? '1' : '0')
 }
 
 export function getInitialShowWebview(): boolean {
-  return localStorage.getItem('qf-show-webview') === '1'
+  return IS_DEV && localStorage.getItem('qf-show-webview') === '1'
 }
 
 export function getInitialHealthFreq(): HealthFreq {
@@ -263,17 +265,19 @@ export function SettingsModal({ onClose, updater }: { onClose: () => void; updat
           ]}
         />
       </div>
-      <div className="form-group">
-        <label>调试：显示厂商窗口</label>
-        <Select
-          value={showWebview ? '1' : '0'}
-          onChange={(v) => handleShowWebviewChange(v === '1')}
-          options={[
-            { value: '0', label: '隐藏（默认）' },
-            { value: '1', label: '显示（测试用）' }
-          ]}
-        />
-      </div>
+      {IS_DEV && (
+        <div className="form-group">
+          <label>调试：显示厂商窗口</label>
+          <Select
+            value={showWebview ? '1' : '0'}
+            onChange={(v) => handleShowWebviewChange(v === '1')}
+            options={[
+              { value: '0', label: '隐藏（默认）' },
+              { value: '1', label: '显示（测试用）' }
+            ]}
+          />
+        </div>
+      )}
       <div className="form-group">
         <label>调度策略</label>
         <Select
@@ -474,6 +478,13 @@ function firstEnabledProvider(providers: ProviderOption[]): ProviderOption | und
   return providers.find((p) => p.enabled !== false)
 }
 
+/** 千问/元宝这类 cookie 型厂商，已有账号存在时避免重复绑定，优先自动刷新或保存新指纹明确的账号。 */
+const AUTO_RESOLVE_EXISTING_PROVIDER_IDS = new Set(['qwenwan', 'yuanbao'])
+
+function shouldAutoResolveExistingProvider(providerId: string): boolean {
+  return AUTO_RESOLVE_EXISTING_PROVIDER_IDS.has(providerId)
+}
+
 function ProviderSelect({
   providers,
   value,
@@ -590,7 +601,7 @@ export function AddProviderModal({
   const [notice, setNotice] = useState<string | null>(null)
   const [cookieCount, setCookieCount] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [existingKeys, setExistingKeys] = useState<Array<{ id: string; accountName: string }>>([])
+  const [existingKeys, setExistingKeys] = useState<Array<{ id: string; accountName: string; accountFingerprint: string | null }>>([])
   const [refreshTarget, setRefreshTarget] = useState<string>('new')
   const [pendingLogin, setPendingLogin] = useState<{
     encrypted: string
@@ -781,7 +792,7 @@ export function AddProviderModal({
         cookieCount: res.cookieCount ?? 0
       })
       const svc = getProviderService()
-      let existing: Array<{ id: string; accountName: string }> = []
+      let existing: Array<{ id: string; accountName: string; accountFingerprint: string | null }> = []
       if (svc) {
         try {
           const keys = accountScope === 'team' && team
@@ -790,12 +801,16 @@ export function AddProviderModal({
           existing = keys
             .filter((k) => k.provider_id === selected.providerId)
             .filter((k) => accountScope !== 'team' || k.owner_user_id === userId)
-            .map((k) => ({ id: k.id, accountName: k.account_name ?? '未命名账号' }))
+            .map((k) => ({
+              id: k.id,
+              accountName: k.account_name ?? '未命名账号',
+              accountFingerprint: k.account_fingerprint ?? null
+            }))
         } catch {}
       }
 
       const refreshExisting = async (
-        target: { id: string; accountName: string },
+        target: { id: string; accountName: string; accountFingerprint?: string | null },
         fingerprint?: string | null
       ): Promise<boolean> => {
         if (!svc) return false
@@ -820,7 +835,7 @@ export function AddProviderModal({
       }
 
       // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；
-      // 指纹能识别且无重复 → 暂存待「完成」时保存；千问已有账号无匹配时按已有账号刷新。
+      // 指纹能识别且无重复 → 暂存待「完成」时保存；仅当已有旧账号没有指纹时自动刷新，避免重复绑定旧数据。
       if (res.accountFingerprint && svc) {
         try {
           const scopeKeys = accountScope === 'team' && team
@@ -847,14 +862,15 @@ export function AddProviderModal({
             }
           }
         } catch {}
-        // 千问旧账号可能没有指纹，登录成功但没匹配到时不再新增重复绑定：
-        // 先按已有账号刷新，并在刷新时补写本次指纹。
-        if (selected.providerId === 'qwenwan' && existing.length > 0) {
+        const hasLegacyExisting =
+          shouldAutoResolveExistingProvider(selected.providerId) &&
+          existing.some((k) => !k.accountFingerprint)
+        if (hasLegacyExisting && existing.length > 0) {
           if (await refreshExisting(existing[0], res.accountFingerprint)) {
             setStatus('login-ok')
             return
           }
-          setError('刷新已有千问账号失败，请重试')
+          setError('刷新已有账号失败，请重试')
           setStatus('login-fail')
           return
         }
@@ -863,14 +879,14 @@ export function AddProviderModal({
         return
       }
 
-      // 千问指纹缺失或旧账号没有指纹时，不再弹「新增/刷新」选择：
+      // 千问/元宝指纹缺失时，不再弹「新增/刷新」选择：
       // 已有账号直接刷新，避免同一账号重复绑定。
-      if (selected.providerId === 'qwenwan' && existing.length > 0) {
+      if (shouldAutoResolveExistingProvider(selected.providerId) && existing.length > 0) {
         if (await refreshExisting(existing[0], res.accountFingerprint)) {
           setStatus('login-ok')
           return
         }
-        setError('刷新已有千问账号失败，请重试')
+        setError('刷新已有账号失败，请重试')
         setStatus('login-fail')
         return
       }

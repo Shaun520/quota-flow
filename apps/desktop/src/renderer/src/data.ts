@@ -78,7 +78,7 @@ export const PROVIDERS: Provider[] = [
     stateLabel: '将过期',
     fill: 80,
     accounts: 1,
-    models: ['混元（固定）'],
+    models: ['混元'],
     accountsDetail: [{ name: '账号 1（默认）', quota: '4 / 5 个', health: 'expiring' }]
   },
   {

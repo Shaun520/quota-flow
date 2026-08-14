@@ -12,7 +12,7 @@ import type { ProviderCookie, OriginStorage } from './webview-engine'
 import { parseStoredCredentials as parseProviderCredentials } from './providers'
 import { runQwenGeneration } from './qwen-webview'
 import type { QwenGenerateResult } from './qwen-webview'
-import { processWatermarkJob } from './watermark-remover/job'
+import { runYuanbaoGeneration } from './yuanbao-webview'
 
 export interface GenerateInput {
   supabaseUrl: string
@@ -29,8 +29,6 @@ export interface GenerateInput {
   resolution?: string
   audio?: string
   ratio?: string
-  /** 本地去水印开关，默认开启 */
-  watermarkEnabled?: boolean
   /** 本地图片路径（图生视频，仅允许常见图片格式） */
   images?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
@@ -68,7 +66,9 @@ function normalizeJobMode(mode?: string): string {
 }
 
 function providerLabel(providerId: string): string {
-  return providerId === 'qwenwan' ? '千问（通义万相）' : '豆包'
+  if (providerId === 'qwenwan') return '千问（通义万相）'
+  if (providerId === 'yuanbao') return '元宝混元'
+  return '豆包'
 }
 
 function parseSupportedDurations(meta: { capabilities?: Record<string, unknown> | null } | undefined): number[] {
@@ -85,6 +85,9 @@ function providerCost(providerId: string, durationSec: number, resolution?: stri
   if (providerId === 'qwenwan') {
     const amount = 1 + durationPoint + (resolution === '1080' ? 1 : 0)
     return { amount, unitName: '额度' }
+  }
+  if (providerId === 'yuanbao') {
+    return { amount: 1, unitName: '个' }
   }
   return { amount: 1 + durationPoint, unitName: '点' }
 }
@@ -118,7 +121,12 @@ function downloadVideo(url: string, jobId: string, providerId = 'doubao', redire
         headers: {
           'User-Agent': UA,
           Accept: '*/*',
-          Referer: providerId === 'qwenwan' ? 'https://www.qianwen.com/' : 'https://www.doubao.com/'
+          Referer:
+            providerId === 'qwenwan'
+              ? 'https://www.qianwen.com/'
+              : providerId === 'yuanbao'
+                ? 'https://yuanbao.tencent.com/'
+                : 'https://www.doubao.com/'
         }
       },
       (res) => {
@@ -182,6 +190,9 @@ export async function runGenerate(
   const providerSvc = new ProviderService(client)
 
   const resolvedProviderId = resolveDispatchProvider(input.providerId)
+  // 元宝当前没有独立视频生成入口，生成完全靠 chat 输入框提示词完成；
+  // 这里在进入任务前补前缀，保证任务记录与页面实际发送的 prompt 一致。
+  const dispatchPrompt = resolvedProviderId === 'yuanbao' ? `视频生成：${input.prompt}` : input.prompt
   try {
     const providers = await providerSvc.listAllProviders()
     const meta = providers.find((p) => p.id === resolvedProviderId)
@@ -200,7 +211,7 @@ export async function runGenerate(
     job = await jobSvc.insertJob(input.userId, {
       teamId: input.teamId,
       mode: normalizeJobMode(input.mode),
-      prompt: input.prompt,
+      prompt: dispatchPrompt,
       status: 'pending',
       providerId: input.providerId
     })
@@ -217,7 +228,7 @@ export async function runGenerate(
   const costUnit = costInfo.unitName
   const images = (input.images ?? [])
     .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
-    .slice(0, 10)
+    .slice(0, resolvedProviderId === 'doubao' ? 4 : resolvedProviderId === 'yuanbao' ? 10 : 5)
   // 生成参数 + 上传图片副本：随任务持久化，历史详情可回显「提示词/参数/图片」
   const jobImages: string[] = []
   if (images.length > 0) {
@@ -240,8 +251,7 @@ export async function runGenerate(
     durationSec: input.durationSec,
     ratio: input.ratio,
     audio: input.audio,
-    resolution: input.resolution,
-    watermarkEnabled: input.watermarkEnabled !== false
+    resolution: input.resolution
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
   const keys = input.teamId
@@ -250,7 +260,11 @@ export async function runGenerate(
   const providerKeys = keys.filter((k) => k.provider_id === resolvedProviderId && k.enabled !== false)
 
   let selectedKey: { id: string; accountName: string | null } | null = null
-  let result: Awaited<ReturnType<typeof runDoubaoGeneration>> | Awaited<ReturnType<typeof runQwenGeneration>> | null = null
+  let result:
+    | Awaited<ReturnType<typeof runDoubaoGeneration>>
+    | Awaited<ReturnType<typeof runQwenGeneration>>
+    | Awaited<ReturnType<typeof runYuanbaoGeneration>>
+    | null = null
   let lastError = ''
 
   if (providerKeys.length === 0) {
@@ -327,7 +341,7 @@ export async function runGenerate(
         if (runCancelState.aborted) {
           result = {
             ok: false,
-            providerId: resolvedProviderId as 'doubao' | 'qwenwan',
+            providerId: resolvedProviderId as 'doubao' | 'qwenwan' | 'yuanbao',
             cancelled: true,
             error: '已手动终止生成（提示词未发送）',
             attempts: []
@@ -338,7 +352,7 @@ export async function runGenerate(
           result = await runQwenGeneration({
             cookies: c,
             storages,
-            prompt: input.prompt,
+            prompt: dispatchPrompt,
             model: input.model,
             mode: input.mode,
             durationSec: input.durationSec,
@@ -352,12 +366,24 @@ export async function runGenerate(
             onProgress: (stage, detail) =>
               emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
           })
+        } else if (resolvedProviderId === 'yuanbao') {
+          result = await runYuanbaoGeneration({
+            cookies: c,
+            storages,
+            prompt: dispatchPrompt,
+            images,
+            keyId: cand.id,
+            cancel: runCancelState,
+            showWebview: input.showWebview,
+            onProgress: (stage, detail) =>
+              emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
+          })
         } else {
           result = await runDoubaoGeneration({
             cookies: c,
             localStorage: s,
             storages,
-            prompt: input.prompt,
+            prompt: dispatchPrompt,
             durationSec: input.durationSec,
             mode: input.mode,
             resolution: input.resolution,
@@ -490,8 +516,8 @@ export async function runGenerate(
         localPath: localPath || null,
         cleanLocalPath: null,
         originalLocalPath: localPath || null,
-        watermarkStatus: localPath && input.watermarkEnabled !== false ? 'processing' : 'none',
-        watermarkMethod: localPath && input.watermarkEnabled !== false ? 'delogo' : null,
+        watermarkStatus: 'none',
+        watermarkMethod: null,
         watermarkError: null,
         posterUrl: result.posterUrl ?? null,
         accountId: selectedKey?.id ?? null,
@@ -517,8 +543,8 @@ export async function runGenerate(
       localPath: localPath || null,
       cleanLocalPath: null,
       originalLocalPath: localPath || null,
-      watermarkStatus: localPath && input.watermarkEnabled !== false ? 'processing' : 'none',
-      watermarkMethod: localPath && input.watermarkEnabled !== false ? 'delogo' : null,
+      watermarkStatus: 'none',
+      watermarkMethod: null,
       watermarkError: null,
       posterUrl: result.posterUrl ?? null,
       accountId: selectedKey?.id ?? null,
@@ -532,37 +558,6 @@ export async function runGenerate(
     message: '生成成功',
     data: { resultUrl, cost, localPath, accountId: selectedKey?.id ?? null }
   })
-
-  if (localPath && input.watermarkEnabled !== false) {
-    emit({
-      jobId: job.id,
-      status: 'running',
-      stage: 'watermark',
-      message: '本地去水印中…'
-    })
-    const wmResult = await processWatermarkJob({
-      supabaseUrl: input.supabaseUrl,
-      supabaseAnonKey: input.supabaseAnonKey,
-      accessToken: input.accessToken,
-      refreshToken: input.refreshToken,
-      userId: input.userId,
-      jobId: job.id,
-      onProgress: (progress) =>
-        emit({
-          jobId: job.id,
-          status: 'running',
-          stage: 'watermark',
-          message: progress.message ?? '本地去水印中…',
-          data: progress
-        })
-    })
-    emit({
-      jobId: job.id,
-      status: 'success',
-      stage: 'watermark',
-      message: wmResult.ok ? '去水印完成' : (wmResult.error || '去水印失败')
-    })
-  }
 
   return { ok: true, jobId: job.id }
 }
