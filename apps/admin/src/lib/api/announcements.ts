@@ -1,4 +1,5 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
+import { insertAuditLog } from "@/lib/utils/audit";
 
 export type AnnouncementKind = "notice" | "update";
 export type AnnouncementKindFilter = "" | AnnouncementKind;
@@ -71,10 +72,9 @@ export async function createAnnouncement(input: AnnouncementInput): Promise<Admi
     .single();
   if (error) throw error;
 
-  await insertAuditLog("announcement.create", data.id, {
-    title: data.title,
-    kind: data.kind,
-    published: data.published
+  await insertAuditLog("announcement.create", {
+    target: data.id,
+    metadata: { title: data.title, kind: data.kind, published: data.published }
   });
   return data as AdminAnnouncement;
 }
@@ -96,10 +96,9 @@ export async function updateAnnouncement(id: string, input: AnnouncementInput): 
     .single();
   if (error) throw error;
 
-  await insertAuditLog("announcement.update", id, {
-    title: data.title,
-    kind: data.kind,
-    published: data.published
+  await insertAuditLog("announcement.update", {
+    target: id,
+    metadata: { title: data.title, kind: data.kind, published: data.published }
   });
   return data as AdminAnnouncement;
 }
@@ -116,7 +115,7 @@ export async function deleteAnnouncement(id: string, title: string): Promise<voi
     .eq("id", id);
   if (error) throw error;
 
-  await insertAuditLog("announcement.delete", id, { title });
+  await insertAuditLog("announcement.delete", { target: id, metadata: { title } });
 }
 
 export async function toggleAnnouncementPublished(id: string, published: boolean, title: string): Promise<void> {
@@ -131,7 +130,10 @@ export async function toggleAnnouncementPublished(id: string, published: boolean
     .eq("id", id);
   if (error) throw error;
 
-  await insertAuditLog(published ? "announcement.publish" : "announcement.unpublish", id, { title });
+  await insertAuditLog(published ? "announcement.publish" : "announcement.unpublish", {
+    target: id,
+    metadata: { title }
+  });
 }
 
 export function kindLabel(kind: AnnouncementKind): string {
@@ -142,18 +144,3 @@ export function publishedLabel(published: boolean): string {
   return published ? "已发布" : "草稿";
 }
 
-async function insertAuditLog(action: string, target: string, metadata: Record<string, unknown>): Promise<void> {
-  try {
-    const supabase = createAdminBrowserClient();
-    const { data: authData } = await supabase.auth.getUser();
-    if (!authData.user?.id) return;
-    await supabase.from("audit_logs").insert({
-      admin_user_id: authData.user.id,
-      action,
-      target,
-      metadata
-    });
-  } catch {
-    // 审计失败不阻断主操作，避免公告管理被日志写入影响。
-  }
-}

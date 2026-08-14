@@ -1,0 +1,208 @@
+# 后台「审计日志」实现总结
+
+> 完成日期：2026-08-14
+> 实现范围：apps/admin 审计日志页（从静态原型替换为真实数据驱动）+ 统一审计写入入口
+> 关联设计：[admin-system-plan.md](./admin-system-plan.md)、REQUIREMENTS.md §13.4.5
+
+---
+
+## 1. 背景
+
+`apps/admin` 审计日志页此前为纯静态原型：仅渲染 `PrototypePage` 注入的 `docs/prototype/admin.html` 片段，筛选器、表格、分页、导出均为假数据。
+
+同时，审计日志写入逻辑散落在多个模块：
+
+- `apps/admin/src/lib/api/teams.ts` 内联 `insert`
+- `apps/admin/src/lib/api/users.ts` 内联 `insert`
+- `apps/admin/src/lib/api/announcements.ts` 私有 `insertAuditLog`
+- `apps/admin/src/components/provider-manager.tsx` 另一份私有 `insertAuditLog`（返回错误串）
+- `migrations/0014_team_quota_rpc.sql` 服务端 RPC 内写
+
+存在以下问题：
+
+1. 缺少列表 RPC，页面无法接入真实数据。
+2. 写入逻辑重复 3 份，签名不一致。
+3. action 命名不统一：`team.update` / `user.ban` vs `provider.toggle_enabled`。
+4. target 语义混乱：`teams.ts` 存 `teamId`，`provider-manager.tsx` 存 `providers:${id}`。
+5. 客户端直接 insert 时 `admin_user_id` 取自 `auth.getUser()`，存在管理员伪造操作人风险。
+
+本次改造：新增数据库 RPC、统一写入工具、API 层、页面组件，并重构所有现有写入点。
+
+---
+
+## 2. 改动总览
+
+| 文件 | 改动类型 | 说明 |
+|------|---------|------|
+| `migrations/0018_audit_rpc.sql` | 新增 | `admin_list_audit_logs` + `admin_write_audit_log` RPC + 索引 |
+| `apps/admin/src/lib/utils/audit.ts` | 新增 | 统一审计写入入口 `insertAuditLog` |
+| `apps/admin/src/lib/api/audit.ts` | 新增 | 列表查询、类型、action 中文标签、分组白名单、CSV 导出 |
+| `apps/admin/src/components/audit/audit-filters.tsx` | 新增 | 操作类型/时间范围/搜索筛选 |
+| `apps/admin/src/components/audit/audit-table.tsx` | 新增 | 审计日志表格 |
+| `apps/admin/src/app/(dashboard)/audit/page.tsx` | 重写 | 由静态原型改为真实数据驱动页面 |
+| `apps/admin/src/lib/api/users.ts` | 重构 | 封禁/解封改为统一 `insertAuditLog` |
+| `apps/admin/src/lib/api/teams.ts` | 重构 | 团队更新改为统一 `insertAuditLog` |
+| `apps/admin/src/lib/api/announcements.ts` | 重构 | 公告操作改为统一 `insertAuditLog` |
+| `apps/admin/src/components/provider-manager.tsx` | 重构 | Provider CRUD/启停改为统一 `insertAuditLog`，target 规范为纯 id |
+
+---
+
+## 3. 数据库改动
+
+### 3.1 `admin_list_audit_logs`
+
+```sql
+CREATE OR REPLACE FUNCTION public.admin_list_audit_logs(
+  p_action TEXT DEFAULT NULL,        -- action 前缀匹配，如 'user.' / 'provider.'
+  p_team_id UUID DEFAULT NULL,
+  p_user_id UUID DEFAULT NULL,
+  p_from TIMESTAMPTZ DEFAULT NULL,
+  p_to TIMESTAMPTZ DEFAULT NULL,
+  p_search TEXT DEFAULT NULL,        -- 模糊匹配 target / metadata::text
+  p_limit INTEGER DEFAULT 20,
+  p_offset INTEGER DEFAULT 0
+)
+RETURNS json   -- { total, items: [...] }
+```
+
+关键点：
+
+- **安全**：`SECURITY DEFINER SET search_path = public, auth`，首行 `IF NOT public.is_admin() THEN RAISE EXCEPTION` 兜底。
+- **可读字段**：item 中 `LEFT JOIN profiles`（操作人 + 目标用户）、`LEFT JOIN teams`（团队名），前端无需二次拼装。
+- **筛选**：`p_action` 用 `LIKE p_action || '%'`，支持按资源类别（如 `team`）或具体 action（如 `team.update`）过滤。
+- **搜索**：`target` + `metadata::text` 双字段 ILIKE 模糊匹配；配合 GIN 索引优化 JSONB 搜索。
+- **排序**：`ORDER BY al.created_at DESC, al.id DESC`，保证分页稳定。
+
+### 3.2 `admin_write_audit_log`
+
+```sql
+CREATE OR REPLACE FUNCTION public.admin_write_audit_log(
+  p_action TEXT,
+  p_team_id UUID DEFAULT NULL,
+  p_user_id UUID DEFAULT NULL,
+  p_target TEXT DEFAULT NULL,
+  p_metadata JSONB DEFAULT '{}'::jsonb
+)
+RETURNS json   -- { ok: true }
+```
+
+关键点：
+
+- **强制操作人**：`v_admin_id UUID := auth.uid()`，由服务端会话决定，无法通过客户端参数伪造。
+- **权限校验**：同样通过 `public.is_admin()` 守卫。
+- **幂等可重试**：函数内部只做单次 `INSERT`，失败由调用方静默处理。
+
+### 3.3 索引优化
+
+- `idx_audit_logs_action_created`：`action + created_at DESC`，加速按操作类型过滤。
+- `idx_audit_logs_metadata_gin`：`metadata` GIN 索引，加速 metadata 关键字搜索。
+- `idx_audit_logs_target`：`target` 文本模式索引，加速对象 ID 搜索。
+
+### 3.4 依赖的前置迁移
+
+审计日志功能依赖以下对象，需先执行：
+
+- `migrations/0007_admin_tables.sql`：`audit_logs` 表、`profiles`、`is_admin()`、相关 RLS 策略。
+- `migrations/0014_team_quota_rpc.sql`：`admin_reset_team_quota` 已在 RPC 内写入 `quota.reset` 审计记录。
+
+---
+
+## 4. 前端改动
+
+### 4.1 统一写入工具（lib/utils/audit.ts）
+
+```ts
+export async function insertAuditLog(action: string, input: AuditLogInput = {}): Promise<void>
+```
+
+- 所有业务模块统一调用此函数。
+- 内部调用 `admin_write_audit_log` RPC。
+- 失败时 `console.warn` 并静默吞掉异常，不阻断主操作。
+
+### 4.2 数据访问层（lib/api/audit.ts）
+
+- `listAuditLogs(params)` → 调 `admin_list_audit_logs` RPC，返回 `{ total, items }`。
+- `actionLabel(action)` → action 到中文标签映射。
+- `AUDIT_ACTION_GROUPS` → 按资源类型分组的 action 白名单（团队/用户/Provider/公告/额度），供筛选下拉使用。
+- `metadataSummary(metadata)` → 提取前 3 个非内部字段作为表格详情摘要。
+- `toCsv` / `downloadCsv` → 客户端导出 CSV（带 BOM，兼容 Excel）。
+
+### 4.3 筛选器（components/audit/audit-filters.tsx）
+
+- **操作类型**：`<select>` + `<optgroup>`，既可选大类（如 `team`），也可选具体 action（如 `team.update`）。
+- **时间范围**：近 24 小时 / 近 7 天 / 近 30 天 / 全部。
+- **搜索框**：模糊匹配 `target` 与 `metadata`。
+
+### 4.4 表格（components/audit/audit-table.tsx）
+
+列：时间 / 操作（badge 中文标签）/ 操作人 / 团队 / 用户 / 对象 / 详情摘要。
+
+操作 badge 按 action 前缀着色：
+
+- 封禁/删除类 → `danger`
+- 解封类 → `success`
+- 额度类 → `warning`
+- Provider 类 → `info`
+- 其他 → `muted`
+
+### 4.5 页面（app/(dashboard)/audit/page.tsx）
+
+- 客户端组件，参考 `users/page.tsx` 模式。
+- 搜索 300ms 防抖；操作类型/时间范围变化重置到第 1 页。
+- 分页复用 `components/users/pagination.tsx`。
+- 导出 CSV 时以当前筛选条件拉取全部数据（上限 5000 条）。
+- toast 提示自动 3 秒消失。
+
+---
+
+## 5. 关键设计决策
+
+| 决策点 | 结论 |
+|--------|------|
+| 操作类型筛选 | 按资源类别分组下拉（团队/用户/Provider/公告/额度），而非平铺所有中文标签，便于归类 |
+| target 规范 | 统一只存对象 id（如 `teamId`、`providerId`、`announcementId`），类型信息放进 action 与 metadata |
+| action 命名 | 统一为 `<resource>.<verb>`，例如 `provider.toggle_enabled` 保留，新增 `team.ban`/`team.unban` 占位 |
+| 写入安全 | 审计写入全部下沉为 `admin_write_audit_log` SECURITY DEFINER RPC，`admin_user_id` 强制取自 `auth.uid()` |
+| 失败策略 | 审计日志写入失败静默忽略，不阻断主业务操作 |
+| 原型样式 | 复用 `globals.css` 中已有 `filter-bar` / `table` / `badge-*` / `pagination` / `toast-*` 类，与其他页面视觉统一 |
+
+---
+
+## 6. 部署与验证
+
+### 部署步骤
+
+1. 确认 `migrations/0007_admin_tables.sql` 已执行（`audit_logs` 表与 RLS）。
+2. 执行 `migrations/0018_audit_rpc.sql`（SQL Editor 或迁移 runner）。
+3. `pnpm dev` 启动 admin 应用，登录管理员账号后进入「审计日志」。
+
+### 验证点
+
+| 项 | 预期 |
+|----|------|
+| 列表 | 默认展示近 7 天真实审计记录，含操作人/团队/用户可读字段 |
+| 操作类型筛选 | 选「团队」显示 `team.*`，选「团队更新」仅显示 `team.update` |
+| 时间范围 | 24h/7d/30d/全部 过滤结果正确 |
+| 搜索 | 输入对象 ID 或 metadata 关键字可命中对应记录 |
+| 分页 | 按 `total` 分页，切换页码正常 |
+| 导出 CSV | 下载文件内容与当前筛选结果一致 |
+| 写入联动 | 封禁用户/更新团队/编辑 Provider/发布公告后，审计日志页出现对应记录 |
+| 权限 | 非 admin 调用 RPC 返回 `forbidden: admin only` |
+
+---
+
+## 7. 已知残留项
+
+| 项 | 优先级 | 说明 |
+|----|--------|------|
+| 部分原型 action 暂无业务触发 | LOW | `key.bind` / `key.unbind` / `sub.update` / `cost.update` 等 action 已加入标签映射，但对应模块（账号绑定、订阅管理、消耗表编辑器）尚未实现 |
+| `admin_reset_team_quota` 仍内联写审计 | LOW | 该 RPC 本身已是 SECURITY DEFINER 且用 `auth.uid()`，安全上无问题；如追求完全统一可后续改为调用 `admin_write_audit_log` |
+| 审计日志无详情弹窗 | LOW | 当前表格仅展示 metadata 摘要，超长内容可后续加行展开或详情抽屉 |
+
+---
+
+## 8. 相关文档
+
+- [admin-system-plan.md](./admin-system-plan.md) — 后台整体开发方案与分阶段规划
+- [admin-users-page.md](./admin-users-page.md) — 用户管理页实现套路（本次审计页参考模板）
+- [data-consistency-fix-summary.md](./data-consistency-fix-summary.md) — RPC 与 Supabase 迁移先例写法
