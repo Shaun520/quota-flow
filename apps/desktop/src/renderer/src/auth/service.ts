@@ -1,6 +1,6 @@
 import { createAuthService } from '@quota-flow/auth'
 import type { AuthService, AuthTokens } from '@quota-flow/auth'
-import { JobService, ProviderService } from '@quota-flow/db-supabase'
+import { JobService, ProviderService, TeamService } from '@quota-flow/db-supabase'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -8,6 +8,7 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 let service: AuthService | null = null
 let providerService: ProviderService | null = null
 let jobService: JobService | null = null
+let teamService: TeamService | null = null
 
 export interface PlainSession {
   access_token: string
@@ -50,6 +51,15 @@ export function getJobService(): JobService | null {
     jobService = new JobService(auth.getClient())
   }
   return jobService
+}
+
+export function getTeamService(): TeamService | null {
+  const auth = getAuthService()
+  if (!auth) return null
+  if (!teamService) {
+    teamService = new TeamService(auth.getClient())
+  }
+  return teamService
 }
 
 export function toTokens(session: PlainSession): AuthTokens {

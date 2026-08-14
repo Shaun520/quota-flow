@@ -56,6 +56,7 @@ export interface AuthResult {
   signOut: () => Promise<void>
   forgotPassword: (email: string) => Promise<void>
   updateProfile: (displayName: string) => Promise<string | null>
+  refreshTeam: () => Promise<void>
 }
 
 function toAuthUser(raw: RawUser | null): AuthUser | null {
@@ -306,5 +307,20 @@ export function useAuth(): AuthResult {
     return null
   }, [])
 
-  return { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile }
+  const refreshTeam = useCallback(async () => {
+    const auth = getAuthService()
+    if (!auth) {
+      setTeam(null)
+      return
+    }
+    const session = await auth.getSession()
+    if (!session?.user) {
+      setTeam(null)
+      return
+    }
+    const t = await auth.getTeam(session.user.id)
+    setTeam(t)
+  }, [])
+
+  return { configured, loading, user, team, error, notice, signIn, signUp, sendOtp, verifyOtp, signOut, forgotPassword, updateProfile, refreshTeam }
 }
