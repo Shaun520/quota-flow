@@ -5,6 +5,8 @@ import {
   computeCost,
   durationOptions,
   intersectDurations,
+  providerModeOptions,
+  ratioOptions,
   resolutionOptions,
   uploadHint
 } from '../spec'
@@ -22,17 +24,19 @@ import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
 
 const VIP = false
+/** 本轮 auto 仍只走豆包；避免只绑千问时把 auto 展示成可用项 */
+const AUTO_CAPABLE_PROVIDER_IDS = new Set(['doubao'])
 
 /** 生成阶段 → 用户可见文案 */
 const STAGE_LABEL: Record<string, string> = {
   pending: '正在创建任务…',
   'select-account': '选择账号中…',
   'inject-cookies': '注入登录态…',
-  'open-page': '打开豆包页面…',
+  'open-page': '打开厂商页面…',
   'wait-tab': '进入视频生成…',
   'open-video-tab': '进入视频生成…',
   'apply-duration': '设置时长…',
-  'apply-params': '发送 prompt 中…',
+  'apply-params': '设置厂商视频参数…',
   'upload-images': '上传图片中…',
   'upload-images-result': '上传图片中…',
   submit: '发送 prompt 中…',
@@ -41,7 +45,7 @@ const STAGE_LABEL: Record<string, string> = {
   'risk-verify': '需要验证，请在弹窗完成…',
   'risk-resolved': '验证完成，继续生成…',
   'account-failed': '当前账号失败，尝试切换…',
-  blocked: '豆包拒绝了本次生成（见左侧错误）',
+  blocked: '厂商拒绝了本次生成（见左侧错误）',
   watermark: '本地去水印中…'
 }
 
@@ -126,6 +130,7 @@ export default function Dashboard({
   }, [provider, activeBoundAggs, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
   const resolutions = resolutionOptions(provider)
+  const ratios = ratioOptions(provider)
   const cost = computeCost(provider === 'auto' ? 'doubao' : provider, model, duration, resolution)
   const upload = uploadHint(provider, mode)
 
@@ -135,10 +140,9 @@ export default function Dashboard({
   // 厂商选项只取「已启用且已绑定」的厂商；智能调度仅在至少绑定一家时提供
   const providerOptions = useMemo(() => {
     if (activeBoundAggs.length === 0) return []
-    return [
-      { value: 'auto', label: '智能调度（推荐）' },
-      ...activeBoundAggs.map((a) => ({ value: a.providerId, label: a.name }))
-    ]
+    const canUseAuto = activeBoundAggs.some((a) => AUTO_CAPABLE_PROVIDER_IDS.has(a.providerId))
+    const options = activeBoundAggs.map((a) => ({ value: a.providerId, label: a.name }))
+    return canUseAuto ? [{ value: 'auto', label: '智能调度（推荐）' }, ...options] : options
   }, [activeBoundAggs])
 
   // 当前选择不在可用列表时（例如厂商被解绑），回退到智能调度或第一个可用厂商
@@ -146,7 +150,9 @@ export default function Dashboard({
     if (providerOptions.length === 0) return
     const valid = providerOptions.map((o) => o.value)
     if (!valid.includes(provider)) {
-      setProvider(valid.includes('auto') ? 'auto' : valid[0])
+      const next = valid.includes('auto') ? 'auto' : valid[0]
+      setProvider(next)
+      setModel(MODELS[next]?.[0] ?? MODELS.auto[0])
     }
   }, [providerOptions, provider])
 
@@ -163,6 +169,23 @@ export default function Dashboard({
       if (last) setResolution(last.value)
     }
   }, [resolutions, resolution])
+
+  useEffect(() => {
+    const valid = ratioOptions(provider)
+    if (!valid.some((r) => r.value === ratio)) {
+      setRatio(valid[0]?.value ?? '9:16')
+    }
+  }, [provider, ratio])
+
+  // 千问生成模式按模型限定；模型变化后若当前模式不可用，自动落到该模型第一个可用模式
+  useEffect(() => {
+    const validModes = providerModeOptions(provider, model).map((m) => m.value)
+    if (!validModes.includes(mode)) {
+      setMode(validModes[0] ?? 't2v')
+      setImages([])
+      setImageFiles([])
+    }
+  }, [provider, model, mode])
 
   // 主进程生成事件：仅终态（成功/失败）刷新列表，进度事件不触发，避免历史页列表/分页反复闪加载
   useEffect(() => {
@@ -275,8 +298,8 @@ export default function Dashboard({
       setGenError('请先填写 Prompt 描述')
       return
     }
-    if (mode === 'multi_ref' || mode === 'first_last') {
-      setGenError('多参考/首尾帧暂未接入，请先用文生或图生视频')
+    if (mode !== 't2v' && mode !== 'img' && imageFiles.length === 0) {
+      setGenError('千问多参考/首帧/首尾帧生成需要至少上传一张素材图片')
       return
     }
     if (mode === 'img' && imageFiles.length === 0) {
@@ -325,7 +348,8 @@ export default function Dashboard({
         userId: user.id,
         teamId: usageScope === 'team' ? team?.id ?? null : null,
         prompt: prompt.trim(),
-        providerId: provider === 'auto' ? 'doubao' : provider,
+        providerId: provider,
+        model,
         durationSec: duration,
         mode: mode === 't2v' ? 'text2video' : mode === 'img' ? 'img2video' : mode,
         resolution,
@@ -352,7 +376,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, duration, durations, resolution, audio, ratio, watermark, imageFiles, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, duration, durations, resolution, audio, ratio, watermark, imageFiles, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -387,12 +411,27 @@ export default function Dashboard({
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
-    setModel(MODELS[value]?.[0] ?? MODELS.auto[0])
+    const nextModel = MODELS[value]?.[0] ?? MODELS.auto[0]
+    setModel(nextModel)
+    const nextModes = providerModeOptions(value, nextModel)
+    setMode(nextModes[0]?.value ?? 't2v')
+    setImages([])
+    setImageFiles([])
   }
 
   const onModeChange = (value: string): void => {
     setMode(value)
     if (value === 't2v') {
+      setImages([])
+      setImageFiles([])
+    }
+  }
+
+  const onModelChange = (value: string): void => {
+    setModel(value)
+    const nextModes = providerModeOptions(provider, value)
+    if (!nextModes.some((m) => m.value === mode)) {
+      setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
       setImageFiles([])
     }
@@ -460,7 +499,7 @@ export default function Dashboard({
               <Select
                 id="model"
                 value={model}
-                onChange={setModel}
+                onChange={onModelChange}
                 options={(MODELS[provider] ?? MODELS.auto).map((m) => ({ value: m, label: m }))}
               />
             </div>
@@ -473,12 +512,7 @@ export default function Dashboard({
                 id="mode"
                 value={mode}
                 onChange={onModeChange}
-                options={[
-                  { value: 't2v', label: '文生视频' },
-                  { value: 'img', label: '图生视频' },
-                  { value: 'multi_ref', label: '多参考生成' },
-                  { value: 'first_last', label: '首尾帧' }
-                ]}
+                options={providerModeOptions(provider, model)}
               />
             </div>
             <div className="param-field">
@@ -503,29 +537,27 @@ export default function Dashboard({
           </div>
 
           <div className="param-row ratio-row">
-            <div className="param-field">
-              <label htmlFor="audio">智能配音</label>
-              <Select
-                id="audio"
-                value={audio}
-                onChange={setAudio}
-                options={[
-                  { value: 'on', label: '开' },
-                  { value: 'off', label: '关' }
-                ]}
-              />
-            </div>
+            {!(provider === 'qwenwan' && /HappyHorse/i.test(model)) && (
+              <div className="param-field">
+                <label htmlFor="audio">智能配音</label>
+                <Select
+                  id="audio"
+                  value={audio}
+                  onChange={setAudio}
+                  options={[
+                    { value: 'on', label: '开' },
+                    { value: 'off', label: '关' }
+                  ]}
+                />
+              </div>
+            )}
             <div className="param-field">
               <label htmlFor="ratio">视频比例</label>
               <Select
                 id="ratio"
                 value={ratio}
                 onChange={setRatio}
-                options={[
-                  { value: '9:16', label: '9:16' },
-                  { value: '16:9', label: '16:9' },
-                  { value: '1:1', label: '1:1' }
-                ]}
+                options={ratios}
               />
             </div>
             {viewScope === 'global' && team ? (

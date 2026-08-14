@@ -9,6 +9,9 @@ import { createSupabaseClient, JobService, ProviderService, todayKey } from '@qu
 import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
 import { runDoubaoGeneration } from './webview-engine'
 import type { ProviderCookie, OriginStorage } from './webview-engine'
+import { parseStoredCredentials as parseProviderCredentials } from './providers'
+import { runQwenGeneration } from './qwen-webview'
+import type { QwenGenerateResult } from './qwen-webview'
 import { processWatermarkJob } from './watermark-remover/job'
 
 export interface GenerateInput {
@@ -20,6 +23,7 @@ export interface GenerateInput {
   teamId?: string | null
   prompt: string
   providerId: string
+  model?: string
   durationSec: number
   mode?: string
   resolution?: string
@@ -31,41 +35,6 @@ export interface GenerateInput {
   images?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
-}
-
-/**
- * 兼容 v0/v1/v2 三种存储格式（与 providers.ts parseStoredCredentials 逻辑一致）
- *  - v0 (最旧): ProviderCookie[]
- *  - v1 (旧):   { cookies: ProviderCookie[], localStorage: {key,value}[] }
- *  - v2 (新):   { cookies: ProviderCookie[], storages: OriginStorage[], localStorage?: legacy }
- */
-function parseProviderCredentials(encrypted: string): {
-  cookies: ProviderCookie[]
-  storages: OriginStorage[]
-  localStorage: Array<{ key: string; value: string }>
-} {
-  const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
-  const parsed = JSON.parse(plain) as unknown
-  if (Array.isArray(parsed)) {
-    return { cookies: parsed as ProviderCookie[], storages: [], localStorage: [] }
-  }
-  const obj = parsed as {
-    cookies?: ProviderCookie[]
-    storages?: OriginStorage[]
-    localStorage?: Array<{ key: string; value: string }>
-  }
-  const cookies = obj.cookies ?? []
-  const storages: OriginStorage[] = Array.isArray(obj.storages) ? obj.storages : []
-  if (obj.localStorage?.length && !storages.length) {
-    storages.push({
-      origin: 'https://www.doubao.com',
-      localStorage: obj.localStorage,
-      sessionStorage: []
-    })
-  }
-  const mainStorage = storages.find((s) => s.origin === 'https://www.doubao.com') || storages[0]
-  const localStorage = mainStorage?.localStorage ?? []
-  return { cookies, storages, localStorage }
 }
 
 export interface DispatchEvent {
@@ -90,6 +59,18 @@ function resolveDispatchProvider(providerId: string): string {
   return providerId === 'auto' ? 'doubao' : providerId
 }
 
+function normalizeJobMode(mode?: string): string {
+  if (mode === 'img' || mode === 'img2video') return 'img2video'
+  if (mode === 'multi_ref' || mode === 'first_last' || mode === 'first_frame' || mode === 'firstlast') {
+    return mode === 'firstlast' ? 'first_last' : mode
+  }
+  return 'text2video'
+}
+
+function providerLabel(providerId: string): string {
+  return providerId === 'qwenwan' ? '千问（通义万相）' : '豆包'
+}
+
 function parseSupportedDurations(meta: { capabilities?: Record<string, unknown> | null } | undefined): number[] {
   const raw = meta?.capabilities?.supported_durations
   if (!Array.isArray(raw)) return [...DEFAULT_SUPPORTED_DURATIONS]
@@ -99,14 +80,17 @@ function parseSupportedDurations(meta: { capabilities?: Record<string, unknown> 
   return durations.length > 0 ? durations : [...DEFAULT_SUPPORTED_DURATIONS]
 }
 
-function doubaoCost(durationSec: number): number {
-  if (durationSec <= 5) return 1
-  if (durationSec <= 10) return 2
-  return 3
+function providerCost(providerId: string, durationSec: number, resolution?: string): { amount: number; unitName: string } {
+  const durationPoint = durationSec <= 5 ? 0 : durationSec <= 10 ? 1 : 2
+  if (providerId === 'qwenwan') {
+    const amount = 1 + durationPoint + (resolution === '1080' ? 1 : 0)
+    return { amount, unitName: '额度' }
+  }
+  return { amount: 1 + durationPoint, unitName: '点' }
 }
 
 /** 下载视频到 userData/videos/<jobId>.mp4（生成后立即落盘，避免签名 URL 过期） */
-function downloadVideo(url: string, jobId: string, redirects = 0): Promise<string | null> {
+function downloadVideo(url: string, jobId: string, providerId = 'doubao', redirects = 0): Promise<string | null> {
   return new Promise((resolve) => {
     if (redirects > 4) {
       resolve(null)
@@ -131,12 +115,16 @@ function downloadVideo(url: string, jobId: string, redirects = 0): Promise<strin
     const req = httpsGet(
       url,
       {
-        headers: { 'User-Agent': UA, Accept: '*/*', Referer: 'https://www.doubao.com/' }
+        headers: {
+          'User-Agent': UA,
+          Accept: '*/*',
+          Referer: providerId === 'qwenwan' ? 'https://www.qianwen.com/' : 'https://www.doubao.com/'
+        }
       },
       (res) => {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume()
-          void downloadVideo(res.headers.location, jobId, redirects + 1).then((p) => finish(!!p, p))
+          void downloadVideo(res.headers.location, jobId, providerId, redirects + 1).then((p) => finish(!!p, p))
           return
         }
         if (!res.statusCode || res.statusCode !== 200) {
@@ -211,7 +199,7 @@ export async function runGenerate(
   try {
     job = await jobSvc.insertJob(input.userId, {
       teamId: input.teamId,
-      mode: input.mode === 'img2video' ? 'img2video' : 'text2video',
+      mode: normalizeJobMode(input.mode),
       prompt: input.prompt,
       status: 'pending',
       providerId: input.providerId
@@ -224,7 +212,9 @@ export async function runGenerate(
   onJobCreated?.(job.id, runCancelState)
 
   // 1) 选号 + 解析 cookie：默认账号优先 → 剩余额度预检 → 失败自动换号（有界）
-  const cost = doubaoCost(input.durationSec)
+  const costInfo = providerCost(resolvedProviderId, input.durationSec, input.resolution)
+  const cost = costInfo.amount
+  const costUnit = costInfo.unitName
   const images = (input.images ?? [])
     .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
     .slice(0, 10)
@@ -246,6 +236,7 @@ export async function runGenerate(
   }
   const jobOptions: Record<string, unknown> = {
     mode: input.mode,
+    model: input.model,
     durationSec: input.durationSec,
     ratio: input.ratio,
     audio: input.audio,
@@ -256,14 +247,14 @@ export async function runGenerate(
   const keys = input.teamId
     ? await providerSvc.listTeamProviderKeys(input.teamId)
     : (await providerSvc.listProviderKeys(input.userId)).filter((k) => !k.team_id)
-  const doubaoKeys = keys.filter((k) => k.provider_id === 'doubao' && k.enabled !== false)
+  const providerKeys = keys.filter((k) => k.provider_id === resolvedProviderId && k.enabled !== false)
 
   let selectedKey: { id: string; accountName: string | null } | null = null
-  let result: Awaited<ReturnType<typeof runDoubaoGeneration>> | null = null
+  let result: Awaited<ReturnType<typeof runDoubaoGeneration>> | Awaited<ReturnType<typeof runQwenGeneration>> | null = null
   let lastError = ''
 
-  if (doubaoKeys.length === 0) {
-    const err = '未绑定豆包账号（请在厂商页绑定后重试）'
+  if (providerKeys.length === 0) {
+    const err = `未绑定${providerLabel(resolvedProviderId)}账号（请在厂商页绑定后重试）`
     await jobSvc.updateJob(input.userId, job.id, {
       status: 'failed',
       error: err,
@@ -276,7 +267,7 @@ export async function runGenerate(
     try {
       const today = todayKey()
       // 批量确保今日 ledger 行存在，避免逐账号请求拖慢生成前的额度排序。
-      await providerSvc.ensureProviderLedgerRows(input.userId, input.teamId ?? null, doubaoKeys.map((k) => k.id))
+      await providerSvc.ensureProviderLedgerRows(input.userId, input.teamId ?? null, providerKeys.map((k) => k.id))
       const freshLedgers = input.teamId
         ? await providerSvc.listTeamTodayLedger(input.teamId)
         : await providerSvc.listTodayLedger(input.userId)
@@ -285,7 +276,7 @@ export async function runGenerate(
         // 用 daily_total - used - reserved 而非 remaining，与 RPC 原子扣减条件一致
         return row ? Math.max(Number(row.daily_total) - Number(row.used) - Number(row.reserved ?? 0), 0) : 0
       }
-      const sorted = [...doubaoKeys].sort((a, b) => {
+      const sorted = [...providerKeys].sort((a, b) => {
         if (!!a.is_default !== !!b.is_default) return a.is_default ? -1 : 1
         // 已失效账号排最后，避免默认账号过期时浪费尝试
         const expiredA = a.health_status === 'expired' ? 1 : 0
@@ -295,10 +286,10 @@ export async function runGenerate(
       })
 
       const tried = new Set<string>()
-      for (let round = 0; round < Math.min(doubaoKeys.length, 3); round++) {
+      for (let round = 0; round < Math.min(providerKeys.length, 3); round++) {
         const cand = sorted.find((k) => !tried.has(k.id) && remainingOf(k.id) >= cost)
         if (!cand) {
-          lastError = lastError || `所有豆包账号剩余额度不足（本次需 ${cost} 点）`
+          lastError = lastError || `所有${providerLabel(resolvedProviderId)}账号剩余额度不足（本次需 ${cost} ${costUnit}）`
           break
         }
         tried.add(cand.id)
@@ -307,7 +298,7 @@ export async function runGenerate(
         let storages: OriginStorage[] = []
         try {
           if (safeStorage.isEncryptionAvailable()) {
-            const parsed = parseProviderCredentials(cand.encrypted_key)
+            const parsed = parseProviderCredentials(cand.encrypted_key, resolvedProviderId)
             c = parsed.cookies
             s = parsed.localStorage
             storages = parsed.storages
@@ -336,30 +327,50 @@ export async function runGenerate(
         if (runCancelState.aborted) {
           result = {
             ok: false,
-            providerId: 'doubao',
+            providerId: resolvedProviderId as 'doubao' | 'qwenwan',
             cancelled: true,
             error: '已手动终止生成（提示词未发送）',
             attempts: []
           }
           break
         }
-        result = await runDoubaoGeneration({
-          cookies: c,
-          localStorage: s,
-          storages,
-          prompt: input.prompt,
-          durationSec: input.durationSec,
-          mode: input.mode,
-          resolution: input.resolution,
-          audio: input.audio,
-          ratio: input.ratio,
-          images,
-          keyId: cand.id,
-          cancel: runCancelState,
-          showWebview: input.showWebview,
-          onProgress: (stage, detail) =>
-            emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
-        })
+        if (resolvedProviderId === 'qwenwan') {
+          result = await runQwenGeneration({
+            cookies: c,
+            storages,
+            prompt: input.prompt,
+            model: input.model,
+            mode: input.mode,
+            durationSec: input.durationSec,
+            resolution: input.resolution,
+            audio: input.audio,
+            ratio: input.ratio,
+            images,
+            keyId: cand.id,
+            cancel: runCancelState,
+            showWebview: input.showWebview,
+            onProgress: (stage, detail) =>
+              emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
+          })
+        } else {
+          result = await runDoubaoGeneration({
+            cookies: c,
+            localStorage: s,
+            storages,
+            prompt: input.prompt,
+            durationSec: input.durationSec,
+            mode: input.mode,
+            resolution: input.resolution,
+            audio: input.audio,
+            ratio: input.ratio,
+            images,
+            keyId: cand.id,
+            cancel: runCancelState,
+            showWebview: input.showWebview,
+            onProgress: (stage, detail) =>
+              emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
+          })
+        }
         if (result.ok && result.videoUrl) break
         lastError = result.error || '生成失败'
         // 用户手动终止（提示词未发送）：标记为意外中断，不再换号
@@ -408,7 +419,7 @@ export async function runGenerate(
   }
 
   if (!result || !result.ok || !result.videoUrl) {
-    const err = result ? result.error || lastError || '生成失败' : lastError || '未找到可用豆包账号'
+    const err = result ? result.error || lastError || '生成失败' : lastError || `未找到可用${providerLabel(resolvedProviderId)}账号`
     try {
       await jobSvc.updateJob(input.userId, job.id, {
         status: 'failed',
@@ -427,7 +438,7 @@ export async function runGenerate(
   // 2) 成功：下载落盘 → 先扣额度 → 再写 job success
   let localPath: string | null = null
   try {
-    localPath = await downloadVideo(result.videoUrl, job.id)
+    localPath = await downloadVideo(result.videoUrl, job.id, resolvedProviderId)
   } catch (e) {
     emit({
       jobId: job.id,
@@ -445,7 +456,7 @@ export async function runGenerate(
       const teamResult = await providerSvc.consumeTeamQuotaAndFinalize({
         teamId: input.teamId,
         userId: input.userId,
-        providerId: 'doubao',
+        providerId: resolvedProviderId,
         amount: cost,
         keyId: selectedKey?.id ?? null,
         jobId: job.id
@@ -455,8 +466,8 @@ export async function runGenerate(
       }
       consumed = teamResult.row ?? null
     } else {
-      consumed = await providerSvc.consumeLedger(input.userId, 'doubao', cost, {
-        unitName: '点',
+      consumed = await providerSvc.consumeLedger(input.userId, resolvedProviderId, cost, {
+        unitName: costUnit,
         keyId: selectedKey?.id ?? undefined
       })
       if (selectedKey?.id && consumed) {
@@ -470,7 +481,7 @@ export async function runGenerate(
       status: 'failed',
       error: errMsg,
       resultUrl,
-      costUnit: '点',
+      costUnit,
       costAmount: cost,
       attempts: result.attempts,
       options: {
@@ -494,10 +505,10 @@ export async function runGenerate(
 
   await jobSvc.updateJob(input.userId, job.id, {
     status: 'success',
-    providerId: 'doubao',
+    providerId: resolvedProviderId,
     accountId: selectedKey?.id ?? null,
     resultUrl,
-    costUnit: '点',
+    costUnit,
     costAmount: cost,
     attempts: result.attempts,
     options: {

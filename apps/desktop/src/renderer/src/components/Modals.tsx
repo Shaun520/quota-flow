@@ -659,7 +659,8 @@ export function AddProviderModal({
           encryptedKey: encrypted,
           expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
           // 登录刚成功即视为健康（登录会话本身是最强有效性证据），无需等后台健康检查
-          healthStatus: 'healthy'
+          healthStatus: 'healthy',
+          accountFingerprint: accountFingerprint ?? null
         })
         // 把临时分区的 cookie 迁移到目标账号分区（登录分区 = 生成分区）
         if (loginTempId) {
@@ -687,7 +688,8 @@ export function AddProviderModal({
           await svc.refreshProviderKey(userId, dup.id, {
             encryptedKey: encrypted,
             expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-            healthStatus: 'healthy'
+            healthStatus: 'healthy',
+            accountFingerprint: accountFingerprint ?? null
           })
           // 把临时分区的 cookie 迁移到已有账号分区
           if (loginTempId) {
@@ -769,10 +771,12 @@ export function AddProviderModal({
     setLoginTempId(tempId)
     const res = await window.api.providers.login(selected.providerId, tempId)
     if (res.ok && res.encrypted) {
+      const encrypted = res.encrypted
+      const expiresAt = res.expiresAt ?? null
       setCookieCount(res.cookieCount ?? 0)
       setPendingLogin({
-        encrypted: res.encrypted,
-        expiresAt: res.expiresAt ?? null,
+        encrypted,
+        expiresAt,
         fingerprint: res.accountFingerprint ?? null,
         cookieCount: res.cookieCount ?? 0
       })
@@ -790,7 +794,33 @@ export function AddProviderModal({
         } catch {}
       }
 
-      // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；指纹能识别且无重复 → 暂存待「完成」时保存
+      const refreshExisting = async (
+        target: { id: string; accountName: string },
+        fingerprint?: string | null
+      ): Promise<boolean> => {
+        if (!svc) return false
+        try {
+          await svc.refreshProviderKey(userId, target.id, {
+            encryptedKey: encrypted,
+            expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+            healthStatus: 'healthy',
+            accountFingerprint: fingerprint ?? null
+          })
+          if (loginTempId) {
+            try {
+              await window.api.providers.migratePartition(selected.providerId, loginTempId, target.id)
+            } catch {}
+          }
+          setPendingLogin(null)
+          setNotice(`已刷新账号「${target.accountName}」的登录态（保留原账号记录）`)
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；
+      // 指纹能识别且无重复 → 暂存待「完成」时保存；千问已有账号无匹配时按已有账号刷新。
       if (res.accountFingerprint && svc) {
         try {
           const scopeKeys = accountScope === 'team' && team
@@ -806,18 +836,42 @@ export function AddProviderModal({
               setStatus('login-fail')
               return
             }
-            await svc.refreshProviderKey(userId, dup.id, {
-              encryptedKey: res.encrypted,
-              expiresAt: res.expiresAt ? new Date(res.expiresAt).toISOString() : null,
-              healthStatus: 'healthy'
-            })
-            setNotice(`已刷新账号「${dup.account_name ?? '未命名账号'}」的登录态（保留原账号记录）`)
+            if (
+              await refreshExisting(
+                { id: dup.id, accountName: dup.account_name ?? '未命名账号' },
+                res.accountFingerprint
+              )
+            ) {
+              setStatus('login-ok')
+              return
+            }
+          }
+        } catch {}
+        // 千问旧账号可能没有指纹，登录成功但没匹配到时不再新增重复绑定：
+        // 先按已有账号刷新，并在刷新时补写本次指纹。
+        if (selected.providerId === 'qwenwan' && existing.length > 0) {
+          if (await refreshExisting(existing[0], res.accountFingerprint)) {
             setStatus('login-ok')
             return
           }
-        } catch {}
+          setError('刷新已有千问账号失败，请重试')
+          setStatus('login-fail')
+          return
+        }
         // 无重复：等用户点「完成」保存，此时已确认账号备注
         setStatus('login-ok')
+        return
+      }
+
+      // 千问指纹缺失或旧账号没有指纹时，不再弹「新增/刷新」选择：
+      // 已有账号直接刷新，避免同一账号重复绑定。
+      if (selected.providerId === 'qwenwan' && existing.length > 0) {
+        if (await refreshExisting(existing[0], res.accountFingerprint)) {
+          setStatus('login-ok')
+          return
+        }
+        setError('刷新已有千问账号失败，请重试')
+        setStatus('login-fail')
         return
       }
 

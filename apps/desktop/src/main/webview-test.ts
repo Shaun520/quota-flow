@@ -68,7 +68,7 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
     authFile: join(REPO_ROOT, 'data', 'qwen-auth.json'),
     cookieUrl: 'https://www.qianwen.com',
     cookieDomain: '.qianwen.com',
-    captureUrls: ['https://chat2.qianwen.com/api/v2/chat*']
+    captureUrls: ['*://*.qianwen.com/api/*', '*://qianwen.com/api/*']
   }
 }
 
@@ -388,16 +388,17 @@ class WebviewTestManager {
     this.captureReady.add(def.partition)
     ses.webRequest.onBeforeRequest({ urls: def.captureUrls }, (details, callback) => {
       callback({})
+      if (def.id === 'qwenwan' && /\/req\/detail\b|\/detail\b/i.test(details.url)) return
       let bodyText = ''
       try {
-        // Electron 类型定义未声明 requestBody，但运行时 onBeforeRequest 提供该字段
+        // Electron onBeforeRequest 使用 uploadData 暴露请求体，不是 Chrome 扩展的 requestBody
         const withBody = details as unknown as {
-          requestBody?: { raw?: Array<{ bytes: Buffer | string }> }
+          uploadData?: Array<{ bytes: Buffer }>
         }
-        const raw = withBody.requestBody?.raw
+        const raw = withBody.uploadData
         if (raw?.length) {
           bodyText = Buffer.concat(
-            raw.map((x) => (Buffer.isBuffer(x.bytes) ? x.bytes : Buffer.from(x.bytes)))
+            raw.map((x) => x.bytes)
           ).toString('utf8')
         }
       } catch {
@@ -406,9 +407,35 @@ class WebviewTestManager {
       const cap: CapturedRequest = { ts: Date.now() }
       if (def.id === 'qwenwan') {
         try {
-          const json = JSON.parse(bodyText) as { req_id?: string; session_id?: string }
-          if (json.req_id) cap.reqId = json.req_id
-          if (json.session_id) cap.sessionId = json.session_id
+          const params = new URL(details.url).searchParams
+          cap.reqId ||= params.get('req_id') || params.get('reqId') || undefined
+          cap.sessionId ||= params.get('session_id') || params.get('sessionId') || undefined
+        } catch {
+          /* 忽略 URL 解析失败 */
+        }
+        try {
+          const json = JSON.parse(bodyText) as Record<string, unknown>
+          const find = (value: unknown, keys: string[]): string | undefined => {
+            if (Array.isArray(value)) {
+              for (const item of value) {
+                const found = find(item, keys)
+                if (found) return found
+              }
+              return undefined
+            }
+            if (!value || typeof value !== 'object') return undefined
+            const record = value as Record<string, unknown>
+            for (const [key, child] of Object.entries(record)) {
+              if (keys.includes(key) && typeof child === 'string' && child.trim()) return child.trim()
+              if (child && typeof child === 'object') {
+                const found = find(child, keys)
+                if (found) return found
+              }
+            }
+            return undefined
+          }
+          cap.reqId ||= find(json, ['req_id', 'reqId', 'request_id', 'requestId'])
+          cap.sessionId ||= find(json, ['session_id', 'sessionId'])
         } catch {
           /* 非 JSON body */
         }
