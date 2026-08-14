@@ -1,4 +1,5 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
+import { insertAuditLog } from "@/lib/utils/audit";
 
 export type TeamStatus = "active" | "banned" | "exhausted" | "expired";
 export type TeamStatusFilter = "" | TeamStatus;
@@ -119,20 +120,11 @@ export async function updateTeamSettings(teamId: string, input: TeamSettingsInpu
     .eq("id", teamId);
   if (error) throw error;
 
-  try {
-    const { data: authData } = await supabase.auth.getUser();
-    if (authData.user?.id) {
-      await supabase.from("audit_logs").insert({
-        admin_user_id: authData.user.id,
-        team_id: teamId,
-        action: "team.update",
-        target: teamId,
-        metadata: payload
-      });
-    }
-  } catch {
-    // 审计日志失败不阻断主操作。
-  }
+  await insertAuditLog("team.update", {
+    teamId,
+    target: teamId,
+    metadata: payload
+  });
 }
 
 export async function resetTeamQuota(teamId: string): Promise<void> {

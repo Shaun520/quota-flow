@@ -1,4 +1,5 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
+import { insertAuditLog } from "@/lib/utils/audit";
 import { formatDate } from "@/lib/utils/format";
 
 export type UserStatus = "active" | "banned" | "exhausted";
@@ -75,17 +76,11 @@ export async function setUserStatus(userId: string, status: UserStatus): Promise
   if (error) throw error;
 
   // 写审计日志（失败不阻断主操作，仅静默忽略）
-  const { data: authData } = await supabase.auth.getUser();
-  const adminUserId = authData.user?.id;
-  if (adminUserId) {
-    await supabase.from("audit_logs").insert({
-      admin_user_id: adminUserId,
-      user_id: userId,
-      action: status === "banned" ? "user.ban" : "user.unban",
-      target: userId,
-      metadata: {}
-    });
-  }
+  await insertAuditLog(status === "banned" ? "user.ban" : "user.unban", {
+    userId,
+    target: userId,
+    metadata: { previous_status: status === "banned" ? "active" : "banned" }
+  });
 }
 
 export async function listRecentJobs(userId: string, limit = 10): Promise<RecentJob[]> {

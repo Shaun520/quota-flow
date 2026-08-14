@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
+import { insertAuditLog } from "@/lib/utils/audit";
 import { PROVIDER_ICONS } from "./provider-icons";
 
 export interface ProviderRow {
@@ -49,28 +50,6 @@ function formatNumber(value: number | null | undefined): string {
 
 function isRemoteLogo(logo: string | null | undefined): logo is string {
   return typeof logo === "string" && /^(https?:\/\/|data:image\/)/i.test(logo);
-}
-
-async function insertAuditLog(
-  action: string,
-  target: string,
-  metadata: Record<string, unknown>
-): Promise<string | null> {
-  try {
-    const supabase = createAdminBrowserClient();
-    const { data: auth, error: userError } = await supabase.auth.getUser();
-    if (userError || !auth.user) return null;
-    const { error } = await supabase.from("audit_logs").insert({
-      admin_user_id: auth.user.id,
-      action,
-      target,
-      metadata
-    });
-    if (error) return error.message;
-    return null;
-  } catch {
-    return "审计日志写入失败。";
-  }
 }
 
 interface ToggleMessage {
@@ -158,32 +137,10 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
 
       setMessage({ tone: "success", text: `已${nextEnabled ? "启用" : "停用"} ${provider.name}。` });
 
-      try {
-        const { data: auth, error: userError } = await supabase.auth.getUser();
-        if (!userError && auth.user) {
-          const { error: auditError } = await supabase.from("audit_logs").insert({
-            admin_user_id: auth.user.id,
-            action: "provider.toggle_enabled",
-            target: `providers:${provider.id}`,
-            metadata: {
-              provider_id: provider.id,
-              enabled: nextEnabled
-            }
-          });
-
-          if (auditError) {
-            setMessage({
-              tone: "warning",
-              text: `已${nextEnabled ? "启用" : "停用"} ${provider.name}，但审计日志写入失败：${auditError.message}`
-            });
-          }
-        }
-      } catch {
-        setMessage({
-          tone: "warning",
-          text: `已${nextEnabled ? "启用" : "停用"} ${provider.name}，但审计日志写入失败。`
-        });
-      }
+      await insertAuditLog("provider.toggle_enabled", {
+        target: provider.id,
+        metadata: { provider_id: provider.id, enabled: nextEnabled }
+      });
     } catch (e) {
       setMessage({
         tone: "danger",
@@ -238,21 +195,20 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
         )
       );
 
-      const auditWarning = await insertAuditLog("provider.update", `providers:${editing.id}`, {
-        provider_id: editing.id,
-        name,
-        auth_type: values.auth_type,
-        unit_name: values.unit_name,
-        default_daily_quota: values.default_daily_quota,
-        equivalent_count_divisor: values.equivalent_count_divisor,
-        enabled: values.enabled
+      await insertAuditLog("provider.update", {
+        target: editing.id,
+        metadata: {
+          provider_id: editing.id,
+          name,
+          auth_type: values.auth_type,
+          unit_name: values.unit_name,
+          default_daily_quota: values.default_daily_quota,
+          equivalent_count_divisor: values.equivalent_count_divisor,
+          enabled: values.enabled
+        }
       });
 
-      setMessage(
-        auditWarning
-          ? { tone: "warning", text: `已更新 ${name}，但${auditWarning}` }
-          : { tone: "success", text: `已更新 ${name}。` }
-      );
+      setMessage({ tone: "success", text: `已更新 ${name}。` });
       setEditing(null);
     } catch (e) {
       setMessage({
@@ -354,21 +310,20 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
       };
       setProviders((prev) => sortProviders([...prev, newRow]));
 
-      const auditWarning = await insertAuditLog("provider.create", `providers:${id}`, {
-        provider_id: id,
-        name,
-        auth_type: values.auth_type,
-        unit_name: values.unit_name,
-        default_daily_quota: values.default_daily_quota,
-        equivalent_count_divisor: values.equivalent_count_divisor,
-        enabled: values.enabled
+      await insertAuditLog("provider.create", {
+        target: id,
+        metadata: {
+          provider_id: id,
+          name,
+          auth_type: values.auth_type,
+          unit_name: values.unit_name,
+          default_daily_quota: values.default_daily_quota,
+          equivalent_count_divisor: values.equivalent_count_divisor,
+          enabled: values.enabled
+        }
       });
 
-      setMessage(
-        auditWarning
-          ? { tone: "warning", text: `已创建 ${name}，但${auditWarning}` }
-          : { tone: "success", text: `已创建 ${name}。` }
-      );
+      setMessage({ tone: "success", text: `已创建 ${name}。` });
       setCreating(false);
     } catch (e) {
       setMessage({
@@ -393,16 +348,12 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
 
       setProviders((prev) => prev.filter((row) => row.id !== deleting.id));
 
-      const auditWarning = await insertAuditLog("provider.delete", `providers:${deleting.id}`, {
-        provider_id: deleting.id,
-        name: deleting.name
+      await insertAuditLog("provider.delete", {
+        target: deleting.id,
+        metadata: { provider_id: deleting.id, name: deleting.name }
       });
 
-      setMessage(
-        auditWarning
-          ? { tone: "warning", text: `已删除 ${deleting.name}，但${auditWarning}` }
-          : { tone: "success", text: `已删除 ${deleting.name}。` }
-      );
+      setMessage({ tone: "success", text: `已删除 ${deleting.name}。` });
       setDeleting(null);
     } catch (e) {
       setMessage({
