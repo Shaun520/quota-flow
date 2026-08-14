@@ -6,6 +6,7 @@ import { EmptyState } from './EmptyState'
 import Select from './Select'
 import type { ProviderAgg, ProvidersResult } from '../hooks/useProviders'
 import { useAuth } from '../hooks/useAuth'
+import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
 
 const PAGE_SIZE = 10
 
@@ -19,13 +20,15 @@ function statusBadge(p: ProviderAgg): { cls: string; label: string } {
 
 interface ProvidersProps {
   fresh: boolean
+  viewScope: ViewScope
+  usageScope: UsageScope
   onBound?: () => void
   providers: ProvidersResult
 }
 
-export default function Providers({ fresh, onBound, providers }: ProvidersProps) {
-  const { user } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, unbind } = providers
+export default function Providers({ fresh, viewScope, usageScope, onBound, providers }: ProvidersProps) {
+  const { user, team } = useAuth()
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -111,6 +114,9 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
         )}
 
       <div className="provider-table-wrap">
+        {(loading || refreshing) && (
+          <div className="table-refresh-overlay">{loading ? '加载中...' : '刷新中...'}</div>
+        )}
         <div className="table-scroll">
           <table className="provider-table">
             <thead>
@@ -154,6 +160,7 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
                       <ProviderRow
                         key={p.providerId}
                         agg={p}
+                        viewScope={viewScope}
                         badge={badge}
                         expanded={isExpanded}
                         onToggle={() => setExpanded((prev) => ({ ...prev, [p.providerId]: !prev[p.providerId] }))}
@@ -174,6 +181,11 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
                         onToggleEnabled={async (keyId, enabled) => {
                           await setEnabled(keyId, enabled)
                         }}
+                        onSetScope={async (keyId, teamId) => {
+                          await setProviderKeyScope(keyId, teamId)
+                        }}
+                        currentUserId={user?.id ?? ''}
+                        team={team}
                       />
                     )
                   })}
@@ -200,7 +212,9 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
         <AddProviderModal
           providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, authType: a.authType, enabled: a.enabled, boundCount: a.boundCount }))}
           userId={user.id}
+          team={team}
           initialProviderId={addTarget}
+          defaultScope={viewScope === 'team' && team ? 'team' : 'personal'}
           onClose={() => setShowAddModal(false)}
           onDone={() => {
             setShowAddModal(false)
@@ -215,6 +229,7 @@ export default function Providers({ fresh, onBound, providers }: ProvidersProps)
 
 function ProviderRow({
   agg,
+  viewScope,
   badge,
   expanded,
   onToggle,
@@ -223,9 +238,13 @@ function ProviderRow({
   onRename,
   onSetDefault,
   onToggleEnabled,
-  onUnbind
+  onUnbind,
+  onSetScope,
+  currentUserId,
+  team
 }: {
   agg: ProviderAgg
+  viewScope: ViewScope
   badge: { cls: string; label: string }
   expanded: boolean
   onToggle: () => void
@@ -235,6 +254,9 @@ function ProviderRow({
   onSetDefault: (keyId: string) => Promise<void>
   onToggleEnabled: (keyId: string, enabled: boolean) => Promise<void>
   onUnbind: (keyId: string) => Promise<void>
+  onSetScope: (keyId: string, teamId: string | null) => Promise<void>
+  currentUserId: string
+  team: { id: string } | null
 }) {
   const IconComp = PROVIDER_ICONS[agg.providerId]
   const activeBindings = agg.bindings.filter((b) => b.enabled)
@@ -324,34 +346,29 @@ function ProviderRow({
                             </button>
                           </span>
                         ) : (
-                          <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
-                            <strong>{acc.accountName}</strong>
-                            {acc.isDefault && (
-                              <span
-                                style={{
-                                  fontSize: 11,
-                                  color: '#e07a3e',
-                                  border: '1px solid currentColor',
-                                  borderRadius: 4,
-                                  padding: '0 5px'
-                                }}
-                              >
-                                默认
-                              </span>
-                            )}
-                            {!acc.enabled && (
-                              <span className="badge badge-muted" style={{ fontSize: 11, padding: '1px 6px' }}>
-                                已停用
-                              </span>
-                            )}
-                            <button
-                              className="link-btn"
-                              disabled={!acc.enabled}
-                              title={acc.enabled ? undefined : '账号已停用，请先启用'}
-                              onClick={() => { setEditKeyId(acc.keyId); setEditName(acc.accountName) }}
-                            >
-                              改名
-                            </button>
+                          <span className="account-name-cell">
+                            <span className="account-name-line">
+                              <strong>{acc.accountName}</strong>
+                              {viewScope === 'global' ? (
+                                <span className="account-scope-suffix">
+                                  {acc.teamId ? '（团队）' : '（个人）'}
+                                </span>
+                              ) : null}
+                              {acc.isDefault && <span className="account-flag account-flag-default">默认</span>}
+                              {!acc.enabled && (
+                                <span className="badge badge-muted account-flag">已停用</span>
+                              )}
+                              {acc.ownerUserId === currentUserId ? (
+                                <button
+                                  className="link-btn"
+                                  disabled={!acc.enabled}
+                                  title={acc.enabled ? undefined : '账号已停用，请先启用'}
+                                  onClick={() => { setEditKeyId(acc.keyId); setEditName(acc.accountName) }}
+                                >
+                                  改名
+                                </button>
+                              ) : null}
+                            </span>
                           </span>
                         )}
                       </td>
@@ -362,59 +379,86 @@ function ProviderRow({
                           : acc.health === 'healthy' ? '正常' : acc.health === 'expiring' ? '将过期' : acc.health === 'expired' ? '已失效' : '未知'}
                       </td>
                       <td>
-                        <label
-                          className="switch"
-                          title={acc.enabled ? '停用后智能调度将跳过该账号' : '启用后该账号可被智能调度使用'}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={acc.enabled}
-                            onChange={(e) => void onToggleEnabled(acc.keyId, e.target.checked)}
-                          />
-                          <span className="switch-track">
-                            <span className="switch-thumb" />
-                          </span>
-                          <span className="switch-label">{acc.enabled ? '启用' : '停用'}</span>
-                        </label>
+                        {acc.ownerUserId === currentUserId ? (
+                          <label
+                            className="switch"
+                            title={acc.enabled ? '停用后智能调度将跳过该账号' : '启用后该账号可被智能调度使用'}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={acc.enabled}
+                              onChange={(e) => void onToggleEnabled(acc.keyId, e.target.checked)}
+                            />
+                            <span className="switch-track">
+                              <span className="switch-thumb" />
+                            </span>
+                            <span className="switch-label">{acc.enabled ? '启用' : '停用'}</span>
+                          </label>
+                        ) : (
+                          <span className="account-readonly-note">只读</span>
+                        )}
                       </td>
                       <td>
-                        <button
-                          className="btn-sm"
-                          disabled={acc.isDefault || !acc.enabled}
-                          onClick={() => void onSetDefault(acc.keyId)}
-                          title={
-                            !acc.enabled
-                              ? '账号已停用，请先启用'
-                              : acc.isDefault
-                                ? '已是默认账号'
-                                : '设为默认：优先扣减该账号额度'
-                          }
-                        >
-                          设为默认
-                        </button>{' '}
-                        <button
-                          className="btn-sm"
-                          onClick={() => void onTest(acc.keyId)}
-                          disabled={acc.authType !== 'cookie' || !acc.enabled}
-                          title={
-                            !acc.enabled
-                              ? '账号已停用，请先启用'
-                              : acc.authType !== 'cookie'
-                                ? 'API Key 无需健康检查'
-                                : undefined
-                          }
-                        >
-                          测试
-                        </button>{' '}
-                        <button
-                          className="btn-sm"
-                          style={{ color: 'var(--error)' }}
-                          disabled={!acc.enabled}
-                          title={acc.enabled ? undefined : '账号已停用，请先启用'}
-                          onClick={() => void onUnbind(acc.keyId)}
-                        >
-                          解绑
-                        </button>
+                        {acc.ownerUserId === currentUserId ? (
+                          <>
+                            {acc.teamId ? (
+                              <button
+                                className="btn-sm"
+                                onClick={() => void onSetScope(acc.keyId, null)}
+                                title="把该账号取消共享，回到个人账号"
+                              >
+                                取消共享
+                              </button>
+                            ) : team ? (
+                              <button
+                                className="btn-sm"
+                                onClick={() => void onSetScope(acc.keyId, team.id)}
+                                title="把该账号共享给当前团队"
+                              >
+                                共享到团队
+                              </button>
+                            ) : null}{' '}
+                            <button
+                              className="btn-sm"
+                              disabled={acc.isDefault || !acc.enabled}
+                              onClick={() => void onSetDefault(acc.keyId)}
+                              title={
+                                !acc.enabled
+                                  ? '账号已停用，请先启用'
+                                  : acc.isDefault
+                                    ? '已是默认账号'
+                                    : '设为默认：优先扣减该账号额度'
+                              }
+                            >
+                              设为默认
+                            </button>{' '}
+                            <button
+                              className="btn-sm"
+                              onClick={() => void onTest(acc.keyId)}
+                              disabled={acc.authType !== 'cookie' || !acc.enabled}
+                              title={
+                                !acc.enabled
+                                  ? '账号已停用，请先启用'
+                                  : acc.authType !== 'cookie'
+                                    ? 'API Key 无需健康检查'
+                                    : undefined
+                              }
+                            >
+                              测试
+                            </button>{' '}
+                            <button
+                              className="btn-sm"
+                              style={{ color: 'var(--error)' }}
+                              disabled={!acc.enabled}
+                              title={acc.enabled ? undefined : '账号已停用，请先启用'}
+                              onClick={() => void onUnbind(acc.keyId)}
+                            >
+                              解绑
+                            </button>
+                          </>
+                        ) : (
+                          <span className="account-readonly-note">只读</span>
+                        )}
                       </td>
                     </tr>
                   ))}

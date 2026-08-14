@@ -118,6 +118,7 @@ export interface GenerateRequest {
   accessToken: string
   refreshToken: string
   userId: string
+  teamId?: string | null
   prompt: string
   providerId: string
   durationSec: number

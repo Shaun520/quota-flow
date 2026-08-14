@@ -13,7 +13,7 @@ import { useAuth } from './hooks/useAuth'
 import type { AuthUser } from './hooks/useAuth'
 import { useProviders } from './hooks/useProviders'
 import { useJobs } from './hooks/useJobs'
-import type { TeamContext } from '@quota-flow/db-supabase'
+import type { TeamContext, UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import {
   Modal,
   ProfileModal,
@@ -26,6 +26,7 @@ import {
 import { getSupabaseConfig, getAuthService } from './auth/service'
 import {
   IconClock,
+  IconChevron,
   IconGear,
   IconGrid,
   IconLogout,
@@ -36,6 +37,16 @@ import {
 import desktopPackage from '../../../package.json'
 
 type TabId = 'dispatch' | 'providers' | 'history' | 'team'
+
+function readStoredViewScope(hasTeam: boolean): ViewScope {
+  const stored = localStorage.getItem('qf-view-scope')
+  if (hasTeam && (stored === 'team' || stored === 'global')) return stored
+  return hasTeam ? 'global' : 'personal'
+}
+
+function readStoredUsageScope(): UsageScope {
+  return localStorage.getItem('qf-usage-scope') === 'team' ? 'team' : 'personal'
+}
 
 interface TabDef {
   id: TabId
@@ -96,8 +107,10 @@ function MainApp({
   onSignOut,
   onRefreshTeam
 }: MainAppProps) {
+  const [viewScope, setViewScope] = useState<ViewScope>(() => readStoredViewScope(!!team))
+  const [usageScope, setUsageScope] = useState<UsageScope>(readStoredUsageScope)
   // 厂商 / 任务数据提升到 MainApp 层：随 user 挂载/卸载，账号切换时整棵数据树重建，避免残留上一账号数据
-  const providers = useProviders()
+  const providers = useProviders(viewScope)
   const jobs = useJobs()
   const [bannerDismissed, setBannerDismissed] = useState(() => readWelcomeDismissed(user.id))
   const onboardStep = useMemo<1 | 2 | 3>(() => {
@@ -131,16 +144,78 @@ function MainApp({
       ? (t as TabId)
       : 'dispatch'
   })
+  const providersTabActiveRef = useRef(tab === 'providers')
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
+  const [scopeOpen, setScopeOpen] = useState(false)
+  const scopeWrapRef = useRef<HTMLDivElement | null>(null)
   const [renewText, setRenewText] = useState('自动续命：—')
   const [updatePromptVisible, setUpdatePromptVisible] = useState(false)
+
+  useEffect(() => {
+    const wasActive = providersTabActiveRef.current
+    providersTabActiveRef.current = tab === 'providers'
+    if (!wasActive && tab === 'providers') providers.reload()
+  }, [tab, providers.reload])
+
+  const scopeLabel = useMemo(() => {
+    if (viewScope === 'team') return '团队模式'
+    if (viewScope === 'global') return '全局模式'
+    return '个人模式'
+  }, [viewScope])
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
     window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), 2200)
   }, [])
+
+  const switchViewScope = useCallback((scope: ViewScope) => {
+    if (scope === 'team' && !team) {
+      showToast('请先加入团队')
+      return
+    }
+    setViewScope(scope)
+    localStorage.setItem('qf-view-scope', scope)
+    if (scope === 'personal') {
+      setUsageScope('personal')
+      localStorage.setItem('qf-usage-scope', 'personal')
+    } else if (scope === 'team') {
+      setUsageScope('team')
+      localStorage.setItem('qf-usage-scope', 'team')
+    }
+  }, [team, showToast])
+
+  const switchUsageScope = useCallback((scope: UsageScope) => {
+    setUsageScope(scope)
+    localStorage.setItem('qf-usage-scope', scope)
+  }, [])
+
+  useEffect(() => {
+    if (!scopeOpen) return
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!scopeWrapRef.current?.contains(event.target as Node)) {
+        setScopeOpen(false)
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setScopeOpen(false)
+    }
+
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [scopeOpen])
+
+  useEffect(() => {
+    if (!team && (viewScope === 'team' || viewScope === 'global')) {
+      switchViewScope('personal')
+    }
+  }, [team, viewScope, switchViewScope])
 
   useEffect(() => {
     applyTheme(getInitialTheme())
@@ -231,9 +306,69 @@ function MainApp({
         })}
 
         <div className="user-area">
-          <div className="team-badge">
-            <IconUsers size={10} />
-            {team ? '团队 · ' + team.id.slice(0, 8) : providers.totalBound > 0 || !fresh ? '个人模式' : '新用户 · 未绑定'}
+          <div
+            className={'scope-switcher' + (scopeOpen ? ' open' : '')}
+            ref={scopeWrapRef}
+            aria-label="账号显示模式"
+          >
+            <button
+              className="scope-trigger"
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded={scopeOpen}
+              onClick={() => setScopeOpen((open) => !open)}
+              title="点击切换账号显示模式"
+            >
+              <IconUsers size={12} />
+              <span>{scopeLabel}</span>
+              <IconChevron size={11} className="scope-chevron" />
+            </button>
+            <div className="scope-menu" role="listbox" aria-label="账号显示模式">
+              <button
+                className={'scope-option' + (viewScope === 'personal' ? ' active' : '')}
+                type="button"
+                role="option"
+                aria-selected={viewScope === 'personal'}
+                onClick={() => {
+                  switchViewScope('personal')
+                  setScopeOpen(false)
+                }}
+                title="只显示个人账号，使用个人额度"
+              >
+                <span>个人模式</span>
+                {viewScope === 'personal' && <span className="scope-option-check">✓</span>}
+              </button>
+              <button
+                className={'scope-option' + (viewScope === 'team' ? ' active' : '')}
+                type="button"
+                role="option"
+                aria-selected={viewScope === 'team'}
+                disabled={!team}
+                onClick={() => {
+                  switchViewScope('team')
+                  setScopeOpen(false)
+                }}
+                title={team ? '只显示团队账号，使用团队额度' : '加入团队后可切换'}
+              >
+                <span>团队模式</span>
+                {viewScope === 'team' && <span className="scope-option-check">✓</span>}
+              </button>
+              <button
+                className={'scope-option' + (viewScope === 'global' ? ' active' : '')}
+                type="button"
+                role="option"
+                aria-selected={viewScope === 'global'}
+                disabled={!team}
+                onClick={() => {
+                  switchViewScope('global')
+                  setScopeOpen(false)
+                }}
+                title={team ? '同时显示个人账号和团队账号，可在生成时选择额度' : '加入团队后可切换'}
+              >
+                <span>全局模式</span>
+                {viewScope === 'global' && <span className="scope-option-check">✓</span>}
+              </button>
+            </div>
           </div>
           <NotificationBell userId={user.id} />
           <div className="avatar-wrap">
@@ -280,6 +415,9 @@ function MainApp({
               fresh={fresh}
               banner={bannerVisible}
               step={onboardStep}
+              viewScope={viewScope}
+              usageScope={usageScope}
+              onUsageScopeChange={switchUsageScope}
               onGoHistory={() => setTab('history')}
               onGoProviders={() => setTab('providers')}
               providers={providers}
@@ -287,13 +425,14 @@ function MainApp({
             />
           </div>
           <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
-            <Providers fresh={fresh} providers={providers} />
+            <Providers fresh={fresh} viewScope={viewScope} usageScope={usageScope} providers={providers} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
             <History jobs={jobs} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'team' ? 'flex' : 'none' }}>
             <Team
+              active={tab === 'team'}
               fresh={fresh}
               userId={user.id}
               team={team}

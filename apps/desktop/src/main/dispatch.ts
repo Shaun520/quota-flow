@@ -17,6 +17,7 @@ export interface GenerateInput {
   accessToken: string
   refreshToken: string
   userId: string
+  teamId?: string | null
   prompt: string
   providerId: string
   durationSec: number
@@ -209,6 +210,7 @@ export async function runGenerate(
   let job
   try {
     job = await jobSvc.insertJob(input.userId, {
+      teamId: input.teamId,
       mode: input.mode === 'img2video' ? 'img2video' : 'text2video',
       prompt: input.prompt,
       status: 'pending',
@@ -251,7 +253,9 @@ export async function runGenerate(
     watermarkEnabled: input.watermarkEnabled !== false
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
-  const keys = await providerSvc.listProviderKeys(input.userId)
+  const keys = input.teamId
+    ? await providerSvc.listTeamProviderKeys(input.teamId)
+    : (await providerSvc.listProviderKeys(input.userId)).filter((k) => !k.team_id)
   const doubaoKeys = keys.filter((k) => k.provider_id === 'doubao' && k.enabled !== false)
 
   let selectedKey: { id: string; accountName: string | null } | null = null
@@ -270,27 +274,12 @@ export async function runGenerate(
     return { ok: false, jobId: job.id, error: err }
   } else {
     try {
-      const providers = await providerSvc.listProviders()
-      const doubaoMeta = providers.find((p) => p.id === 'doubao')
-      const dailyTotal = Number(doubaoMeta?.default_daily_quota ?? 10)
-      const unitName = doubaoMeta?.unit_name ?? '点'
       const today = todayKey()
-      const ledgers = await providerSvc.listLedger(input.userId)
-
-      // 确保每个账号今日 ledger 行存在（每日 0 点重置）
-      for (const k of doubaoKeys) {
-        const hasToday = ledgers.some((l) => l.account_key_id === k.id && l.date === today)
-        if (!hasToday) {
-          await providerSvc.getOrInitLedger({
-            userId: input.userId,
-            providerId: 'doubao',
-            unitName,
-            dailyTotal,
-            keyId: k.id
-          })
-        }
-      }
-      const freshLedgers = await providerSvc.listLedger(input.userId)
+      // 批量确保今日 ledger 行存在，避免逐账号请求拖慢生成前的额度排序。
+      await providerSvc.ensureProviderLedgerRows(input.userId, input.teamId ?? null, doubaoKeys.map((k) => k.id))
+      const freshLedgers = input.teamId
+        ? await providerSvc.listTeamTodayLedger(input.teamId)
+        : await providerSvc.listTodayLedger(input.userId)
       const remainingOf = (keyId: string): number => {
         const row = freshLedgers.find((l) => l.account_key_id === keyId && l.date === today)
         // 用 daily_total - used - reserved 而非 remaining，与 RPC 原子扣减条件一致
@@ -450,16 +439,31 @@ export async function runGenerate(
 
   // 先扣额度（原子 RPC），成功后再写 job success；
   // 失败则 job 标记 failed，通过 reconciliation 兜底追记
-  let consumed: Awaited<ReturnType<typeof providerSvc.consumeLedger>> | null = null
+  let consumed: QuotaLedgerRow | null = null
   try {
-    consumed = await providerSvc.consumeLedger(input.userId, 'doubao', cost, {
-      unitName: '点',
-      keyId: selectedKey?.id ?? undefined
-    })
-    if (selectedKey?.id && consumed) {
-      await providerSvc.insertQuotaOperation(job.id, consumed.id, 'finalize', cost)
+    if (input.teamId) {
+      const teamResult = await providerSvc.consumeTeamQuotaAndFinalize({
+        teamId: input.teamId,
+        userId: input.userId,
+        providerId: 'doubao',
+        amount: cost,
+        keyId: selectedKey?.id ?? null,
+        jobId: job.id
+      })
+      if (!teamResult.ok) {
+        throw new Error(`[${teamResult.code || 'UNKNOWN'}] ${teamResult.message || '额度扣减失败'}`)
+      }
+      consumed = teamResult.row ?? null
+    } else {
+      consumed = await providerSvc.consumeLedger(input.userId, 'doubao', cost, {
+        unitName: '点',
+        keyId: selectedKey?.id ?? undefined
+      })
+      if (selectedKey?.id && consumed) {
+        await providerSvc.insertQuotaOperation(job.id, consumed.id, 'finalize', cost)
+      }
     }
-    onQuotaUpdated?.({ userId: input.userId, ledger: consumed })
+    if (consumed) onQuotaUpdated?.({ userId: input.userId, ledger: consumed })
   } catch (e) {
     const errMsg = '额度扣减失败: ' + (e instanceof Error ? e.message : String(e))
     await jobSvc.updateJob(input.userId, job.id, {

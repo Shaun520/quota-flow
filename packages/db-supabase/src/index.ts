@@ -20,6 +20,9 @@ export function todayKey(): string {
 
 export type TeamRole = 'admin' | 'member'
 
+export type ViewScope = 'personal' | 'team' | 'global'
+export type UsageScope = 'personal' | 'team'
+
 export interface TeamContext {
   id: string
   role: TeamRole
@@ -73,6 +76,22 @@ export interface TeamDetail {
   total_usage: number
   key_count: number
   current_user_role: TeamRole
+  quota: TeamQuota | null
+}
+
+export interface TeamQuota {
+  provider_id: string
+  daily_total: number
+  used: number
+  remaining: number
+  reserved: number
+}
+
+export interface TeamQuotaSummary {
+  team_id: string
+  quota: TeamQuota
+  member_used: number
+  member_limit: number | null
 }
 
 export interface TeamMemberView {
@@ -138,6 +157,16 @@ export class TeamService {
     return normalizeTeamDetail(raw.team)
   }
 
+  async getQuota(teamId: string, providerId = 'doubao'): Promise<TeamQuotaSummary | null> {
+    const { data, error } = await this.client.rpc('get_team_quota', {
+      p_team_id: teamId,
+      p_provider_id: providerId
+    })
+    if (error) throw error
+    if (!data) return null
+    return normalizeTeamQuotaSummary(data as Record<string, unknown>)
+  }
+
   async listMembers(teamId: string): Promise<TeamMemberView[]> {
     const { data, error } = await this.client.rpc('get_team_members', { p_team_id: teamId })
     if (error) throw error
@@ -186,6 +215,11 @@ export class TeamService {
       .eq('user_id', targetUserId)
     if (error) throw error
   }
+
+  async leaveTeam(teamId: string): Promise<void> {
+    const { error } = await this.client.rpc('team_leave', { p_team_id: teamId })
+    if (error) throw error
+  }
 }
 
 function normalizeTeamDetail(it: Record<string, unknown>): TeamDetail {
@@ -206,7 +240,30 @@ function normalizeTeamDetail(it: Record<string, unknown>): TeamDetail {
     month_usage: Number(it.month_usage ?? 0),
     total_usage: Number(it.total_usage ?? 0),
     key_count: Number(it.key_count ?? 0),
-    current_user_role: (it.current_user_role === 'admin' ? 'admin' : 'member') as TeamRole
+    current_user_role: (it.current_user_role === 'admin' ? 'admin' : 'member') as TeamRole,
+    quota: normalizeTeamQuota(it.quota as Record<string, unknown> | null)
+  }
+}
+
+function normalizeTeamQuota(it: Record<string, unknown> | null | undefined): TeamQuota | null {
+  if (!it) return null
+  return {
+    provider_id: String(it.provider_id ?? ''),
+    daily_total: Number(it.daily_total ?? 0),
+    used: Number(it.used ?? 0),
+    remaining: Number(it.remaining ?? 0),
+    reserved: Number(it.reserved ?? 0)
+  }
+}
+
+function normalizeTeamQuotaSummary(it: Record<string, unknown>): TeamQuotaSummary | null {
+  const quota = normalizeTeamQuota(it.quota as Record<string, unknown> | null)
+  if (!quota) return null
+  return {
+    team_id: String(it.team_id ?? ''),
+    quota,
+    member_used: Number(it.member_used ?? 0),
+    member_limit: it.member_limit == null ? null : Number(it.member_limit)
   }
 }
 
@@ -382,6 +439,16 @@ export class ProviderService {
     return (data ?? []) as unknown as ProviderKey[]
   }
 
+  async listTeamProviderKeys(teamId: string): Promise<ProviderKey[]> {
+    const { data, error } = await this.client
+      .from('provider_keys')
+      .select('*')
+      .eq('team_id', teamId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as ProviderKey[]
+  }
+
   async addProviderKey(input: AddProviderKeyInput): Promise<ProviderKey | null> {
     const payload: Record<string, unknown> = {
       owner_user_id: input.ownerUserId,
@@ -483,6 +550,14 @@ export class ProviderService {
     if (error) throw error
   }
 
+  async setProviderKeyScope(keyId: string, teamId: string | null): Promise<void> {
+    const { error } = await this.client.rpc('set_provider_key_scope', {
+      p_key_id: keyId,
+      p_team_id: teamId ?? null
+    })
+    if (error) throw error
+  }
+
   /** 设为默认账号：通过 RPC 事务化完成清旧+设新，消除中间态空窗 */
   async setDefaultKey(userId: string, providerId: string, keyId: string): Promise<LedgerResult> {
     const { data, error } = await this.client.rpc('set_default_key', {
@@ -501,6 +576,56 @@ export class ProviderService {
       .select('*')
       .eq('owner_user_id', userId)
       .order('date', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as QuotaLedgerRow[]
+  }
+
+  async listTeamLedger(teamId: string): Promise<QuotaLedgerRow[]> {
+    const { data, error } = await this.client
+      .from('quota_ledger')
+      .select('*')
+      .eq('team_id', teamId)
+      .order('date', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as QuotaLedgerRow[]
+  }
+
+  async listTodayLedger(userId: string): Promise<QuotaLedgerRow[]> {
+    const today = todayKey()
+    const { data, error } = await this.client
+      .from('quota_ledger')
+      .select('*')
+      .eq('owner_user_id', userId)
+      .eq('date', today)
+      .order('date', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as QuotaLedgerRow[]
+  }
+
+  async listTeamTodayLedger(teamId: string): Promise<QuotaLedgerRow[]> {
+    const today = todayKey()
+    const { data, error } = await this.client
+      .from('quota_ledger')
+      .select('*')
+      .eq('team_id', teamId)
+      .eq('date', today)
+      .order('date', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as QuotaLedgerRow[]
+  }
+
+  /** 批量初始化缺失的今日额度行，避免厂商列表/调度前对每个账号逐个请求。 */
+  async ensureProviderLedgerRows(
+    userId: string,
+    teamId: string | null,
+    keyIds: string[]
+  ): Promise<QuotaLedgerRow[]> {
+    if (keyIds.length === 0) return []
+    const { data, error } = await this.client.rpc('ensure_provider_ledger_rows', {
+      p_user_id: userId,
+      p_team_id: teamId ?? null,
+      p_key_ids: keyIds
+    })
     if (error) throw error
     return (data ?? []) as unknown as QuotaLedgerRow[]
   }
@@ -614,6 +739,43 @@ export class ProviderService {
     throw new Error(`[${result.code || 'UNKNOWN'}] ${result.message || '额度扣减失败'}`)
   }
 
+  async consumeTeamQuotaAndFinalize(
+    input: {
+      teamId: string
+      userId: string
+      providerId: string
+      amount: number
+      keyId?: string | null
+      date?: string
+      jobId?: string | null
+    }
+  ): Promise<{ ok: boolean; code?: string; message?: string; row?: QuotaLedgerRow | null; quota?: TeamQuota | null }> {
+    const { data, error } = await this.client.rpc('team_consume_quota_and_finalize', {
+      p_team_id: input.teamId,
+      p_user_id: input.userId,
+      p_provider_id: input.providerId,
+      p_amount: input.amount,
+      p_account_key_id: input.keyId ?? null,
+      p_date: input.date ?? todayKey(),
+      p_job_id: input.jobId ?? null
+    })
+    if (error) throw error
+    const raw = (data ?? { ok: false, code: 'DB_ERROR', message: 'RPC 返回空' }) as {
+      ok?: boolean
+      code?: string
+      message?: string
+      row?: Record<string, unknown> | null
+      quota?: Record<string, unknown> | null
+    }
+    return {
+      ok: !!raw.ok,
+      code: raw.code,
+      message: raw.message,
+      row: raw.row ? (raw.row as unknown as QuotaLedgerRow) : null,
+      quota: normalizeTeamQuota(raw.quota)
+    }
+  }
+
   /** 释放预占额度（RPC 原子操作） */
   async releaseLedger(
     userId: string,
@@ -663,10 +825,10 @@ export class ProviderService {
   }
 
   /** reconciliation：查找已成功但未 finalize 的 job */
-  async findUnfinalizedJobs(userId: string): Promise<Array<{ jobId: string; costAmount: number; keyId: string | null }>> {
+  async findUnfinalizedJobs(userId: string): Promise<Array<{ jobId: string; costAmount: number; keyId: string | null; teamId: string | null }>> {
     const { data, error } = await this.client
       .from('jobs')
-      .select('id, cost_amount, account_id')
+      .select('id, cost_amount, account_id, team_id')
       .eq('user_id', userId)
       .eq('status', 'success')
       .gt('cost_amount', 0)
@@ -682,9 +844,9 @@ export class ProviderService {
     if (opsError) throw opsError
     const finalizedIds = new Set((ops ?? []).map((o: { job_id: string }) => o.job_id))
 
-    return (data as Array<{ id: string; cost_amount: number; account_id: string | null }>)
+    return (data as Array<{ id: string; cost_amount: number; account_id: string | null; team_id: string | null }>)
       .filter((j) => !finalizedIds.has(j.id))
-      .map((j) => ({ jobId: j.id, costAmount: Number(j.cost_amount ?? 0), keyId: j.account_id }))
+      .map((j) => ({ jobId: j.id, costAmount: Number(j.cost_amount ?? 0), keyId: j.account_id, teamId: j.team_id }))
   }
 }
 

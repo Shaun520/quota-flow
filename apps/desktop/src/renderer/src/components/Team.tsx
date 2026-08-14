@@ -5,6 +5,7 @@ import { IconUsers } from './icons'
 import { EmptyState } from './EmptyState'
 
 interface TeamProps {
+  active: boolean
   fresh: boolean
   userId: string
   team: TeamContext | null
@@ -42,7 +43,7 @@ function statusTone(status: string | null): string {
   return 'badge badge-muted'
 }
 
-export default function Team({ userId, team, onTeamChanged }: TeamProps) {
+export default function Team({ active, userId, team, onTeamChanged }: TeamProps) {
   const [detail, setDetail] = useState<TeamDetail | null>(null)
   const [members, setMembers] = useState<TeamMemberView[]>([])
   const [invitations, setInvitations] = useState<TeamInvitation[]>([])
@@ -68,6 +69,7 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
     const service = getTeamService()
     if (!service) {
       setError('Supabase 未配置')
+      setLoading(false)
       return
     }
 
@@ -103,8 +105,8 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
   }, [team])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (active) void load()
+  }, [active, load])
 
   useEffect(() => {
     if (!notice) return
@@ -223,6 +225,24 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
     }
   }
 
+  async function handleLeave(): Promise<void> {
+    if (!team || isOwner) return
+    if (!window.confirm('退出团队后，你自己共享给该团队的账号会变回个人账号。确定退出吗？')) return
+    const service = getTeamService()
+    if (!service) return
+    setBusy(true)
+    setError(null)
+    try {
+      await service.leaveTeam(team.id)
+      await onTeamChanged()
+      setNotice('已退出团队')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '退出失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!team) {
     return (
       <div className="tab-wrap">
@@ -239,7 +259,7 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
           className="team-empty"
           icon={<IconUsers size={20} />}
           title="你还没有加入任何团队"
-          description="创建团队后可以集中管理成员与邀请码；共享额度池不在本轮范围。"
+          description="创建团队后可以集中管理成员、邀请码和团队额度。"
           action={
             <div className="team-empty-actions">
               <input
@@ -292,7 +312,8 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
               {members.length}/{detail?.seats_limit ?? '-'} 席位
             </span>
           </div>
-          <div className="history-table-wrap" style={{ flex: 1, minHeight: 0 }}>
+          <div className={'history-table-wrap' + (loading && members.length > 0 ? ' table-wrap-loading' : '')} style={{ flex: 1, minHeight: 0 }}>
+            {loading && members.length > 0 ? <div className="table-refresh-overlay">刷新中...</div> : null}
             <div className="table-scroll">
               <table className="team-table">
                 <thead>
@@ -396,6 +417,12 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
               <div className="config-label">累计用量</div>
               <div className="config-val">{detail ? formatCount(detail.total_usage) : '-'}</div>
             </div>
+            <div className="config-card">
+              <div className="config-label">团队共享额度</div>
+              <div className="config-val">
+                {detail?.quota ? `${Math.round(detail.quota.used)}/${Math.round(detail.quota.daily_total)}` : '-'}
+              </div>
+            </div>
           </div>
 
           {isOwner ? (
@@ -433,6 +460,11 @@ export default function Team({ userId, team, onTeamChanged }: TeamProps) {
             <button className="btn-sm" style={{ flex: 1 }} disabled={loading} onClick={() => void load()}>
               刷新
             </button>
+            {!isOwner ? (
+              <button className="btn-sm danger" style={{ flex: 1 }} disabled={busy} onClick={() => void handleLeave()}>
+                退出团队
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
