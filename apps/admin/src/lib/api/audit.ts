@@ -62,7 +62,8 @@ export function actionLabel(action: string): string {
     "key.bind": "绑定账号",
     "key.unbind": "解绑账号",
     "sub.update": "订阅变更",
-    "cost.update": "消耗表更新"
+    "cost.update": "消耗表更新",
+    "audit.clear": "清除日志"
   };
   return map[action] ?? action;
 }
@@ -133,19 +134,33 @@ function timeRangeToDates(range: AuditLogTimeRange): { from: Date | null; to: Da
   }
 }
 
-export async function listAuditLogs(params: AuditLogListParams = {}): Promise<AuditLogListResult> {
-  const supabase = createAdminBrowserClient();
-  const page = params.page ?? 1;
-  const pageSize = params.pageSize ?? 20;
+/** 将筛选参数映射为 RPC 命名参数，供列表 / 清除共用，保证范围一致。 */
+function buildFilterArgs(params: AuditLogListParams): {
+  p_action: string | null;
+  p_team_id: string | null;
+  p_user_id: string | null;
+  p_from: string | null;
+  p_to: string | null;
+  p_search: string | null;
+} {
   const { from, to } = timeRangeToDates(params.timeRange ?? "all");
-
-  const { data, error } = await supabase.rpc("admin_list_audit_logs", {
+  return {
     p_action: params.action || null,
     p_team_id: params.teamId || null,
     p_user_id: params.userId || null,
     p_from: from?.toISOString() || null,
     p_to: to?.toISOString() || null,
-    p_search: params.search?.trim() || null,
+    p_search: params.search?.trim() || null
+  };
+}
+
+export async function listAuditLogs(params: AuditLogListParams = {}): Promise<AuditLogListResult> {
+  const supabase = createAdminBrowserClient();
+  const page = params.page ?? 1;
+  const pageSize = params.pageSize ?? 20;
+
+  const { data, error } = await supabase.rpc("admin_list_audit_logs", {
+    ...buildFilterArgs(params),
     p_limit: pageSize,
     p_offset: (page - 1) * pageSize
   });
@@ -156,6 +171,16 @@ export async function listAuditLogs(params: AuditLogListParams = {}): Promise<Au
     total: Number(raw.total ?? 0),
     items: (raw.items ?? []).map((it) => normalizeAuditLog(it as Record<string, unknown>))
   };
+}
+
+/** 清除当前筛选条件下的审计日志，返回被删除条数。 */
+export async function clearAuditLogs(params: AuditLogListParams = {}): Promise<number> {
+  const supabase = createAdminBrowserClient();
+  const { data, error } = await supabase.rpc("admin_clear_audit_logs", buildFilterArgs(params));
+  if (error) throw error;
+
+  const raw = (data ?? { deleted: 0 }) as { deleted?: number };
+  return Number(raw.deleted ?? 0);
 }
 
 export function toCsv(logs: AuditLog[]): string {
