@@ -13,7 +13,8 @@ const PROVIDER_NAME: Record<string, string> = {
 
 const MODE_LABEL: Record<string, string> = {
   text2video: '文生视频', img2video: '图生视频',
-  video2video: '视频转视频', imgs2video: '多图生视频'
+  video2video: '视频转视频', imgs2video: '多图生视频',
+  multi_ref: '多参考生成', first_last: '首尾帧生成', first_frame: '首帧生成'
 }
 
 const UNIT_MAP: Record<string, string> = {

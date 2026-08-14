@@ -121,6 +121,7 @@ export interface GenerateRequest {
   teamId?: string | null
   prompt: string
   providerId: string
+  model?: string
   durationSec: number
   mode?: string
   resolution?: string

@@ -5,6 +5,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
   doubao: '豆包',
   jimeng: '即梦',
   qwen: '通义万相',
+  qwenwan: '千问（通义万相）',
   yuanbao: '元宝混元',
   kling: '可灵',
   hailuo: '海螺',
@@ -16,6 +17,7 @@ export const MODELS: Record<string, string[]> = {
   doubao: ['Seedance 2.0 Mini'],
   jimeng: ['视频 S2.0', '视频 S2.0 Pro'],
   qwen: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
+  qwenwan: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   yuanbao: ['混元（固定）'],
   kling: ['可灵-标准', '可灵-大师'],
   hailuo: ['海螺-标准'],
@@ -31,6 +33,28 @@ export interface DurationOption {
 export const DEFAULT_SUPPORTED_DURATIONS = [5, 10]
 
 const DURATION_ORDER = [5, 10, 15] as const
+
+/** 千问视频生成模式按模型限定；本轮不再给 qwenwan 暴露文生/图生视频 */
+export function providerModeOptions(provider: string, model = ''): Array<{ value: string; label: string }> {
+  if (provider === 'qwenwan') {
+    if (model === '万相 2.7') {
+      return [
+        { value: 'multi_ref', label: '多参考生成' },
+        { value: 'first_last', label: '首尾帧生成' }
+      ]
+    }
+    return [
+      { value: 'multi_ref', label: '多参考生成' },
+      { value: 'first_frame', label: '首帧生成' }
+    ]
+  }
+  return [
+    { value: 't2v', label: '文生视频' },
+    { value: 'img', label: '图生视频' },
+    { value: 'multi_ref', label: '多参考生成' },
+    { value: 'first_last', label: '首尾帧生成' }
+  ]
+}
 
 export function intersectDurations(lists: number[][]): number[] {
   if (lists.length === 0) return [...DEFAULT_SUPPORTED_DURATIONS]
@@ -68,7 +92,7 @@ export function durationOptions(
     d15.label = '15 秒（仅 VIP）'
     d15.disabled = true
   }
-  if (provider === 'qwen' && d15) {
+  if ((provider === 'qwen' || provider === 'qwenwan') && d15) {
     if (model === '万相 2.6' && mode === 'multi_ref') {
       d15.label = '15 秒（多参考不支持）'
       d15.disabled = true
@@ -91,10 +115,27 @@ export function resolutionOptions(
   ]
 }
 
+export function ratioOptions(provider: string): Array<{ value: string; label: string }> {
+  if (provider === 'qwenwan') {
+    return [
+      { value: '9:16', label: '9:16' },
+      { value: '3:4', label: '3:4' },
+      { value: '1:1', label: '1:1' },
+      { value: '4:3', label: '4:3' },
+      { value: '16:9', label: '16:9' }
+    ]
+  }
+  return [
+    { value: '9:16', label: '9:16' },
+    { value: '16:9', label: '16:9' },
+    { value: '1:1', label: '1:1' }
+  ]
+}
+
 export function uploadHint(provider: string, mode: string): string {
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，不支持视频）'
   if (mode === 'multi_ref') return '拖拽图片 / 视频到此处（多参考生成，最多 5 个）'
-  if (mode === 'img' || mode === 'first_last') return '拖拽图片到此处，或点击选择文件'
+  if (mode === 'img' || mode === 'first_last' || mode === 'first_frame') return '拖拽图片到此处，或点击选择文件'
   return '文生视频无需上传素材'
 }
 
@@ -112,7 +153,7 @@ export function computeCost(
   resolution: string
 ): CostResult {
   const d = DURATION_POINT[duration] ?? 0
-  if (provider === 'qwen') {
+  if (provider === 'qwen' || provider === 'qwenwan') {
     const cost = 1 + d + (resolution === '1080' ? 1 : 0)
     return { text: cost + ' 额度', who: model + ' · ' + duration + 's · ' + resolution + 'p' }
   }

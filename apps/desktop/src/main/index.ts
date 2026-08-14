@@ -442,7 +442,7 @@ app.whenReady().then(() => {
             ? {
                 p_team_id: u.teamId,
                 p_user_id: params.userId,
-                p_provider_id: 'doubao',
+                p_provider_id: u.providerId ?? 'doubao',
                 p_amount: u.costAmount,
                 p_account_key_id: u.keyId,
                 p_date: todayKey(),
@@ -450,7 +450,7 @@ app.whenReady().then(() => {
               }
             : {
                 p_user_id: params.userId,
-                p_provider_id: 'doubao',
+                p_provider_id: u.providerId ?? 'doubao',
                 p_amount: u.costAmount,
                 p_key_id: u.keyId,
                 p_date: todayKey(),

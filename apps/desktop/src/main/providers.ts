@@ -41,8 +41,8 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
     healthUrl: 'https://tongyi.aliyun.com/'
   },
   qwenwan: {
-    loginUrl: 'https://tongyi.aliyun.com/wanxiang/create',
-    healthUrl: 'https://tongyi.aliyun.com/'
+    loginUrl: 'https://www.qianwen.com/chat',
+    healthUrl: 'https://www.qianwen.com/'
   },
   yuanbao: {
     loginUrl: 'https://yuanbao.tencent.com/chat/naQivTmsDa',
@@ -122,7 +122,7 @@ function encryptCookies(
   const payload: StoredV2 = { cookies }
   if (storages.length > 0) payload.storages = storages
   // 兼容 v1 字段，供老代码读取
-  const main = storages.find((s) => s.origin.includes('doubao.com')) || storages[0]
+  const main = storages.find((s) => s.origin.includes('doubao.com') || s.origin.includes('qianwen.com')) || storages[0]
   if (main?.localStorage.length) payload.localStorage = main.localStorage
   const plain = JSON.stringify(payload)
   return safeStorage.encryptString(plain).toString('base64')
@@ -130,8 +130,12 @@ function encryptCookies(
 
 export { encryptCookies }
 
+function defaultStorageOrigin(providerId: string): string {
+  return providerId === 'qwenwan' ? 'https://www.qianwen.com' : 'https://www.doubao.com'
+}
+
 /** 兼容 v0 / v1 / v2 格式，统一返回 cookies + storages（以及为调用方保留的 localStorage 兼容字段） */
-function parseStoredCredentials(encrypted: string): {
+export function parseStoredCredentials(encrypted: string, providerId = 'doubao'): {
   cookies: ProviderCookie[]
   storages: OriginStorage[]
   localStorage: Array<{ key: string; value: string }>
@@ -145,16 +149,17 @@ function parseStoredCredentials(encrypted: string): {
   const obj = parsed as StoredV2
   const cookies = obj.cookies ?? []
   const storages: OriginStorage[] = obj.storages ?? []
-  // v1 localStorage 归一化到 storages（豆包主站 origin）
+  // v1 localStorage 归一化到 storages（按厂商主站 origin，避免千问等厂商解析后仍落到豆包）
   if (obj.localStorage?.length && !storages.length) {
     storages.push({
-      origin: 'https://www.doubao.com',
+      origin: defaultStorageOrigin(providerId),
       localStorage: obj.localStorage,
       sessionStorage: []
     })
   }
-  // 兼容调用方取 localStorage 字段（豆包主站）
-  const mainStorage = storages.find((s) => s.origin.includes('www.doubao.com')) || storages[0]
+  // 兼容调用方取 localStorage 字段（当前厂商主站优先，其次任意已收集 storage）
+  const mainOrigin = defaultStorageOrigin(providerId)
+  const mainStorage = storages.find((s) => s.origin === mainOrigin) || storages[0]
   const localStorage = mainStorage?.localStorage ?? []
   return { cookies, storages, localStorage }
 }
@@ -187,7 +192,7 @@ async function injectCookies(
   for (const c of cookies) {
     try {
       await ses.cookies.set({
-        url: `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '') || 'www.doubao.com'}${c.path || '/'}`,
+        url: `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '') || defaultStorageOrigin(providerId).replace(/^https?:\/\//, '')}${c.path || '/'}`,
         domain: c.domain || undefined,
         name: c.name,
         value: c.value,
@@ -237,8 +242,8 @@ const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtr
   // 实测豆包分区 cookie：uid_tt/uid_tt_ss = 字节用户 ID（稳定），sid_tt/sessionid 为会话令牌（会变）
   doubao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   jimeng: { script: COMMON_FINGERPRINT_SCRIPT },
-  qwen: { script: COMMON_FINGERPRINT_SCRIPT },
-  qwenwan: { script: COMMON_FINGERPRINT_SCRIPT },
+  qwen: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
+  qwenwan: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   // 实测元宝分区 cookie：QQ 登录产生 pt2gguin(o+QQ号) 与 hy_user(元宝账号UUID)，均按账号稳定；
   // uin/wxuin/openid 实际不存在，cookie 标识已验证，优先于泛用 DOM 脚本
   yuanbao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
@@ -252,8 +257,9 @@ const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   // 实测值：抖音扫码登录时 uid_tt/uid_tt_ss 每次登录会变；flow_cur_user_sec_id 才是账号级稳定标识（两次登录一致）
   doubao: ['flow_cur_user_sec_id', 'uid_tt', 'uid_tt_ss'],
   jimeng: ['user_id', 'uid', 'userId'],
-  qwen: ['login_aliyunid', 'loginaliyunid'],
-  qwenwan: ['login_aliyunid', 'loginaliyunid'],
+  // 实测千问登录后 .www.qianwen.com 会下发 b-user-id；_QW_HASH_UID/_QW_WG_UID 是账号级标识兜底。
+  qwen: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
+  qwenwan: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
   // 实测值：pt2gguin = o<QQ号>（.ptlogin2.qq.com），hy_user = 元宝账号 UUID（.tencent.com）
   yuanbao: ['pt2gguin', 'hy_user'],
   kling: ['userId', 'user_id', 'kk_u'],
@@ -601,7 +607,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
               const viewCookies = cookies.length
 
               // 7) 候选 C 优化：如果传入了 keyId，同步把 cookie + storages
-              //    也注入 `persist:qf-p:doubao:<keyId>` 生成分区（避免生成时注入有时序差异）
+              //    也注入 `persist:qf-p:<providerId>:<keyId>` 生成分区（避免生成时注入有时序差异）
               if (keyId) {
                 try {
                   await injectCookies(providerId, cookies, keyId)
@@ -654,7 +660,7 @@ async function openProviderSite(
   ses.setUserAgent(CHROME_UA)
   if (encryptedKey) {
     try {
-      const parsed = parseStoredCredentials(encryptedKey)
+      const parsed = parseStoredCredentials(encryptedKey, providerId)
       if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
     } catch {
       // 解密失败时仍尝试打开官网，至少让用户看到站点本身。
@@ -707,7 +713,7 @@ async function healthCheck(
 
   let cookies: ProviderCookie[]
   try {
-    cookies = parseStoredCredentials(encrypted).cookies
+    cookies = parseStoredCredentials(encrypted, providerId).cookies
   } catch {
     return { ok: false, status: 'unknown', error: '解密失败' }
   }
@@ -791,7 +797,7 @@ export async function visitAndCapture(
   let cookies: ProviderCookie[]
   let oldStorages: OriginStorage[] = []
   try {
-    const parsed = parseStoredCredentials(encrypted)
+    const parsed = parseStoredCredentials(encrypted, providerId)
     cookies = parsed.cookies
     oldStorages = parsed.storages ?? []
   } catch {

@@ -483,7 +483,7 @@ export class ProviderService {
   async refreshProviderKey(
     userId: string,
     keyId: string,
-    input: { encryptedKey: string; expiresAt?: string | null; healthStatus?: string }
+    input: { encryptedKey: string; expiresAt?: string | null; healthStatus?: string; accountFingerprint?: string | null }
   ): Promise<void> {
     const payload: Record<string, unknown> = {
       encrypted_key: input.encryptedKey,
@@ -491,6 +491,9 @@ export class ProviderService {
     }
     payload.cookie_expires_at = input.expiresAt ?? null
     payload.health_status = input.healthStatus ?? 'unknown'
+    if (typeof input.accountFingerprint !== 'undefined') {
+      payload.account_fingerprint = input.accountFingerprint ?? null
+    }
     const { error } = await this.client
       .from('provider_keys')
       .update(payload)
@@ -830,10 +833,10 @@ export class ProviderService {
   }
 
   /** reconciliation：查找已成功但未 finalize 的 job */
-  async findUnfinalizedJobs(userId: string): Promise<Array<{ jobId: string; costAmount: number; keyId: string | null; teamId: string | null }>> {
+  async findUnfinalizedJobs(userId: string): Promise<Array<{ jobId: string; providerId: string | null; costAmount: number; keyId: string | null; teamId: string | null }>> {
     const { data, error } = await this.client
       .from('jobs')
-      .select('id, cost_amount, account_id, team_id')
+      .select('id, provider_id, cost_amount, account_id, team_id')
       .eq('user_id', userId)
       .eq('status', 'success')
       .gt('cost_amount', 0)
@@ -849,9 +852,9 @@ export class ProviderService {
     if (opsError) throw opsError
     const finalizedIds = new Set((ops ?? []).map((o: { job_id: string }) => o.job_id))
 
-    return (data as Array<{ id: string; cost_amount: number; account_id: string | null; team_id: string | null }>)
+    return (data as Array<{ id: string; provider_id: string | null; cost_amount: number; account_id: string | null; team_id: string | null }>)
       .filter((j) => !finalizedIds.has(j.id))
-      .map((j) => ({ jobId: j.id, costAmount: Number(j.cost_amount ?? 0), keyId: j.account_id, teamId: j.team_id }))
+      .map((j) => ({ jobId: j.id, providerId: j.provider_id, costAmount: Number(j.cost_amount ?? 0), keyId: j.account_id, teamId: j.team_id }))
   }
 }
 
