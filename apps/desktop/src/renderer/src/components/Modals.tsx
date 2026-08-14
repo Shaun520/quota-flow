@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { IconChevron, IconClose, PROVIDER_ICONS } from './icons'
+import { BrandMark } from './Brand'
 import Select from './Select'
 import { getProviderService } from '../auth/service'
 import { errMsg } from '../utils/error'
@@ -351,6 +352,111 @@ export function SettingsModal({ onClose, updater }: { onClose: () => void; updat
             重启安装
           </button>
         ) : null}
+      </div>
+    </Modal>
+  )
+}
+
+export function AboutModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal
+      title="关于我们"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn-sm primary" onClick={onClose}>
+            知道了
+          </button>
+        </>
+      }
+    >
+      <div className="about-box">
+        <div className="about-brand">
+          <BrandMark size={42} />
+        </div>
+        <div className="about-title">Quota-Flow</div>
+        <div className="about-meta">v{desktopPackage.version}</div>
+        <p className="about-desc">多厂商视频调度与额度管理的桌面工具。</p>
+        <div className="about-grid">
+          <div className="config-card">
+            <div className="config-label">产品</div>
+            <div className="config-val">Quota-Flow</div>
+          </div>
+          <div className="config-card">
+            <div className="config-label">版本</div>
+            <div className="config-val">v{desktopPackage.version}</div>
+          </div>
+        </div>
+        <div className="about-team">
+          <div className="about-section-title">开发团队</div>
+          <div className="about-team-grid">
+            <div className="config-card">
+              <div className="config-label">项目组</div>
+              <div className="config-val">Quota-Flow 项目组</div>
+            </div>
+            <div className="config-card">
+              <div className="config-label">职责</div>
+              <div className="config-val">桌面端、调度链路、数据层与运维支持</div>
+            </div>
+          </div>
+          <div className="config-card">
+            <div className="config-label">反馈入口</div>
+            <div className="config-val">头像菜单 → 问题反馈</div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+export function FeedbackModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal
+      title="问题反馈"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn-sm" onClick={onClose}>
+            取消
+          </button>
+          <button className="btn-sm primary" disabled>
+            提交反馈
+          </button>
+        </>
+      }
+    >
+      <div className="feedback-box">
+        <div className="form-group">
+          <label>问题类型</label>
+          <Select
+            value="使用问题"
+            onChange={() => {}}
+            options={[
+              { value: '使用问题', label: '使用问题' },
+              { value: '额度异常', label: '额度异常' },
+              { value: '账号绑定', label: '账号绑定' },
+              { value: '团队功能', label: '团队功能' },
+              { value: '建议', label: '建议' }
+            ]}
+          />
+        </div>
+        <div className="form-group">
+          <label>标题</label>
+          <input type="text" placeholder="一句话描述问题" />
+        </div>
+        <div className="form-group">
+          <label>详细描述</label>
+          <textarea rows={4} placeholder="补充操作步骤、预期结果和实际表现" />
+        </div>
+        <div className="form-group">
+          <label>图片</label>
+          <input type="file" accept="image/*" multiple />
+          <div className="feedback-upload-hint">支持 png、jpg、jpeg、webp，可多选</div>
+        </div>
+        <div className="form-group">
+          <label>联系方式</label>
+          <input type="text" placeholder="邮箱或微信，方便跟进" />
+        </div>
       </div>
     </Modal>
   )

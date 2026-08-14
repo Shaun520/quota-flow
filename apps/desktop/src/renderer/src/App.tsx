@@ -16,6 +16,8 @@ import { useJobs } from './hooks/useJobs'
 import type { TeamContext, UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import {
   Modal,
+  AboutModal,
+  FeedbackModal,
   ProfileModal,
   SettingsModal,
   getInitialTheme,
@@ -29,8 +31,10 @@ import {
   IconChevron,
   IconGear,
   IconGrid,
+  IconInfo,
   IconLogout,
   IconMonitor,
+  IconUpload,
   IconUser,
   IconUsers
 } from './components/icons'
@@ -94,7 +98,7 @@ interface MainAppProps {
   user: AuthUser
   team: TeamContext | null
   updater: UpdaterStatusView
-  onOpenModal: (m: 'profile' | 'settings') => void
+  onOpenModal: (m: ModalKind) => void
   onSignOut: () => Promise<void>
   onRefreshTeam: () => Promise<void>
 }
@@ -376,6 +380,14 @@ function MainApp({
                 <IconGear size={14} />
                 设置
               </button>
+              <button className="dropdown-item" onClick={() => onOpenModal('feedback')}>
+                <IconUpload size={14} />
+                问题反馈
+              </button>
+              <button className="dropdown-item" onClick={() => onOpenModal('about')}>
+                <IconInfo size={14} />
+                关于我们
+              </button>
               <div className="dropdown-divider" />
               <button
                 className="dropdown-item"
@@ -505,7 +517,7 @@ function MainApp({
   )
 }
 
-type ModalKind = 'profile' | 'settings'
+type ModalKind = 'profile' | 'settings' | 'feedback' | 'about'
 
 interface AppModalsProps {
   modalApiRef: MutableRefObject<{ open: (m: ModalKind) => void } | null>
@@ -515,7 +527,7 @@ interface AppModalsProps {
   onUpdateProfile: (name: string) => Promise<string | null>
 }
 
-/** 个人中心 / 设置弹窗：弹窗状态独立于此组件内部，开合不再触发 MainApp 及四个 Tab 树重渲染 */
+/** 个人中心 / 设置 / 关于我们弹窗：弹窗状态独立于此组件内部，开合不再触发 MainApp 及四个 Tab 树重渲染 */
 function AppModals({ modalApiRef, user, team, updater, onUpdateProfile }: AppModalsProps) {
   const [modal, setModal] = useState<ModalKind | null>(null)
 
@@ -537,6 +549,8 @@ function AppModals({ modalApiRef, user, team, updater, onUpdateProfile }: AppMod
         />
       )}
       {modal === 'settings' && <SettingsModal onClose={() => setModal(null)} updater={updater} />}
+      {modal === 'feedback' && <FeedbackModal onClose={() => setModal(null)} />}
+      {modal === 'about' && <AboutModal onClose={() => setModal(null)} />}
     </>
   )
 }

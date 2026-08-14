@@ -2248,7 +2248,8 @@ body {
   margin-bottom: 5px;
 }
 .modal-body .form-group input,
-.modal-body .form-group select {
+.modal-body .form-group select,
+.modal-body .form-group textarea {
   width: 100%;
   height: 36px;
   padding: 0 10px;
@@ -2262,10 +2263,18 @@ body {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .modal-body .form-group input:focus,
-.modal-body .form-group select:focus {
+.modal-body .form-group select:focus,
+.modal-body .form-group textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--shadow-inset), 0 0 0 3px var(--accent-bg);
+}
+.modal-body .form-group textarea {
+  height: auto;
+  min-height: 92px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.6;
 }
 .modal-footer {
   display: flex;
@@ -2273,6 +2282,83 @@ body {
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--border-light);
+}
+
+.about-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.about-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.about-title {
+  font-family: var(--font-display);
+  font-size: 1.35em;
+  font-weight: 600;
+}
+.about-meta {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+.about-desc {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: 0.92em;
+  line-height: 1.7;
+  text-align: center;
+}
+.about-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.about-grid .config-card {
+  margin: 0;
+}
+.about-team {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+.about-section-title {
+  font-size: 0.95em;
+  font-weight: 600;
+}
+.about-team-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.about-team-grid .config-card {
+  margin: 0;
+}
+.about-team .config-card {
+  margin: 0;
+}
+.feedback-box {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.feedback-box .form-group {
+  margin-bottom: 0;
+}
+.feedback-upload-hint {
+  margin-top: 6px;
+  color: var(--fg-muted);
+  font-size: 0.82em;
+  line-height: 1.5;
 }
 
 /* ===== 动画 ===== */
