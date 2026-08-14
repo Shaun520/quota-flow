@@ -90,6 +90,7 @@ export interface ProviderLoginResult {
 }
 
 const loginWindows = new Map<string, BrowserWindow>()
+const siteWindows = new Map<string, BrowserWindow>()
 
 /**
  * 分区标识：
@@ -626,6 +627,76 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
   })
 }
 
+/**
+ * 打开已绑定账号对应的官网窗口。
+ * 复用登录/生成分区（persist:qf-p:<provider>:<keyId>），不清理登录态，
+ * 也不会注入登录流程的“已完成登录”操作条。
+ */
+async function openProviderSite(
+  providerId: string,
+  keyId: string,
+  encryptedKey?: string
+): Promise<{ ok: boolean; error?: string }> {
+  const site = providerSite(providerId)
+  const url = site?.loginUrl || site?.healthUrl
+  if (!url) return { ok: false, error: '该厂商仅支持 API Key 绑定，暂不支持打开官网' }
+
+  const partition = partitionFor(providerId, keyId)
+  const winKey = `${providerId}:${keyId}`
+  const existing = siteWindows.get(winKey)
+  if (existing && !existing.isDestroyed()) {
+    existing.show()
+    existing.focus()
+    return { ok: true }
+  }
+
+  const ses = session.fromPartition(partition)
+  ses.setUserAgent(CHROME_UA)
+  if (encryptedKey) {
+    try {
+      const parsed = parseStoredCredentials(encryptedKey)
+      if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
+    } catch {
+      // 解密失败时仍尝试打开官网，至少让用户看到站点本身。
+    }
+  }
+
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    minWidth: 960,
+    minHeight: 640,
+    autoHideMenuBar: true,
+    title: '厂商官网 - Quota-Flow',
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      partition,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  win.webContents.setUserAgent(CHROME_UA)
+  win.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
+    if (nextUrl.startsWith('http')) {
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 960, height: 720 } }
+    }
+    return { action: 'deny' }
+  })
+  siteWindows.set(winKey, win)
+
+  win.on('closed', () => {
+    if (siteWindows.get(winKey) === win) siteWindows.delete(winKey)
+  })
+
+  void win.loadURL(url).catch((e: unknown) => {
+    if (!win.isDestroyed()) win.destroy()
+    siteWindows.delete(winKey)
+    return { ok: false, error: `加载官网失败：${String(e)}` }
+  })
+
+  return { ok: true }
+}
+
 async function healthCheck(
   providerId: string,
   encrypted: string,
@@ -858,6 +929,12 @@ export function initProviders(): void {
   ipcMain.handle('provider:health-check', (_e, providerId: string, encrypted: string, keyId?: string) => {
     return healthCheck(providerId, encrypted, typeof keyId === 'string' ? keyId : undefined)
   })
+
+  ipcMain.handle(
+    'provider:open-site',
+    (_e, providerId: string, keyId: string, encryptedKey?: string) =>
+      openProviderSite(providerId, keyId, typeof encryptedKey === 'string' ? encryptedKey : undefined)
+  )
 
   ipcMain.handle('provider:login-cancel', (_e, providerId: string, keyId?: string) => {
     const winKey = typeof keyId === 'string' && keyId ? `${providerId}:${keyId}` : providerId

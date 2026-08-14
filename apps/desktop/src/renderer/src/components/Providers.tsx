@@ -36,6 +36,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
   const [addTarget, setAddTarget] = useState<string | undefined>(undefined)
   const [page, setPage] = useState(1)
   const [justRefreshed, setJustRefreshed] = useState(false)
+  const [siteError, setSiteError] = useState('')
   const wasRefreshing = useRef(false)
 
   useEffect(() => {
@@ -64,6 +65,16 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
   const openAdd = (providerId?: string) => {
     setAddTarget(providerId)
     setShowAddModal(true)
+  }
+
+  const openSite = async (providerId: string, keyId: string, encryptedKey: string) => {
+    setSiteError('')
+    try {
+      const res = await window.api.providers.openSite(providerId, keyId, encryptedKey)
+      if (!res.ok) setSiteError(res.error || '无法打开官网')
+    } catch (e) {
+      setSiteError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   return (
@@ -104,7 +115,9 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         </div>
       </div>
 
-      {error && <div className="auth-msg auth-msg-error">{error}</div>}
+      {(error || siteError) && (
+        <div className="auth-msg auth-msg-error">{error || siteError}</div>
+      )}
 
       {boundRows.length === 0 && (
           <div className="providers-hint">
@@ -184,6 +197,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                         onSetScope={async (keyId, teamId) => {
                           await setProviderKeyScope(keyId, teamId)
                         }}
+                        onOpenSite={(keyId, encryptedKey) => openSite(p.providerId, keyId, encryptedKey)}
                         currentUserId={user?.id ?? ''}
                         team={team}
                       />
@@ -240,6 +254,7 @@ function ProviderRow({
   onToggleEnabled,
   onUnbind,
   onSetScope,
+  onOpenSite,
   currentUserId,
   team
 }: {
@@ -255,6 +270,7 @@ function ProviderRow({
   onToggleEnabled: (keyId: string, enabled: boolean) => Promise<void>
   onUnbind: (keyId: string) => Promise<void>
   onSetScope: (keyId: string, teamId: string | null) => Promise<void>
+  onOpenSite: (keyId: string, encryptedKey: string) => Promise<void>
   currentUserId: string
   team: { id: string } | null
 }) {
@@ -399,6 +415,14 @@ function ProviderRow({
                         )}
                       </td>
                       <td>
+                        <button
+                          className="btn-sm"
+                          onClick={() => void onOpenSite(acc.keyId, acc.encryptedKey)}
+                          disabled={acc.authType === 'apikey'}
+                          title={acc.authType === 'apikey' ? 'API Key 厂商不支持网页访问' : '打开该账号对应的官网页面'}
+                        >
+                          进入官网
+                        </button>{' '}
                         {acc.ownerUserId === currentUserId ? (
                           <>
                             {acc.teamId ? (

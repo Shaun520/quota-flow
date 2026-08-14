@@ -243,6 +243,24 @@ export default function Team({ active, userId, team, onTeamChanged }: TeamProps)
     }
   }
 
+  async function handleDisband(): Promise<void> {
+    if (!team || !isOwner) return
+    if (!window.confirm('解散团队后，所有成员共享给该团队的账号会变回个人账号，团队相关任务记录也会被清理。确定解散吗？')) return
+    const service = getTeamService()
+    if (!service) return
+    setBusy(true)
+    setError(null)
+    try {
+      await service.disbandTeam(team.id)
+      await onTeamChanged()
+      setNotice('团队已解散')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '解散失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!team) {
     return (
       <div className="tab-wrap">
@@ -443,6 +461,14 @@ export default function Team({ active, userId, team, onTeamChanged }: TeamProps)
                   生成邀请码
                 </button>
               </div>
+              <button
+                className="btn-sm danger"
+                style={{ width: '100%' }}
+                disabled={busy}
+                onClick={() => void handleDisband()}
+              >
+                解散团队
+              </button>
               {invitations.length > 0 ? (
                 <div className="team-invite-list">
                   {invitations.map((invite) => (

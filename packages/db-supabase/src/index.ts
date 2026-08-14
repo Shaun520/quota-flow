@@ -220,6 +220,11 @@ export class TeamService {
     const { error } = await this.client.rpc('team_leave', { p_team_id: teamId })
     if (error) throw error
   }
+
+  async disbandTeam(teamId: string): Promise<void> {
+    const { error } = await this.client.rpc('team_disband', { p_team_id: teamId })
+    if (error) throw error
+  }
 }
 
 function normalizeTeamDetail(it: Record<string, unknown>): TeamDetail {

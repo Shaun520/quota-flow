@@ -110,6 +110,7 @@ function MainApp({
   const [viewScope, setViewScope] = useState<ViewScope>(() => readStoredViewScope(!!team))
   const [usageScope, setUsageScope] = useState<UsageScope>(readStoredUsageScope)
   // 厂商 / 任务数据提升到 MainApp 层：随 user 挂载/卸载，账号切换时整棵数据树重建，避免残留上一账号数据
+  // 厂商数据由 useProviders 统一持有：切 Tab 不重拉，切换个人/团队/全局模式时按 viewScope 自动刷新。
   const providers = useProviders(viewScope)
   const jobs = useJobs()
   const [bannerDismissed, setBannerDismissed] = useState(() => readWelcomeDismissed(user.id))
@@ -144,19 +145,12 @@ function MainApp({
       ? (t as TabId)
       : 'dispatch'
   })
-  const providersTabActiveRef = useRef(tab === 'providers')
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const [scopeOpen, setScopeOpen] = useState(false)
   const scopeWrapRef = useRef<HTMLDivElement | null>(null)
   const [renewText, setRenewText] = useState('自动续命：—')
   const [updatePromptVisible, setUpdatePromptVisible] = useState(false)
-
-  useEffect(() => {
-    const wasActive = providersTabActiveRef.current
-    providersTabActiveRef.current = tab === 'providers'
-    if (!wasActive && tab === 'providers') providers.reload()
-  }, [tab, providers.reload])
 
   const scopeLabel = useMemo(() => {
     if (viewScope === 'team') return '团队模式'
