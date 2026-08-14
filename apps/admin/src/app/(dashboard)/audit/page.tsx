@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  clearAuditLogs,
   downloadCsv,
   listAuditLogs,
   toCsv,
@@ -28,6 +29,8 @@ export default function AuditPage() {
 
   const [toast, setToast] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   // 搜索输入 300ms 防抖后提交
   useEffect(() => {
@@ -89,6 +92,28 @@ export default function AuditPage() {
     }
   }
 
+  async function handleClearLogs() {
+    setClearing(true);
+    try {
+      const deleted = await clearAuditLogs({
+        action,
+        timeRange,
+        search: debouncedSearch
+      });
+      setConfirmClear(false);
+      setToast(`已清除 ${deleted} 条日志`);
+      if (page === 1) {
+        void load();
+      } else {
+        setPage(1);
+      }
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "清除失败");
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -97,6 +122,17 @@ export default function AuditPage() {
           <p className="page-subtitle">记录管理员关键操作，便于追溯与合规审计</p>
         </div>
         <div className="page-actions">
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setConfirmClear(true)}
+            disabled={clearing || exporting || result.total === 0}
+          >
+            <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            清除日志
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={() => void handleExport()} disabled={exporting}>
             <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -128,6 +164,33 @@ export default function AuditPage() {
       <div className="card" style={{ marginTop: 12 }}>
         <Pagination page={page} total={result.total} pageSize={PAGE_SIZE} onPageChange={setPage} />
       </div>
+
+      {confirmClear ? (
+        <div className="modal-overlay show" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-title">清除日志</div>
+              <button className="modal-close" type="button" onClick={() => setConfirmClear(false)} disabled={clearing} aria-label="关闭">
+                <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: 0 }}>
+                确认清除当前筛选条件下的 <strong>{result.total}</strong> 条审计日志吗？此操作不可恢复。
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" type="button" onClick={() => setConfirmClear(false)} disabled={clearing}>取消</button>
+              <button className="btn btn-danger" type="button" onClick={() => void handleClearLogs()} disabled={clearing}>
+                {clearing ? "清除中..." : "确认清除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {toast ? (
         <div className="toast-container">
