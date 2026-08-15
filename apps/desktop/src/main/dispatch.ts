@@ -11,8 +11,8 @@ import { runDoubaoGeneration } from './webview-engine'
 import type { ProviderCookie, OriginStorage } from './webview-engine'
 import { parseStoredCredentials as parseProviderCredentials } from './providers'
 import { runQwenGeneration } from './qwen-webview'
-import type { QwenGenerateResult } from './qwen-webview'
 import { runYuanbaoGeneration } from './yuanbao-webview'
+import { runDolaGeneration } from './dola-webview'
 
 export interface GenerateInput {
   supabaseUrl: string
@@ -68,6 +68,7 @@ function normalizeJobMode(mode?: string): string {
 function providerLabel(providerId: string): string {
   if (providerId === 'qwenwan') return '千问（通义万相）'
   if (providerId === 'yuanbao') return '元宝混元'
+  if (providerId === 'dola') return 'Dola'
   return '豆包'
 }
 
@@ -126,7 +127,9 @@ function downloadVideo(url: string, jobId: string, providerId = 'doubao', redire
               ? 'https://www.qianwen.com/'
               : providerId === 'yuanbao'
                 ? 'https://yuanbao.tencent.com/'
-                : 'https://www.doubao.com/'
+                : providerId === 'dola'
+                  ? 'https://www.dola.com/'
+                  : 'https://www.doubao.com/'
         }
       },
       (res) => {
@@ -228,7 +231,7 @@ export async function runGenerate(
   const costUnit = costInfo.unitName
   const images = (input.images ?? [])
     .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
-    .slice(0, resolvedProviderId === 'doubao' ? 4 : resolvedProviderId === 'yuanbao' ? 10 : 5)
+    .slice(0, resolvedProviderId === 'doubao' ? 4 : resolvedProviderId === 'yuanbao' || resolvedProviderId === 'dola' ? 10 : 5)
   // 生成参数 + 上传图片副本：随任务持久化，历史详情可回显「提示词/参数/图片」
   const jobImages: string[] = []
   if (images.length > 0) {
@@ -264,6 +267,7 @@ export async function runGenerate(
     | Awaited<ReturnType<typeof runDoubaoGeneration>>
     | Awaited<ReturnType<typeof runQwenGeneration>>
     | Awaited<ReturnType<typeof runYuanbaoGeneration>>
+    | Awaited<ReturnType<typeof runDolaGeneration>>
     | null = null
   let lastError = ''
 
@@ -341,7 +345,7 @@ export async function runGenerate(
         if (runCancelState.aborted) {
           result = {
             ok: false,
-            providerId: resolvedProviderId as 'doubao' | 'qwenwan' | 'yuanbao',
+            providerId: resolvedProviderId as 'doubao' | 'qwenwan' | 'yuanbao' | 'dola',
             cancelled: true,
             error: '已手动终止生成（提示词未发送）',
             attempts: []
@@ -372,6 +376,22 @@ export async function runGenerate(
             cookies,
             storages,
             prompt: dispatchPrompt,
+            images,
+            keyId: cand.id,
+            cancel: runCancelState,
+            showWebview: input.showWebview,
+            onProgress: (stage, detail) =>
+              emit({ jobId: job.id, status: 'running', stage, message: stage, data: detail })
+          })
+        } else if (resolvedProviderId === 'dola') {
+          result = await runDolaGeneration({
+            cookies,
+            storages,
+            prompt: dispatchPrompt,
+            mode: input.mode,
+            model: input.model,
+            durationSec: input.durationSec,
+            ratio: input.ratio,
             images,
             keyId: cand.id,
             cancel: runCancelState,

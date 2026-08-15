@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import {
   DEFAULT_SUPPORTED_DURATIONS,
   MODELS,
@@ -28,7 +29,7 @@ const VIP = false
 const AUTO_CAPABLE_PROVIDER_IDS = new Set(['doubao'])
 
 function maxImageUploadCount(provider: string): number {
-  if (provider === 'yuanbao') return 10
+  if (provider === 'yuanbao' || provider === 'dola') return 10
   if (provider === 'doubao') return 4
   return 5
 }
@@ -157,6 +158,8 @@ export default function Dashboard({
       const next = valid.includes('auto') ? 'auto' : valid[0]
       setProvider(next)
       setModel(MODELS[next]?.[0] ?? MODELS.auto[0])
+      const nextModes = providerModeOptions(next, MODELS[next]?.[0] ?? MODELS.auto[0])
+      setMode(nextModes[0]?.value ?? 't2v')
     }
   }, [providerOptions, provider])
 
@@ -293,6 +296,7 @@ export default function Dashboard({
   }, [preview, imagePreview])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
+    const currentMode = provider === 'dola' ? 'multi_ref' : mode
     if (generating) return
     if (fresh && step === 1) {
       onGoProviders()
@@ -302,11 +306,12 @@ export default function Dashboard({
       setGenError('请先填写 Prompt 描述')
       return
     }
-    if (mode !== 't2v' && mode !== 'img' && imageFiles.length === 0) {
-      setGenError('千问多参考/首帧/首尾帧生成需要至少上传一张素材图片')
+    if (currentMode !== 't2v' && currentMode !== 'img' && imageFiles.length === 0) {
+      const modeLabel = providerModeOptions(provider, model).find((m) => m.value === currentMode)?.label ?? '多参考'
+      setGenError(`${modeLabel}需要至少上传一张素材图片`)
       return
     }
-    if (mode === 'img' && imageFiles.length === 0) {
+    if (currentMode === 'img' && imageFiles.length === 0) {
       setGenError('图生视频需要先上传图片')
       return
     }
@@ -355,11 +360,11 @@ export default function Dashboard({
         providerId: provider,
         model,
         durationSec: duration,
-        mode: mode === 't2v' ? 'text2video' : mode === 'img' ? 'img2video' : mode,
+        mode: currentMode === 't2v' ? 'text2video' : currentMode === 'img' ? 'img2video' : currentMode,
         resolution,
         audio,
         ratio,
-        images: mode === 't2v' && provider !== 'yuanbao' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
+        images: currentMode === 't2v' && provider !== 'yuanbao' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -453,6 +458,16 @@ export default function Dashboard({
     e.target.value = ''
   }, [provider])
 
+  const onPasteImages = useCallback((e: ReactClipboardEvent<HTMLDivElement>) => {
+    const files = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith('image/'))
+    if (files.length === 0) return
+    e.preventDefault()
+    const urls = files.map((f) => URL.createObjectURL(f))
+    const max = maxImageUploadCount(provider)
+    setImages((prev) => [...prev, ...urls].slice(0, max))
+    setImageFiles((prev) => [...prev, ...files].slice(0, max))
+  }, [provider])
+
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
     setImageFiles((prev) => prev.filter((_, i) => i !== idx))
@@ -528,20 +543,22 @@ export default function Dashboard({
                 options={durations.map((d) => ({ value: String(d.value), label: d.label, disabled: d.disabled }))}
               />
             </div>
-            <div className="param-field">
-              <label htmlFor="resolution">分辨率</label>
-              <Select
-                id="resolution"
-                value={resolution}
-                disabled={provider === 'yuanbao'}
-                onChange={setResolution}
-                options={resolutions.map((r) => ({ value: r.value, label: r.label }))}
-              />
-            </div>
+            {provider !== 'dola' && (
+              <div className="param-field">
+                <label htmlFor="resolution">分辨率</label>
+                <Select
+                  id="resolution"
+                  value={resolution}
+                  disabled={provider === 'yuanbao'}
+                  onChange={setResolution}
+                  options={resolutions.map((r) => ({ value: r.value, label: r.label }))}
+                />
+              </div>
+            )}
           </div>
 
           <div className="param-row ratio-row">
-            {!(provider === 'qwenwan' && /HappyHorse/i.test(model)) && (
+            {!(provider === 'dola' || (provider === 'qwenwan' && /HappyHorse/i.test(model))) && (
               <div className="param-field">
                 <label htmlFor="audio">智能配音</label>
                 <Select
@@ -589,6 +606,7 @@ export default function Dashboard({
             <div
               className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
               onClick={onPickFiles}
+              onPaste={onPasteImages}
             >
               {images.length > 0 ? (
                 <div className="thumb-strip">

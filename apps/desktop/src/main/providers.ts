@@ -16,6 +16,7 @@ export type ProviderId =
   | 'qwen'
   | 'qwenwan'
   | 'yuanbao'
+  | 'dola'
   | 'kling'
   | 'hailuo'
 
@@ -45,6 +46,10 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   yuanbao: {
     loginUrl: 'https://yuanbao.tencent.com/chat/naQivTmsDa',
     healthUrl: 'https://yuanbao.tencent.com/'
+  },
+  dola: {
+    loginUrl: 'https://www.dola.com/',
+    healthUrl: 'https://www.dola.com/'
   },
   kling: {
     loginUrl: 'https://klingai.com/global/',
@@ -258,6 +263,8 @@ const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtr
   // 实测元宝分区 cookie：QQ 登录产生 pt2gguin(o+QQ号) 与 hy_user(元宝账号UUID)，均按账号稳定；
   // uin/wxuin/openid 实际不存在，cookie 标识已验证，优先于泛用 DOM 脚本
   yuanbao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
+  // Dola 为字节系国际站 cookie 登录，暂用通用脚本 + cookie 优先；指纹 key 后续按真实登录记录校准。
+  dola: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   kling: { script: COMMON_FINGERPRINT_SCRIPT },
   hailuo: { script: COMMON_FINGERPRINT_SCRIPT }
 }
@@ -273,6 +280,8 @@ const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   qwenwan: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
   // 实测值：pt2gguin = o<QQ号>（.ptlogin2.qq.com），hy_user = 元宝账号 UUID（.tencent.com）
   yuanbao: ['pt2gguin', 'hy_user'],
+  // Dola 同属字节系；避免使用 msToken / s_v_web_id 等会话级易变值做账号指纹。
+  dola: ['flow_cur_user_sec_id', 'sessionid', 'sid_tt'],
   kling: ['userId', 'user_id', 'kk_u'],
   hailuo: ['user_id', 'uid', 'userId']
 }
