@@ -10,7 +10,7 @@ import {
   resolutionOptions,
   uploadHint
 } from '../spec'
-import { IconInfo, IconPlay, IconUpload, PROVIDER_ICONS } from './icons'
+import { IconInfo, IconPlay, IconUpload, ProviderIconMark } from './icons'
 import { EmptyState } from './EmptyState'
 import Select from './Select'
 import type { JobItem } from '../hooks/useJobs'
@@ -699,11 +699,10 @@ export default function Dashboard({
             <>
               <div className="provider-status-list">
                 {visibleAggs.map((p) => {
-                  const IconComp = PROVIDER_ICONS[p.providerId]
                   return (
                     <div className="ps-item unbound" key={p.providerId}>
                       <div className="ps-icon">
-                        {IconComp ? <IconComp size={20} /> : null}
+                        <ProviderIconMark providerId={p.providerId} logo={p.logo} size={20} />
                       </div>
                       <div className="ps-info">
                         <div className="ps-name">{p.name}</div>
@@ -732,7 +731,6 @@ export default function Dashboard({
             <>
               <div className="provider-status-list">
                 {visibleAggs.map((p) => {
-                  const IconComp = PROVIDER_ICONS[p.providerId]
                   const used = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.used, 0)
                   const remaining = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.remaining, 0)
                   const total = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.dailyTotal, 0)
@@ -740,7 +738,7 @@ export default function Dashboard({
                   return (
                     <div className="ps-item" key={p.providerId}>
                       <div className="ps-icon">
-                        {IconComp ? <IconComp size={20} /> : null}
+                        <ProviderIconMark providerId={p.providerId} logo={p.logo} size={20} />
                       </div>
                       <div className="ps-info">
                         <div className="ps-name">{p.name}</div>

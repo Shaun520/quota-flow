@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconChevron, IconInfo, IconRefresh, PROVIDER_ICONS } from './icons'
+import { IconChevron, IconInfo, IconRefresh, ProviderIconMark } from './icons'
 import { AddProviderModal } from './Modals'
 import Pagination from './Pagination'
 import { EmptyState } from './EmptyState'
@@ -224,7 +224,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
       </div>
       {showAddModal && user && (
         <AddProviderModal
-          providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, authType: a.authType, enabled: a.enabled, boundCount: a.boundCount }))}
+          providers={aggs.map((a) => ({ providerId: a.providerId, name: a.name, logo: a.logo, authType: a.authType, enabled: a.enabled, boundCount: a.boundCount }))}
           userId={user.id}
           team={team}
           initialProviderId={addTarget}
@@ -274,7 +274,6 @@ function ProviderRow({
   currentUserId: string
   team: { id: string } | null
 }) {
-  const IconComp = PROVIDER_ICONS[agg.providerId]
   const isApiKeyProvider = agg.authType === 'apikey'
   const activeBindings = agg.bindings.filter((b) => b.enabled)
   const totalUsed = activeBindings.reduce((s, b) => s + b.used, 0)
@@ -295,7 +294,7 @@ function ProviderRow({
         </td>
         <td className="col-name">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-            {IconComp ? <IconComp size={18} /> : null}
+            <ProviderIconMark providerId={agg.providerId} logo={agg.logo} size={18} />
             {agg.name}
           </span>
         </td>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { IconChevron, IconClose, PROVIDER_ICONS } from './icons'
+import { IconChevron, IconClose, ProviderIconMark } from './icons'
 import { BrandMark } from './Brand'
 import Select from './Select'
 import { getProviderService } from '../auth/service'
@@ -469,6 +469,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 interface ProviderOption {
   providerId: string
   name: string
+  logo?: string
   authType: string
   enabled: boolean
   boundCount?: number
@@ -514,8 +515,6 @@ function ProviderSelect({
     }
   }, [open])
 
-  const SelectedIcon = selected ? PROVIDER_ICONS[selected.providerId] : undefined
-
   return (
     <div className="provider-select" ref={rootRef}>
       <button
@@ -525,14 +524,13 @@ function ProviderSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        {SelectedIcon ? <SelectedIcon size={16} /> : null}
+        {selected ? <ProviderIconMark providerId={selected.providerId} logo={selected.logo} size={16} /> : null}
         <span>{selected?.name ?? '选择厂商'}</span>
         <IconChevron size={12} className={'provider-select-chevron' + (open ? ' open' : '')} />
       </button>
       {open && (
         <div className="provider-select-list" role="listbox" aria-label="选择厂商">
           {providers.map((p) => {
-            const Icon = PROVIDER_ICONS[p.providerId]
             const disabled = p.enabled === false
             return (
               <button
@@ -552,7 +550,7 @@ function ProviderSelect({
                   setOpen(false)
                 }}
               >
-                {Icon ? <Icon size={16} /> : null}
+                <ProviderIconMark providerId={p.providerId} logo={p.logo} size={16} />
                 <span>{p.name}</span>
                 {disabled && <span className="provider-select-disabled-label">已停用</span>}
                 {!disabled && p.providerId === value && (

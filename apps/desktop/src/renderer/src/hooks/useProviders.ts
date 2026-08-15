@@ -404,7 +404,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       return {
         providerId: p.id,
         name: p.name,
-        logo: p.logo ?? p.name.slice(0, 1),
+        logo: p.logo || p.name.slice(0, 1),
         authType: p.auth_type,
         enabled: p.enabled !== false,
         unitName: p.unit_name ?? '',

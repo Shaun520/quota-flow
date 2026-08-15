@@ -217,3 +217,46 @@ export const PROVIDER_ICONS: Record<string, ProviderIcon> = {
   kling: IconKling,
   hailuo: IconHailuo
 }
+
+/** 只接受可由 <img> 安全展示的厂商 logo，避免把纯文本首字符当成图片地址 */
+export function providerLogoUrl(logo: string | null | undefined): string | null {
+  const value = logo?.trim()
+  if (!value) return null
+  if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) return value
+  return null
+}
+
+export function ProviderIconMark({
+  providerId,
+  logo,
+  size = 16
+}: {
+  providerId: string
+  logo?: string | null
+  size?: number
+}) {
+  const logoUrl = providerLogoUrl(logo)
+  if (logoUrl) {
+    return (
+      <img
+        className="provider-icon-img"
+        src={logoUrl}
+        alt=""
+        style={{ width: size, height: size }}
+      />
+    )
+  }
+  const Icon = PROVIDER_ICONS[providerId]
+  if (Icon) return <Icon size={size} />
+  if (logo?.trim()) {
+    return (
+      <span
+        className="provider-icon-fallback"
+        style={{ width: size, height: size, fontSize: Math.max(10, Math.round(size * 0.7)) }}
+      >
+        {logo.trim().slice(0, 1)}
+      </span>
+    )
+  }
+  return null
+}

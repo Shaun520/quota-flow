@@ -51,6 +51,45 @@ function isRemoteLogo(logo: string | null | undefined): logo is string {
   return typeof logo === "string" && /^(https?:\/\/|data:image\/)/i.test(logo);
 }
 
+function storagePathFromLogoUrl(logo: string | null | undefined): string | null {
+  if (!logo) return null;
+  const marker = "/provider-logos/";
+  const index = logo.indexOf(marker);
+  if (index === -1) return null;
+  const path = logo.slice(index + marker.length);
+  if (!path) return null;
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+async function uploadProviderLogo(providerId: string, file: File): Promise<string> {
+  const supabase = createAdminBrowserClient();
+  const ext =
+    (file.name.split(".").pop() || "png")
+      .replace(/[^a-z0-9]/gi, "")
+      .toLowerCase() || "png";
+  const storagePath = `${providerId}-${Date.now()}.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("provider-logos")
+    .upload(storagePath, file, {
+      cacheControl: "3600",
+      contentType: file.type || undefined,
+      upsert: true
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicUrlData } = supabase.storage
+    .from("provider-logos")
+    .getPublicUrl(storagePath);
+
+  return publicUrlData.publicUrl;
+}
+
 interface ToggleMessage {
   tone: "success" | "danger" | "warning";
   text: string;
@@ -63,6 +102,8 @@ interface ProviderEditValues {
   default_daily_quota: number;
   equivalent_count_divisor: number;
   enabled: boolean;
+  logoFile?: File | null;
+  logoRemoved?: boolean;
 }
 
 interface ProviderCreateValues extends ProviderEditValues {
@@ -164,31 +205,51 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
 
     try {
       const supabase = createAdminBrowserClient();
+      const baseUpdate = {
+        name,
+        auth_type: values.auth_type,
+        unit_name: values.unit_name,
+        default_daily_quota: values.default_daily_quota,
+        equivalent_count_divisor: values.equivalent_count_divisor,
+        enabled: values.enabled
+      };
+
+      let logo: string | null = editing.logo;
+      if (values.logoRemoved) {
+        logo = null;
+      } else if (values.logoFile) {
+        logo = await uploadProviderLogo(editing.id, values.logoFile);
+      }
+
       const { error } = await supabase
         .from("providers")
         .update({
-          name,
-          auth_type: values.auth_type,
-          unit_name: values.unit_name,
-          default_daily_quota: values.default_daily_quota,
-          equivalent_count_divisor: values.equivalent_count_divisor,
-          enabled: values.enabled
+          ...baseUpdate,
+          ...(values.logoRemoved || values.logoFile ? { logo } : {})
         })
         .eq("id", editing.id);
 
       if (error) throw error;
+
+      if (values.logoFile || values.logoRemoved) {
+        const oldPath = storagePathFromLogoUrl(editing.logo);
+        const newPath = values.logoFile ? storagePathFromLogoUrl(logo) : null;
+        if (oldPath && (!newPath || oldPath !== newPath)) {
+          try {
+            await supabase.storage.from("provider-logos").remove([oldPath]);
+          } catch {
+            // Removing the old storage file is best effort; the DB row is already updated.
+          }
+        }
+      }
 
       setProviders((prev) =>
         prev.map((row) =>
           row.id === editing.id
             ? {
                 ...row,
-                name,
-                auth_type: values.auth_type,
-                unit_name: values.unit_name,
-                default_daily_quota: values.default_daily_quota,
-                equivalent_count_divisor: values.equivalent_count_divisor,
-                enabled: values.enabled
+                ...baseUpdate,
+                ...(values.logoRemoved || values.logoFile ? { logo } : {})
               }
             : row
         )
@@ -260,29 +321,12 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
 
       let logo: string | null = null;
       if (values.logoFile) {
-        const file = values.logoFile;
-        const ext = (file.name.split(".").pop() || "png")
-          .replace(/[^a-z0-9]/gi, "")
-          .toLowerCase() || "png";
-        const storagePath = `${id}-${Date.now()}.${ext}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("provider-logos")
-          .upload(storagePath, file, {
-            cacheControl: "3600",
-            contentType: file.type || undefined,
-            upsert: true
-          });
-
-        if (uploadError) {
+        try {
+          logo = await uploadProviderLogo(id, values.logoFile);
+        } catch (uploadError) {
           await supabase.from("providers").delete().eq("id", id);
           throw uploadError;
         }
-
-        const { data: publicUrlData } = supabase.storage
-          .from("provider-logos")
-          .getPublicUrl(storagePath);
-        logo = publicUrlData.publicUrl;
 
         const { error: logoUpdateError } = await supabase
           .from("providers")
@@ -290,7 +334,10 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
           .eq("id", id);
 
         if (logoUpdateError) {
-          await supabase.storage.from("provider-logos").remove([storagePath]);
+          const oldPath = storagePathFromLogoUrl(logo);
+          if (oldPath) {
+            await supabase.storage.from("provider-logos").remove([oldPath]);
+          }
           await supabase.from("providers").delete().eq("id", id);
           throw logoUpdateError;
         }
@@ -771,6 +818,26 @@ function ProviderEditModal({
     String(provider.equivalent_count_divisor ?? 1)
   );
   const [enabled, setEnabled] = useState(provider.enabled);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [logoRemoved, setLogoRemoved] = useState(false);
+
+  const hasExistingLogo = isRemoteLogo(provider.logo);
+
+  function handleLogoChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    setLogoFile(file);
+    if (logoPreview) URL.revokeObjectURL(logoPreview);
+    setLogoPreview(file ? URL.createObjectURL(file) : null);
+    setLogoRemoved(false);
+  }
+
+  function handleRemoveLogo() {
+    setLogoFile(null);
+    if (logoPreview) URL.revokeObjectURL(logoPreview);
+    setLogoPreview(null);
+    setLogoRemoved(true);
+  }
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -780,7 +847,9 @@ function ProviderEditModal({
       unit_name: unitName,
       default_daily_quota: Number(defaultDailyQuota) || 0,
       equivalent_count_divisor: Number(equivalentCountDivisor) || 1,
-      enabled
+      enabled,
+      logoFile,
+      logoRemoved
     });
   }
 
@@ -810,6 +879,43 @@ function ProviderEditModal({
                 onChange={(e) => setName(e.target.value)}
                 required
               />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">图标上传</label>
+              {logoPreview || (hasExistingLogo && !logoRemoved) ? (
+                <div className="logo-upload-preview">
+                  <img src={logoPreview ?? provider.logo ?? ""} alt={provider.name} />
+                  <span>
+                    {logoFile
+                      ? logoFile.name
+                      : "当前图标"}
+                  </span>
+                </div>
+              ) : null}
+              {logoRemoved ? <p className="form-hint">已选择移除图标，保存后生效。</p> : null}
+              <label className="logo-upload-control">
+                <Upload size={16} />
+                <span>{logoFile ? "已选择新图标" : "选择图标文件"}</span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  onChange={handleLogoChange}
+                  disabled={busy}
+                />
+              </label>
+              {(hasExistingLogo && !logoRemoved) || logoFile ? (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  type="button"
+                  disabled={busy}
+                  onClick={handleRemoveLogo}
+                >
+                  <X size={14} />
+                  移除图标
+                </button>
+              ) : null}
+              <p className="form-hint">选择新文件后保存会替换当前图标，公网可访问。</p>
             </div>
 
             <div className="form-row">

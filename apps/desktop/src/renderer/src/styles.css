@@ -1146,6 +1146,9 @@ body {
   overflow: hidden;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
+.ps-item .provider-icon-img {
+  border-radius: 4px;
+}
 .ps-item .ps-info {
   flex: 1;
   min-width: 0;
@@ -1480,6 +1483,23 @@ body {
 }
 .provider-table .col-name {
   font-weight: 600;
+}
+.provider-icon-img,
+.provider-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.provider-icon-fallback {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--fg-muted);
+  font-weight: 600;
+  line-height: 1;
 }
 .provider-table .col-accounts {
   font-size: 0.85em;
@@ -2424,6 +2444,11 @@ textarea::-webkit-scrollbar {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.provider-select-trigger .provider-icon-img,
+.provider-select-trigger .provider-icon-fallback {
+  width: 16px;
+  height: 16px;
+}
 .provider-select-chevron {
   color: var(--fg-muted);
   transform: rotate(90deg);
@@ -2462,6 +2487,11 @@ textarea::-webkit-scrollbar {
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
   text-align: left;
+}
+.provider-select-item .provider-icon-img,
+.provider-select-item .provider-icon-fallback {
+  width: 16px;
+  height: 16px;
 }
 .provider-select-item:hover {
   background: var(--bg-hover);
