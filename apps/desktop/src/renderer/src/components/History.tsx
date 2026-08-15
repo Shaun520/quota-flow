@@ -8,6 +8,7 @@ import Select from './Select'
 import { VideoThumb } from './VideoThumb'
 import { useAuth } from '../hooks/useAuth'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
+import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
 
 const PAGE_SIZE = 10
 
@@ -135,9 +136,21 @@ function timeAgo(iso: string): string {
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`
 }
 
-export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRegenerate?: (item: JobItem) => void }) {
+export default function History({
+  jobs,
+  features = {},
+  onRegenerate
+}: {
+  jobs: JobsResult
+  features?: Partial<DesktopFeatureFlags>
+  onRegenerate?: (item: JobItem) => void
+}) {
   const { loading, error, items, reload, remove, removeMany } = jobs
   const { user } = useAuth()
+  const canDetail = features['history.detail'] !== false
+  const canRegenerate = features['history.regenerate'] !== false && !!onRegenerate
+  const canCopyPrompt = features['history.copy_prompt'] !== false
+  const canWatermark = features['history.watermark_removal'] !== false
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [batchDeleting, setBatchDeleting] = useState(false)
   const [confirm, setConfirm] = useState<{ kind: 'one'; item: JobItem } | { kind: 'many'; ids: string[] } | null>(null)
@@ -490,7 +503,7 @@ export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRe
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
   const pagedItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
-  const colSpan = batchMode ? 11 : 10
+  const colSpan = batchMode ? (canWatermark ? 11 : 10) : (canWatermark ? 10 : 9)
   const selectedCount = filtered.filter((i) => selectedIds.has(i.id)).length
   const allSelected = filtered.length > 0 && selectedCount === filtered.length
 
@@ -630,7 +643,7 @@ export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRe
                 <th>模式</th>
                 <th>消耗</th>
                 <th>状态</th>
-                <th>去水印</th>
+                {canWatermark && <th>去水印</th>}
                 <th style={{ width: '120px' }}>操作</th>
               </tr>
             </thead>
@@ -673,45 +686,49 @@ export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRe
                       <td>
                         <span className={'badge ' + badgeFor(r.status)}>{r.status}</span>
                       </td>
-                      <td>
-                        <div className="watermark-cell">
-                          <span className={'watermark-pill ' + (wmStatus === 'done' ? 'done' : wmStatus === 'failed' || wmStatus === 'needs_bbox' ? 'error' : wmStatus === 'processing' || wmStatus === 'pending' ? 'pending' : '')}>
-                            {watermarkLabel(wmStatus, hasManualBBox)}
-                          </span>
-                          {localPath && wmStatus !== 'processing' && wmStatus !== 'pending' && (
-                            <button
-                              className="btn-sm"
-                              title="框选水印区域并重新处理"
-                              aria-label="框选去水印"
-                              disabled={retryingId === item.id}
-                              onClick={() => void openBoxSelect(item)}
-                            >
-                              框选
-                            </button>
-                          )}
-                          {(wmStatus === 'failed' || wmStatus === 'needs_bbox' || wmStatus === 'cancelled') && localPath && (
-                            <button
-                              className="btn-sm"
-                              title="重试去水印"
-                              aria-label="重试去水印"
-                              disabled={retryingId === item.id}
-                              onClick={() => void retryWatermark(item)}
-                            >
-                              {retryingId === item.id ? '…' : '重试'}
-                            </button>
-                          )}
-                        </div>
-                      </td>
+                      {canWatermark && (
+                        <td>
+                          <div className="watermark-cell">
+                            <span className={'watermark-pill ' + (wmStatus === 'done' ? 'done' : wmStatus === 'failed' || wmStatus === 'needs_bbox' ? 'error' : wmStatus === 'processing' || wmStatus === 'pending' ? 'pending' : '')}>
+                              {watermarkLabel(wmStatus, hasManualBBox)}
+                            </span>
+                            {localPath && wmStatus !== 'processing' && wmStatus !== 'pending' && (
+                              <button
+                                className="btn-sm"
+                                title="框选水印区域并重新处理"
+                                aria-label="框选去水印"
+                                disabled={retryingId === item.id}
+                                onClick={() => void openBoxSelect(item)}
+                              >
+                                框选
+                              </button>
+                            )}
+                            {(wmStatus === 'failed' || wmStatus === 'needs_bbox' || wmStatus === 'cancelled') && localPath && (
+                              <button
+                                className="btn-sm"
+                                title="重试去水印"
+                                aria-label="重试去水印"
+                                disabled={retryingId === item.id}
+                                onClick={() => void retryWatermark(item)}
+                              >
+                                {retryingId === item.id ? '…' : '重试'}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      )}
                       <td className="col-actions">
                         <div className="action-btns">
-                          <button
-                            className="action-btn"
-                            title="查看详情（提示词/参数/图片）"
-                            aria-label="查看详情"
-                            onClick={() => setDetail(item)}
-                          >
-                            <IconInfo size={12} />
-                          </button>
+                          {canDetail && (
+                            <button
+                              className="action-btn"
+                              title="查看详情（提示词/参数/图片）"
+                              aria-label="查看详情"
+                              onClick={() => setDetail(item)}
+                            >
+                              <IconInfo size={12} />
+                            </button>
+                          )}
                           <button
                             className="action-btn"
                             title="查看"
@@ -825,7 +842,7 @@ export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRe
             >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 14 }}>
               <div style={{ fontSize: 15, fontWeight: 600, marginRight: 'auto' }}>生成详情</div>
-              {onRegenerate && (
+              {canRegenerate && (
                 <button
                   className="btn-sm primary"
                   onClick={() => {
@@ -838,13 +855,15 @@ export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRe
                   重新生成
                 </button>
               )}
-              <button
-                className="btn-sm"
-                disabled={!detail.record.prompt}
-                onClick={() => void copyPrompt(detail.record.prompt || '')}
-              >
-                {copiedPrompt ? '已复制' : '复制提示词'}
-              </button>
+              {canCopyPrompt && (
+                <button
+                  className="btn-sm"
+                  disabled={!detail.record.prompt}
+                  onClick={() => void copyPrompt(detail.record.prompt || '')}
+                >
+                  {copiedPrompt ? '已复制' : '复制提示词'}
+                </button>
+              )}
               <button
                 className="btn-sm"
                 title="关闭"
@@ -1089,13 +1108,15 @@ export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRe
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>提示词预览</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  className="btn-sm"
-                  disabled={!detail.record.prompt}
-                  onClick={() => void copyPrompt(detail.record.prompt || '')}
-                >
-                  {copiedPrompt ? '已复制' : '复制提示词'}
-                </button>
+                {canCopyPrompt && (
+                  <button
+                    className="btn-sm"
+                    disabled={!detail.record.prompt}
+                    onClick={() => void copyPrompt(detail.record.prompt || '')}
+                  >
+                    {copiedPrompt ? '已复制' : '复制提示词'}
+                  </button>
+                )}
                 <button className="btn-sm" onClick={() => setPromptPreview(false)}>关闭</button>
               </div>
             </div>

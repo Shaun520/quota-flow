@@ -8,6 +8,7 @@ import type { JobItem } from './hooks/useJobs'
 import Team from './components/Team'
 import TitleBar from './components/TitleBar'
 import WelcomeBanner from './components/WelcomeBanner'
+import { EmptyState } from './components/EmptyState'
 import { NotificationBell } from './components/NotificationBell'
 import { BrandMark } from './components/Brand'
 import AuthScreen from './auth/AuthScreen'
@@ -15,6 +16,7 @@ import { useAuth } from './hooks/useAuth'
 import type { AuthUser } from './hooks/useAuth'
 import { useProviders } from './hooks/useProviders'
 import { useJobs } from './hooks/useJobs'
+import { useDesktopPermissions } from './hooks/useDesktopPermissions'
 import type { TeamContext, UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import {
   Modal,
@@ -297,6 +299,26 @@ function MainApp({
     }
   }, [user?.id])
 
+  const permissions = useDesktopPermissions(user.id, team?.id)
+  const visibleTabs = useMemo(
+    () => TABS.filter((t) => permissions.features[`tab.${t.id}` as const] !== false),
+    [permissions.features]
+  )
+  const resolvedTab = visibleTabs.some((t) => t.id === tab) ? tab : (visibleTabs[0]?.id ?? null)
+
+  useEffect(() => {
+    if (permissions.error) {
+      showToast(`权限配置加载失败：${permissions.error}`)
+    }
+  }, [permissions.error, showToast])
+
+  useEffect(() => {
+    if (resolvedTab && resolvedTab !== tab) {
+      setTab(resolvedTab)
+      location.hash = 'tab=' + resolvedTab
+    }
+  }, [resolvedTab, tab])
+
   return (
     <div className="app-shell">
       <TitleBar />
@@ -307,12 +329,12 @@ function MainApp({
           <BrandMark size={18} className="brand-icon" />
           <span>Quota-Flow</span>
         </div>
-        {TABS.map((t) => {
+        {visibleTabs.map((t) => {
           const Icon = t.icon
           return (
             <button
               key={t.id}
-              className={'nav-tab' + (tab === t.id ? ' active' : '')}
+              className={'nav-tab' + (resolvedTab === t.id ? ' active' : '')}
               onClick={() => {
                 setTab(t.id)
                 location.hash = 'tab=' + t.id
@@ -437,7 +459,15 @@ function MainApp({
             />
           )}
           {/* 各 tab 常驻挂载，仅用 display 切换：保留表单/筛选等本地状态，避免切 tab 丢失 */}
-          <div className="tab-pane" style={{ display: tab === 'dispatch' ? 'flex' : 'none' }}>
+          {resolvedTab === null && (
+            <div className="tab-pane" style={{ display: 'flex' }}>
+              <EmptyState
+                title="没有可用模块"
+                description="管理员已关闭当前桌面端所有主 Tab，请联系管理员重新开启。"
+              />
+            </div>
+          )}
+          <div className="tab-pane" style={{ display: resolvedTab === 'dispatch' ? 'flex' : 'none' }}>
             <Dashboard
               fresh={fresh}
               banner={bannerVisible}
@@ -449,19 +479,26 @@ function MainApp({
               onGoProviders={() => setTab('providers')}
               providers={providers}
               jobs={jobs}
+              features={permissions.features}
               regenerateDraft={regenerateDraft}
               onRegenerateConsumed={() => setRegenerateDraft(null)}
             />
           </div>
-          <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
-            <Providers fresh={fresh} viewScope={viewScope} usageScope={usageScope} providers={providers} />
+          <div className="tab-pane" style={{ display: resolvedTab === 'providers' ? 'flex' : 'none' }}>
+            <Providers
+              fresh={fresh}
+              viewScope={viewScope}
+              usageScope={usageScope}
+              providers={providers}
+              canBind={permissions.features['providers.bind']}
+            />
           </div>
-          <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
-            <History jobs={jobs} onRegenerate={handleRegenerate} />
+          <div className="tab-pane" style={{ display: resolvedTab === 'history' ? 'flex' : 'none' }}>
+            <History jobs={jobs} features={permissions.features} onRegenerate={handleRegenerate} />
           </div>
-          <div className="tab-pane" style={{ display: tab === 'team' ? 'flex' : 'none' }}>
+          <div className="tab-pane" style={{ display: resolvedTab === 'team' ? 'flex' : 'none' }}>
             <Team
-              active={tab === 'team'}
+              active={resolvedTab === 'team'}
               fresh={fresh}
               userId={user.id}
               team={team}
