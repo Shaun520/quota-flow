@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentType, MutableRefObject } from 'react'
 import Dashboard from './components/Dashboard'
+import type { RegenerateDraft } from './components/Dashboard'
 import Providers from './components/Providers'
 import History from './components/History'
+import type { JobItem } from './hooks/useJobs'
 import Team from './components/Team'
 import TitleBar from './components/TitleBar'
 import WelcomeBanner from './components/WelcomeBanner'
@@ -155,6 +157,7 @@ function MainApp({
   const scopeWrapRef = useRef<HTMLDivElement | null>(null)
   const [renewText, setRenewText] = useState('自动续命：—')
   const [updatePromptVisible, setUpdatePromptVisible] = useState(false)
+  const [regenerateDraft, setRegenerateDraft] = useState<RegenerateDraft | null>(null)
 
   const scopeLabel = useMemo(() => {
     if (viewScope === 'team') return '团队模式'
@@ -166,6 +169,24 @@ function MainApp({
     setToast(msg)
     window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), 2200)
+  }, [])
+
+  const handleRegenerate = useCallback((item: JobItem): void => {
+    const r = item.record
+    const p = r.params
+    setRegenerateDraft({
+      prompt: r.prompt || '',
+      providerId: r.providerId ?? 'doubao',
+      model: r.model ?? '',
+      durationSec: p?.durationSec ?? 5,
+      resolution: p?.resolution ?? '720',
+      audio: p?.audio ?? 'on',
+      ratio: p?.ratio ?? '9:16',
+      mode: p?.mode ?? 'text2video',
+      images: r.images ?? []
+    })
+    setTab('dispatch')
+    location.hash = 'tab=dispatch'
   }, [])
 
   const switchViewScope = useCallback((scope: ViewScope) => {
@@ -428,13 +449,15 @@ function MainApp({
               onGoProviders={() => setTab('providers')}
               providers={providers}
               jobs={jobs}
+              regenerateDraft={regenerateDraft}
+              onRegenerateConsumed={() => setRegenerateDraft(null)}
             />
           </div>
           <div className="tab-pane" style={{ display: tab === 'providers' ? 'flex' : 'none' }}>
             <Providers fresh={fresh} viewScope={viewScope} usageScope={usageScope} providers={providers} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'history' ? 'flex' : 'none' }}>
-            <History jobs={jobs} />
+            <History jobs={jobs} onRegenerate={handleRegenerate} />
           </div>
           <div className="tab-pane" style={{ display: tab === 'team' ? 'flex' : 'none' }}>
             <Team

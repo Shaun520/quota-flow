@@ -152,6 +152,7 @@ export function ratioOptions(provider: string): Array<{ value: string; label: st
 export function uploadHint(provider: string, mode: string): string {
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
+  if (provider === 'doubao' && mode === 'multi_ref') return '上传图片作为参考（最多 10 张）'
   if (mode === 'multi_ref') return '拖拽图片 / 视频到此处（多参考生成，最多 5 个）'
   if (mode === 'img' || mode === 'first_last' || mode === 'first_frame') return '拖拽图片到此处，最多 5 张，或点击选择文件'
   return '文生视频无需上传素材'

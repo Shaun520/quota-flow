@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { JobItem, JobsResult } from '../hooks/useJobs'
 import type { WatermarkBBox } from '../../../shared/history'
 import { IconEye, IconFolder, IconInfo, IconTrash } from './icons'
@@ -9,6 +10,10 @@ import { useAuth } from '../hooks/useAuth'
 import { getAuthService, getSupabaseConfig } from '../auth/service'
 
 const PAGE_SIZE = 10
+
+function ModalLayer({ children }: { children: ReactNode }) {
+  return createPortal(<>{children}</>, document.body)
+}
 
 function badgeFor(status: string): string {
   if (status === '成功') return 'badge-success'
@@ -27,7 +32,7 @@ function previewLabel(status: string): string {
 }
 
 function watermarkLabel(status?: string | null, hasManualBBox = false): string {
-  if (status === 'none') return '未开启'
+  if (status === 'none') return '可去水印'
   if (!status) return '未处理'
   if (status === 'processing' || status === 'pending') return '处理中'
   if (status === 'done') return hasManualBBox ? '已处理' : '默认处理'
@@ -130,7 +135,7 @@ function timeAgo(iso: string): string {
   return `${d.getFullYear()}-${mm}-${dd} ${hh}:${mi}`
 }
 
-export default function History({ jobs }: { jobs: JobsResult }) {
+export default function History({ jobs, onRegenerate }: { jobs: JobsResult; onRegenerate?: (item: JobItem) => void }) {
   const { loading, error, items, reload, remove, removeMany } = jobs
   const { user } = useAuth()
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -143,6 +148,7 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   const [detail, setDetail] = useState<JobItem | null>(null)
   const [detailImgUrls, setDetailImgUrls] = useState<string[]>([])
   const [zoomImg, setZoomImg] = useState<string | null>(null)
+  const [promptPreview, setPromptPreview] = useState(false)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const [retryingId, setRetryingId] = useState<string | null>(null)
   const [boxSelectItem, setBoxSelectItem] = useState<JobItem | null>(null)
@@ -161,11 +167,13 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
   const [notice, setNotice] = useState<string | null>(null)
+  const [copiedPrompt, setCopiedPrompt] = useState(false)
 
   // 打开详情时，把上传图片的本地路径解析成可预览的 http 地址
   useEffect(() => {
     if (!detail) {
       setDetailImgUrls([])
+      setPromptPreview(false)
       return
     }
     let cancelled = false
@@ -223,6 +231,22 @@ export default function History({ jobs }: { jobs: JobsResult }) {
   }
 
   const clearSelection = (): void => setSelectedIds(new Set())
+
+  const copyPrompt = async (text: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedPrompt(true)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopiedPrompt(true)
+    }
+    window.setTimeout(() => setCopiedPrompt(false), 1200)
+  }
 
   const toggleBatchMode = (): void => {
     if (batchMode) clearSelection()
@@ -654,7 +678,7 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                           <span className={'watermark-pill ' + (wmStatus === 'done' ? 'done' : wmStatus === 'failed' || wmStatus === 'needs_bbox' ? 'error' : wmStatus === 'processing' || wmStatus === 'pending' ? 'pending' : '')}>
                             {watermarkLabel(wmStatus, hasManualBBox)}
                           </span>
-                          {localPath && wmStatus !== 'processing' && wmStatus !== 'pending' && wmStatus !== 'none' && (
+                          {localPath && wmStatus !== 'processing' && wmStatus !== 'pending' && (
                             <button
                               className="btn-sm"
                               title="框选水印区域并重新处理"
@@ -757,53 +781,95 @@ export default function History({ jobs }: { jobs: JobsResult }) {
       )}
 
       {confirm && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 300 }}
-          onClick={(e) => { if (e.target === e.currentTarget) setConfirm(null) }}
-        >
-          <div className="modal-card" style={{ maxWidth: 400, padding: '18px 20px' }}>
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>
-              {confirm.kind === 'one' ? '删除历史记录' : '批量删除历史记录'}
-            </div>
-            <p style={{ color: 'var(--fg-secondary)', margin: '0 0 16px', lineHeight: 1.7 }}>
-              {confirm.kind === 'one'
-                ? `确定删除这条历史记录？该任务会从数据库中移除。\n「${confirm.item.record.prompt}」`
-                : `确定删除选中的 ${confirm.ids.length} 条历史记录？该操作会从数据库中移除这些任务。`}
-            </p>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn-sm" onClick={() => setConfirm(null)}>取消</button>
-              <button
-                className="btn-sm danger"
-                disabled={deletingId !== null || batchDeleting}
-                onClick={() => void doDelete()}
-              >
-                {deletingId !== null || batchDeleting ? '删除中...' : '确认删除'}
-              </button>
+        <ModalLayer>
+          <div
+            className="modal-overlay"
+            style={{ zIndex: 300 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setConfirm(null) }}
+          >
+            <div className="modal-card" style={{ maxWidth: 400, padding: '18px 20px' }}>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>
+                {confirm.kind === 'one' ? '删除历史记录' : '批量删除历史记录'}
+              </div>
+              <p style={{ color: 'var(--fg-secondary)', margin: '0 0 16px', lineHeight: 1.7 }}>
+                {confirm.kind === 'one'
+                  ? `确定删除这条历史记录？该任务会从数据库中移除。\n「${confirm.item.record.prompt}」`
+                  : `确定删除选中的 ${confirm.ids.length} 条历史记录？该操作会从数据库中移除这些任务。`}
+              </p>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn-sm" onClick={() => setConfirm(null)}>取消</button>
+                <button
+                  className="btn-sm danger"
+                  disabled={deletingId !== null || batchDeleting}
+                  onClick={() => void doDelete()}
+                >
+                  {deletingId !== null || batchDeleting ? '删除中...' : '确认删除'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalLayer>
       )}
 
       {/* 生成详情：提示词 / 参数 / 上传图片 */}
       {detail && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 300 }}
-          onClick={(e) => { if (e.target === e.currentTarget) setDetail(null) }}
-        >
+        <ModalLayer>
           <div
-            className="modal-card"
-            style={{ width: 'min(92vw, 720px)', maxHeight: '86vh', overflow: 'auto', padding: 20 }}
+            className="modal-overlay"
+            style={{ zIndex: 300 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setDetail(null) }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>生成详情</div>
-              <button className="btn-sm" onClick={() => setDetail(null)}>关闭</button>
+            <div
+              className="modal-card"
+              style={{ width: 'min(92vw, 720px)', maxHeight: '86vh', overflow: 'auto', padding: 20 }}
+            >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, marginRight: 'auto' }}>生成详情</div>
+              {onRegenerate && (
+                <button
+                  className="btn-sm primary"
+                  onClick={() => {
+                    const item = detail
+                    if (!item) return
+                    setDetail(null)
+                    onRegenerate(item)
+                  }}
+                >
+                  重新生成
+                </button>
+              )}
+              <button
+                className="btn-sm"
+                disabled={!detail.record.prompt}
+                onClick={() => void copyPrompt(detail.record.prompt || '')}
+              >
+                {copiedPrompt ? '已复制' : '复制提示词'}
+              </button>
+              <button
+                className="btn-sm"
+                title="关闭"
+                aria-label="关闭"
+                onClick={() => setDetail(null)}
+              >
+                X
+              </button>
             </div>
 
             <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 4 }}>提示词</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>提示词</span>
+              </div>
               <div
+                role="button"
+                tabIndex={0}
+                title="点击放大预览"
+                onClick={() => setPromptPreview(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setPromptPreview(true)
+                  }
+                }}
                 style={{
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
@@ -811,6 +877,9 @@ export default function History({ jobs }: { jobs: JobsResult }) {
                   padding: '8px 10px',
                   borderRadius: 8,
                   lineHeight: 1.7,
+                  height: 140,
+                  overflowY: 'auto',
+                  cursor: 'zoom-in',
                   color: 'var(--fg-primary)'
                 }}
               >
@@ -893,19 +962,21 @@ export default function History({ jobs }: { jobs: JobsResult }) {
             </div>
           </div>
         </div>
+        </ModalLayer>
       )}
 
       {/* 框选去水印：使用原视频预览并绘制水印区域 */}
       {boxSelectItem && boxVideoUrl && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 350 }}
-          onClick={(e) => { if (e.target === e.currentTarget) closeBoxSelect() }}
-        >
+        <ModalLayer>
           <div
-            className="modal-card"
-            style={{ width: 'min(94vw, 880px)', maxHeight: '88vh', overflow: 'auto', padding: 20 }}
+            className="modal-overlay"
+            style={{ zIndex: 350 }}
+            onClick={(e) => { if (e.target === e.currentTarget) closeBoxSelect() }}
           >
+            <div
+              className="modal-card"
+              style={{ width: 'min(94vw, 880px)', maxHeight: '88vh', overflow: 'auto', padding: 20 }}
+            >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <div style={{ fontSize: 15, fontWeight: 600 }}>框选去水印</div>
               <button className="btn-sm" onClick={closeBoxSelect}>关闭</button>
@@ -1000,21 +1071,69 @@ export default function History({ jobs }: { jobs: JobsResult }) {
             </div>
           </div>
         </div>
+        </ModalLayer>
       )}
 
       {/* 图片放大浮层 */}
-      {zoomImg && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 400, cursor: 'zoom-out' }}
-          onClick={() => setZoomImg(null)}
-        >
-          <img
-            src={zoomImg}
-            alt=""
-            style={{ maxWidth: '92vw', maxHeight: '88vh', borderRadius: 10, objectFit: 'contain' }}
-          />
+      {promptPreview && detail && (
+        <ModalLayer>
+          <div
+            className="modal-overlay"
+            style={{ zIndex: 400 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setPromptPreview(false) }}
+          >
+            <div
+              className="modal-card"
+              style={{ width: 'min(94vw, 960px)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: 20 }}
+            >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>提示词预览</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="btn-sm"
+                  disabled={!detail.record.prompt}
+                  onClick={() => void copyPrompt(detail.record.prompt || '')}
+                >
+                  {copiedPrompt ? '已复制' : '复制提示词'}
+                </button>
+                <button className="btn-sm" onClick={() => setPromptPreview(false)}>关闭</button>
+              </div>
+            </div>
+            <div
+              style={{
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                background: 'rgba(255,255,255,0.05)',
+                padding: '12px 14px',
+                borderRadius: 8,
+                lineHeight: 1.8,
+                overflowY: 'auto',
+                flex: 1,
+                minHeight: 220,
+                color: 'var(--fg-primary)'
+              }}
+            >
+              {detail.record.prompt || '—'}
+            </div>
+          </div>
         </div>
+        </ModalLayer>
+      )}
+
+      {zoomImg && (
+        <ModalLayer>
+          <div
+            className="modal-overlay"
+            style={{ zIndex: 400, cursor: 'zoom-out' }}
+            onClick={() => setZoomImg(null)}
+          >
+            <img
+              src={zoomImg}
+              alt=""
+              style={{ maxWidth: '92vw', maxHeight: '88vh', borderRadius: 10, objectFit: 'contain' }}
+            />
+          </div>
+        </ModalLayer>
       )}
     </div>
   )

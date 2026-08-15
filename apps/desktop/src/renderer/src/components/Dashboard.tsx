@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import {
   DEFAULT_SUPPORTED_DURATIONS,
   MODELS,
@@ -11,7 +12,7 @@ import {
   resolutionOptions,
   uploadHint
 } from '../spec'
-import { IconInfo, IconPlay, IconUpload, ProviderIconMark } from './icons'
+import { IconInfo, IconMaximize, IconPlay, IconUpload, ProviderIconMark } from './icons'
 import { EmptyState } from './EmptyState'
 import Select from './Select'
 import type { JobItem } from '../hooks/useJobs'
@@ -30,7 +31,7 @@ const AUTO_CAPABLE_PROVIDER_IDS = new Set(['doubao'])
 
 function maxImageUploadCount(provider: string): number {
   if (provider === 'yuanbao' || provider === 'dola') return 10
-  if (provider === 'doubao') return 4
+  if (provider === 'doubao') return 10
   return 5
 }
 
@@ -79,6 +80,28 @@ interface DashboardProps {
   onGoProviders: () => void
   providers: ProvidersResult
   jobs: JobsResult
+  regenerateDraft?: RegenerateDraft | null
+  onRegenerateConsumed?: () => void
+}
+
+export interface RegenerateDraft {
+  prompt: string
+  providerId: string
+  model: string
+  durationSec: number
+  resolution: string
+  audio: string
+  ratio: string
+  mode: string
+  images: string[]
+}
+
+function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
+  if (rawMode === 'text2video' || rawMode === 't2v') return 't2v'
+  if (rawMode === 'img2video' || rawMode === 'img') return 'img'
+  if (rawMode === 'multi_ref' || rawMode === 'first_last' || rawMode === 'first_frame') return rawMode
+  if (providerId === 'yuanbao' || providerId === 'dola' || providerId === 'qwenwan') return 'multi_ref'
+  return 't2v'
 }
 
 export default function Dashboard({
@@ -92,7 +115,9 @@ export default function Dashboard({
   onGoHistory,
   onGoProviders,
   providers,
-  jobs
+  jobs,
+  regenerateDraft,
+  onRegenerateConsumed
 }: DashboardProps) {
   const { aggs: provAggs } = providers
   const { user, team } = useAuth()
@@ -106,6 +131,7 @@ export default function Dashboard({
   const [ratio, setRatio] = useState('9:16')
   const [images, setImages] = useState<string[]>([])
   const [imageFiles, setImageFiles] = useState<File[]>([])
+  const [savedImagePaths, setSavedImagePaths] = useState<string[]>([])
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
@@ -115,10 +141,52 @@ export default function Dashboard({
   const submittedRef = useRef(false)
   const cancellingRef = useRef(false)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [promptPreview, setPromptPreview] = useState(false)
+  const [promptInputHovered, setPromptInputHovered] = useState(false)
   const activeJobIdRef = useRef<string | null>(null)
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // 历史详情「重新生成」：把历史参数回填到调度台表单，图片走已保存副本路径
+  useEffect(() => {
+    if (!regenerateDraft) return
+    const nextProvider = regenerateDraft.providerId
+    const nextModel = MODELS[nextProvider]?.includes(regenerateDraft.model)
+      ? regenerateDraft.model
+      : MODELS[nextProvider]?.[0] ?? MODELS.auto[0]
+    const nextMode = normalizeRegenerateMode(nextProvider, regenerateDraft.mode)
+
+    setProvider(nextProvider)
+    setModel(nextModel)
+    setMode(nextMode)
+    setDuration(regenerateDraft.durationSec || 5)
+    setResolution(regenerateDraft.resolution || '720')
+    setAudio(regenerateDraft.audio || 'on')
+    setRatio(regenerateDraft.ratio || '9:16')
+    setPrompt(regenerateDraft.prompt || '')
+    setImageFiles([])
+    setSavedImagePaths(regenerateDraft.images ?? [])
+    setImages([])
+    setGenError(null)
+    setGenFailed(false)
+
+    let cancelled = false
+    const paths = regenerateDraft.images ?? []
+    const names = paths
+      .map((p) => p.replace(/\\/g, '/').split('/').pop() || '')
+      .filter(Boolean)
+    Promise.all(names.map((n) => window.api.media.getImageUrl(n).catch(() => null)))
+      .then((urls) => {
+        if (cancelled) return
+        setImages(urls.filter((u): u is string => !!u))
+      })
+      .catch(() => {})
+    onRegenerateConsumed?.()
+    return () => {
+      cancelled = true
+    }
+  }, [regenerateDraft, onRegenerateConsumed])
 
   const activeBoundAggs = useMemo(
     () => provAggs.filter((a) => a.enabled && a.boundCount > 0),
@@ -160,6 +228,9 @@ export default function Dashboard({
       setModel(MODELS[next]?.[0] ?? MODELS.auto[0])
       const nextModes = providerModeOptions(next, MODELS[next]?.[0] ?? MODELS.auto[0])
       setMode(nextModes[0]?.value ?? 't2v')
+      setImages([])
+      setImageFiles([])
+      setSavedImagePaths([])
     }
   }, [providerOptions, provider])
 
@@ -191,6 +262,7 @@ export default function Dashboard({
       setMode(validModes[0] ?? 't2v')
       setImages([])
       setImageFiles([])
+      setSavedImagePaths([])
     }
   }, [provider, model, mode])
 
@@ -284,16 +356,17 @@ export default function Dashboard({
 
   // 预览浮层：Esc 关闭
   useEffect(() => {
-    if (!preview && !imagePreview) return
+    if (!preview && !imagePreview && !promptPreview) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setPreview(null)
         setImagePreview(null)
+        setPromptPreview(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [preview, imagePreview])
+  }, [preview, imagePreview, promptPreview])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
     const currentMode = provider === 'dola' ? 'multi_ref' : mode
@@ -364,7 +437,9 @@ export default function Dashboard({
         resolution,
         audio,
         ratio,
-        images: currentMode === 't2v' && provider !== 'yuanbao' ? [] : imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean),
+        images: currentMode === 't2v' && provider !== 'yuanbao'
+          ? []
+          : [...savedImagePaths, ...imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean)].slice(0, maxImageUploadCount(provider)),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -384,7 +459,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, duration, durations, resolution, audio, ratio, imageFiles, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -425,6 +500,7 @@ export default function Dashboard({
     setMode(nextModes[0]?.value ?? 't2v')
     setImages([])
     setImageFiles([])
+    setSavedImagePaths([])
   }
 
   const onModeChange = (value: string): void => {
@@ -432,6 +508,7 @@ export default function Dashboard({
     if (value === 't2v' && provider !== 'yuanbao') {
       setImages([])
       setImageFiles([])
+      setSavedImagePaths([])
     }
   }
 
@@ -442,6 +519,7 @@ export default function Dashboard({
       setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
       setImageFiles([])
+      setSavedImagePaths([])
     }
   }
 
@@ -451,27 +529,33 @@ export default function Dashboard({
 
   const onFilesSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
-    const urls = files.map((f) => URL.createObjectURL(f))
-    const max = maxImageUploadCount(provider)
-    setImages((prev) => [...prev, ...urls].slice(0, max))
-    setImageFiles((prev) => [...prev, ...files].slice(0, max))
+    const remaining = Math.max(0, maxImageUploadCount(provider) - savedImagePaths.length)
+    const picked = files.slice(0, remaining)
+    const urls = picked.map((f) => URL.createObjectURL(f))
+    setImages((prev) => [...prev, ...urls])
+    setImageFiles((prev) => [...prev, ...picked])
     e.target.value = ''
-  }, [provider])
+  }, [provider, savedImagePaths])
 
   const onPasteImages = useCallback((e: ReactClipboardEvent<HTMLDivElement>) => {
     const files = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith('image/'))
     if (files.length === 0) return
     e.preventDefault()
-    const urls = files.map((f) => URL.createObjectURL(f))
-    const max = maxImageUploadCount(provider)
-    setImages((prev) => [...prev, ...urls].slice(0, max))
-    setImageFiles((prev) => [...prev, ...files].slice(0, max))
-  }, [provider])
+    const remaining = Math.max(0, maxImageUploadCount(provider) - savedImagePaths.length)
+    const picked = files.slice(0, remaining)
+    const urls = picked.map((f) => URL.createObjectURL(f))
+    setImages((prev) => [...prev, ...urls])
+    setImageFiles((prev) => [...prev, ...picked])
+  }, [provider, savedImagePaths])
 
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
-    setImageFiles((prev) => prev.filter((_, i) => i !== idx))
-  }, [])
+    setSavedImagePaths((prev) => prev.filter((_, i) => i !== idx))
+    setImageFiles((prev) => {
+      if (idx < savedImagePaths.length) return prev
+      return prev.filter((_, i) => i !== idx - savedImagePaths.length)
+    })
+  }, [savedImagePaths])
 
   return (
     <div className={'dashboard-wrap' + (banner ? ' has-banner' : '')}>
@@ -494,13 +578,50 @@ export default function Dashboard({
           </div>
 
           <div className="input-group">
-            <label htmlFor="prompt">Prompt 描述</label>
-            <textarea
-              id="prompt"
-              placeholder="描述你想生成的视频内容，例如：一只橘猫在阳光下打盹，微风轻拂窗帘..."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-            />
+            <label htmlFor="prompt" style={{ margin: 0 }}>Prompt 描述</label>
+            <div
+              style={{ position: 'relative' }}
+              onMouseEnter={() => setPromptInputHovered(true)}
+              onMouseLeave={() => setPromptInputHovered(false)}
+            >
+              <textarea
+                id="prompt"
+                placeholder="描述你想生成的视频内容，例如：一只橘猫在阳光下打盹，微风轻拂窗帘..."
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                style={{ minHeight: 84, maxHeight: 180, overflowY: 'auto', paddingRight: 34 }}
+              />
+              <button
+                type="button"
+                title="放大编辑"
+                aria-label="放大编辑"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setPromptPreview(true)}
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  bottom: 8,
+                  width: 28,
+                  height: 28,
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: 'none',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  borderRadius: 6,
+                  background: 'transparent',
+                  color: 'var(--fg-muted)',
+                  cursor: 'pointer',
+                  opacity: promptInputHovered ? 1 : 0,
+                  pointerEvents: promptInputHovered ? 'auto' : 'none',
+                  transition: 'opacity .15s ease'
+                }}
+              >
+                <IconMaximize size={14} />
+              </button>
+            </div>
           </div>
 
           <div className="cascade-row">
@@ -837,6 +958,50 @@ export default function Dashboard({
           )}
         </div>
       )}
+
+      {/* 提示词放大编辑浮层 */}
+      {promptPreview &&
+        createPortal(
+          <div
+            className="modal-overlay"
+            style={{ zIndex: 400 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setPromptPreview(false) }}
+          >
+            <div
+              className="modal-card"
+              style={{ width: 'min(94vw, 960px)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: 20 }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 600 }}>提示词编辑</div>
+                <button className="btn-sm primary" onClick={() => setPromptPreview(false)}>完成</button>
+              </div>
+              <textarea
+                autoFocus
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                style={{
+                  width: '100%',
+                  flex: 1,
+                  minHeight: 220,
+                  padding: '12px 14px',
+                  border: '1px solid var(--border)',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  borderRadius: 8,
+                  background: 'var(--bg-elevated)',
+                  color: 'var(--fg-primary)',
+                  fontFamily: 'var(--font-body)',
+                  fontSize: '1em',
+                  lineHeight: 1.8,
+                  overflowY: 'auto',
+                  resize: 'none'
+                }}
+                placeholder="描述你想生成的视频内容，例如：一只橘猫在阳光下打盹，微风轻拂窗帘..."
+              />
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* 预览浮层：网格不动，仅浮层内播放（避免竖屏视频撑高整行卡片） */}
       {preview && (

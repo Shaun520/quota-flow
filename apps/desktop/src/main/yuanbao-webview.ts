@@ -314,13 +314,26 @@ async function readYuanbaoImages(images: string[]): Promise<YuanbaoImageData[]> 
   return out
 }
 
-async function uploadYuanbaoImages(win: BrowserWindow, images: string[]): Promise<{ ok: boolean; reason?: string }> {
+async function uploadYuanbaoImages(
+  win: BrowserWindow,
+  images: string[],
+  cancelState?: { aborted: boolean; submitted: boolean }
+): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
   const data = await readYuanbaoImages(images)
   if (data.length === 0) {
     return { ok: false, reason: '读取元宝素材图片失败，请确认图片文件仍存在' }
   }
   const savedText = clipboard.readText()
   const savedImage = clipboard.readImage()
+  const sleepOrAbort = async (ms: number): Promise<boolean> => {
+    const step = 150
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      if (cancelState?.aborted) return true
+      await sleep(Math.min(step, end - Date.now()))
+    }
+    return cancelState?.aborted === true
+  }
   try {
     const focus = (await win.webContents.executeJavaScript(
       buildFocusInputScript(),
@@ -333,13 +346,18 @@ async function uploadYuanbaoImages(win: BrowserWindow, images: string[]): Promis
     win.webContents.focus()
     let pasted = 0
     for (const item of data) {
+      if (cancelState?.aborted) {
+        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+      }
       const image = nativeImage.createFromDataURL(item.dataUrl)
       if (image.isEmpty()) {
         return { ok: false, reason: `元宝素材图片读取失败：${item.name}` }
       }
       clipboard.writeImage(image)
       win.webContents.paste()
-      await sleep(1800)
+      if (await sleepOrAbort(1800)) {
+        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+      }
       pasted += 1
     }
 
@@ -765,7 +783,26 @@ export async function runYuanbaoGeneration(options: YuanbaoGenerateOptions): Pro
 
   if (images.length > 0) {
     options.onProgress?.('upload-images')
-    const uploadResult = await uploadYuanbaoImages(win, images)
+    let uploadResult: { ok?: boolean; cancelled?: boolean; reason?: string } = {}
+    let uploadSettled = false
+    const uploadPromise = uploadYuanbaoImages(win, images, cancelState)
+    const cancelPromise = cancelState
+      ? (async () => {
+          while (!uploadSettled) {
+            if (cancelState.aborted) {
+              return { cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+            }
+            await sleep(200)
+          }
+          return null
+        })()
+      : new Promise<never>(() => {})
+    uploadResult = (await Promise.race([uploadPromise, cancelPromise])) as typeof uploadResult
+    uploadSettled = true
+    if (uploadResult.cancelled) {
+      win.destroy()
+      return abortNow()
+    }
     if (!uploadResult.ok) {
       win.destroy()
       return failWith(uploadResult.reason || '元宝素材上传失败')

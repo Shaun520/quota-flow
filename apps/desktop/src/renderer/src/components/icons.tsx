@@ -156,6 +156,15 @@ export const IconBell = (p: IconProps) => (
   </Svg>
 )
 
+export const IconMaximize = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+  </Svg>
+)
+
 // 厂商图标（官方品牌 logo，来源：LobeHub @lobehub/icons-static-svg v1.94.0，https://lobehub.com/icons）
 export const IconDoubao = (p: IconProps) => (
   <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24" aria-hidden="true">

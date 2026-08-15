@@ -77,6 +77,8 @@ function toJobItem(row: JobRow): JobItem {
     record: {
       at: row.created_at,
       provider: PROVIDER_NAME[pid] ?? (pid || '—'),
+      providerId: pid || undefined,
+      model: typeof opts.model === 'string' ? opts.model : undefined,
       accountName,
       mode: MODE_LABEL[row.mode] ?? row.mode,
       prompt: row.prompt ?? '',

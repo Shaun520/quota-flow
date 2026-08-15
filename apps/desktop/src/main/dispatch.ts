@@ -231,7 +231,7 @@ export async function runGenerate(
   const costUnit = costInfo.unitName
   const images = (input.images ?? [])
     .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
-    .slice(0, resolvedProviderId === 'doubao' ? 4 : resolvedProviderId === 'yuanbao' || resolvedProviderId === 'dola' ? 10 : 5)
+    .slice(0, resolvedProviderId === 'doubao' || resolvedProviderId === 'yuanbao' || resolvedProviderId === 'dola' ? 10 : 5)
   // 生成参数 + 上传图片副本：随任务持久化，历史详情可回显「提示词/参数/图片」
   const jobImages: string[] = []
   if (images.length > 0) {

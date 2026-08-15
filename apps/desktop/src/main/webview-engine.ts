@@ -15,6 +15,7 @@ declare global {
     __qfRiskProbeHooked?: boolean
     __qfFetchHooked?: boolean
     __qfXhrHooked?: boolean
+    __qfUploadCancel?: boolean
   }
 }
 
@@ -166,13 +167,9 @@ const uploadImagesScript = (dataUrls: string[]): unknown => {
     return inputs.find((el) => el.offsetParent !== null) || inputs[0] || null
   }
   return (async () => {
-    const results: Array<{ ok: boolean; reason?: string }> = []
+    const results: Array<{ ok: boolean; reason?: string; count?: number }> = []
+    const files: File[] = []
     for (let i = 0; i < dataUrls.length; i++) {
-      const input = findInput()
-      if (!input) {
-        results.push({ ok: false, reason: '未找到上传输入框' })
-        continue
-      }
       let file: File | null = null
       try {
         const resp = await fetch(dataUrls[i])
@@ -190,25 +187,36 @@ const uploadImagesScript = (dataUrls: string[]): unknown => {
         results.push({ ok: false, reason: '图片数据解析失败' })
         continue
       }
-      const dt = new DataTransfer()
-      dt.items.add(file)
-      input.files = dt.files
-      input.dispatchEvent(new Event('change', { bubbles: true }))
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      // 等待上传完成：等「上传中/压缩中」文案消失后再多等 2s（粗略判定）
-      let done = false
-      for (let w = 0; w < 40; w++) {
-        await sleep(750)
-        const text = document.body ? document.body.innerText : ''
-        const pending = /上传中|正在上传|压缩中|处理中/.test(text)
-        if (w > 12 && !pending) {
-          await sleep(2000)
-          done = true
-          break
-        }
-      }
-      results.push({ ok: done })
+      files.push(file)
     }
+    if (files.length === 0) {
+      return { ok: false, results: results.length > 0 ? results : [{ ok: false, reason: '图片数据解析失败' }] }
+    }
+    const input = findInput()
+    if (!input) {
+      return { ok: false, results: [{ ok: false, reason: '未找到上传输入框' }] }
+    }
+    const dt = new DataTransfer()
+    for (const file of files) dt.items.add(file)
+    input.files = dt.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    // 等待上传完成：等「上传中/压缩中」文案消失后再多等 2s（粗略判定）
+    let done = false
+    for (let w = 0; w < 40; w++) {
+      await sleep(750)
+      if (window.__qfUploadCancel) {
+        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+      }
+      const text = document.body ? document.body.innerText : ''
+      const pending = /上传中|正在上传|压缩中|处理中/.test(text)
+      if (w > 12 && !pending) {
+        await sleep(2000)
+        done = true
+        break
+      }
+    }
+    results.push({ ok: done, count: files.length })
     return { ok: results.length > 0 && results.every((r) => r.ok), results }
   })()
 }
@@ -1138,14 +1146,38 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     progress(options, 'upload-images', { count: dataUrls.length })
     let uploadOk = false
     let uploadDetail: unknown = null
+    let uploadCancelled = false
     try {
-      uploadDetail = (await win.webContents.executeJavaScript(
+      await win.webContents.executeJavaScript('window.__qfUploadCancel = false', true)
+      let uploadSettled = false
+      const uploadPromise = win.webContents.executeJavaScript(
         '(' + uploadImagesScript.toString() + ')(' + JSON.stringify(dataUrls) + ')',
         true
-      )) as unknown
+      )
+      const cancelPromise = cancelState
+        ? (async () => {
+            while (!uploadSettled) {
+              if (cancelState.aborted) {
+                try {
+                  await win.webContents.executeJavaScript('window.__qfUploadCancel = true', true)
+                } catch {}
+                return { cancelled: true }
+              }
+              await sleep(200)
+            }
+            return null
+          })()
+        : new Promise<unknown>(() => {})
+      uploadDetail = await Promise.race([uploadPromise, cancelPromise])
+      uploadSettled = true
+      uploadCancelled = !!(uploadDetail as { cancelled?: boolean })?.cancelled
       uploadOk = !!((uploadDetail as { ok?: boolean })?.ok)
     } catch {}
     progress(options, 'upload-images-result', uploadDetail)
+    if (uploadCancelled) {
+      win.destroy()
+      return abortNow()
+    }
     if (!uploadOk) {
       win.destroy()
       return fail('图片上传失败（豆包界面未确认图片上传完成），请确认图片格式后重试')

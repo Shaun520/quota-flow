@@ -246,14 +246,24 @@ async function readQwenImages(images: string[]): Promise<QwenImageData[]> {
 
 async function uploadQwenReferences(
   win: BrowserWindow,
-  images: string[]
-): Promise<{ ok: boolean; reason?: string }> {
+  images: string[],
+  cancelState?: { aborted: boolean; submitted: boolean }
+): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
   const data = await readQwenImages(images)
   if (data.length === 0) {
     return { ok: false, reason: '读取千问素材图片失败，请确认图片文件仍存在' }
   }
   const savedText = clipboard.readText()
   const savedImage = clipboard.readImage()
+  const sleepOrAbort = async (ms: number): Promise<boolean> => {
+    const step = 150
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      if (cancelState?.aborted) return true
+      await sleep(Math.min(step, end - Date.now()))
+    }
+    return cancelState?.aborted === true
+  }
   try {
     const focus = (await win.webContents.executeJavaScript(
       buildFocusInputScript(),
@@ -265,13 +275,18 @@ async function uploadQwenReferences(
 
     let pasted = 0
     for (const item of data) {
+      if (cancelState?.aborted) {
+        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+      }
       const image = nativeImage.createFromDataURL(item.dataUrl)
       if (image.isEmpty()) {
         return { ok: false, reason: `千问素材图片读取失败：${item.name}` }
       }
       clipboard.writeImage(image)
       win.webContents.paste()
-      await sleep(1800)
+      if (await sleepOrAbort(1800)) {
+        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+      }
       pasted += 1
     }
 
@@ -1135,7 +1150,26 @@ export async function runQwenGeneration(options: QwenGenerateOptions): Promise<Q
   }
 
   options.onProgress?.('upload-images')
-  const uploadResult = await uploadQwenReferences(win, options.images ?? [])
+  let uploadResult: { ok?: boolean; cancelled?: boolean; reason?: string } = {}
+  let uploadSettled = false
+  const uploadPromise = uploadQwenReferences(win, options.images ?? [], cancelState)
+  const cancelPromise = cancelState
+    ? (async () => {
+        while (!uploadSettled) {
+          if (cancelState.aborted) {
+            return { cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+          }
+          await sleep(200)
+        }
+        return null
+      })()
+    : new Promise<never>(() => {})
+  uploadResult = (await Promise.race([uploadPromise, cancelPromise])) as typeof uploadResult
+  uploadSettled = true
+  if (uploadResult.cancelled) {
+    win.destroy()
+    return abortNow()
+  }
   if (!uploadResult.ok) {
     win.destroy()
     return failWith(uploadResult.reason || '千问素材上传失败')

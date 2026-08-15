@@ -13,7 +13,7 @@
 - 本轮完成：元宝 `yuanbao` 账号绑定复用现有 cookie 登录窗口与账号分区，登录页为 `https://yuanbao.tencent.com/chat/naQivTmsDa`，健康页为 `https://yuanbao.tencent.com/`；指纹沿用 `pt2gguin/hy_user`；绑定 UI 对齐豆包/千问去重语义，已有账号重复绑定直接刷新，不出现“新增账号/刷新已有账号”选择弹层；视频生成已接入，发送时在 prompt 前补 `视频生成：`，素材图片通过输入框 Ctrl+V 粘贴上传，调度台不接 `auto`。
 - 本轮调整：MathMind 确认无免费额度，已移除全部代码与账号绑定/生成入口；相关 provider seed、cost table、adapter、dispatch 分支、renderer UI、admin 原型与文档声明同步清理。
 - 本轮调整：Dola `dola` 按豆包国际站 cookie 型厂商接入账号绑定，官网地址为 `https://www.dola.com/`；登录/健康检查/打开官网均指向该站点；账号绑定复用现有 cookie 登录窗口、分区保存、指纹去重链路。Dola 多参考生成已接入：进入官网后点击“视频生成”，通过真实 DOM 选择模型（`Dreamina Seedance 2.5` / `Dreamina Seedance 2.0 Fast` / `Dreamina Seedance 1.0`）、时长（10s/5s）、比例，素材图片通过输入框 Ctrl+V 粘贴上传（最多 10 张），参数不注入 prompt；暂不接 `auto` fallback。
-- 素材上限：千问本轮限制最多上传 5 张图片，元宝最多上传 10 张，Dola 最多上传 10 张；dispatch 对 `qwenwan` 按 5 张、`yuanbao`/`dola` 按 10 张裁剪，UI 上传区同步限制。
+- 素材上限：千问本轮限制最多上传 5 张图片，豆包/元宝/Dola 最多上传 10 张；dispatch 对 `qwenwan` 按 5 张、`doubao`/`yuanbao`/`dola` 按 10 张裁剪，UI 上传区同步限制。
 
 ## Public API / Interface Changes
 
