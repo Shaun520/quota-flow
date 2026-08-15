@@ -10,7 +10,7 @@
 
 | 项 | 现状 |
 |---|---|
-| 厂商列表 | `data.ts` 静态 7 家（豆包/即梦/通义万相/元宝混元/可灵/海螺/MathMind） |
+| 厂商列表 | `data.ts` 静态 6 家（豆包/即梦/通义万相/元宝混元/可灵/海螺） |
 | 账号绑定 | AddProviderModal 假登录（setTimeout 2s → done） |
 | 额度展示 | 写死的 remaining / state / accountsDetail |
 | 解绑 / 测试 | 纯 UI 无真实操作 |
@@ -62,7 +62,7 @@
 
 ```sql
 providers
-  id TEXT PK,            -- doubao / jimeng / qwen / yuanbao / kling / hailuo / mathmind
+  id TEXT PK,            -- doubao / jimeng / qwen / yuanbao / kling / hailuo
   name TEXT,             -- 显示名
   logo TEXT,             -- 图标标识（沿用现有 PROVIDER_ICONS 映射）
   capabilities JSONB,    -- 支持的模型/模式（对齐现有 data.ts MODELS）

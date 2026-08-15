@@ -756,23 +756,39 @@ export function AddProviderModal({
     return true
   }
 
-  const handleLoginClick = async () => {
-    if (!selected) return
+  const saveApiKey = async (): Promise<boolean> => {
+    if (!selected) return false
     setError(null)
-    if (isApiKey) {
-      if (!apiKey.trim()) {
-        setError('请输入 API Key')
-        return
-      }
-      setStatus('logging')
+    if (!apiKey.trim()) {
+      setError('请输入 API Key')
+      return false
+    }
+    setStatus('logging')
+    try {
       const enc = await window.api.providers.encrypt(selected.providerId, apiKey.trim())
       if (!enc.encrypted) {
         setStatus('idle')
         setError('加密失败')
-        return
+        return false
       }
       const saved = await saveEncrypted(enc.encrypted, 'apikey', null, enc.fingerprint ?? null, null)
-      if (saved) setStatus('apikey-ok')
+      if (saved) {
+        setStatus('apikey-ok')
+        return true
+      }
+      setStatus('idle')
+      return false
+    } catch (e) {
+      setError(errMsg(e))
+      setStatus('idle')
+      return false
+    }
+  }
+
+  const handleLoginClick = async () => {
+    if (!selected) return
+    if (isApiKey) {
+      await saveApiKey()
       return
     }
     setStatus('logging')
@@ -912,7 +928,20 @@ export function AddProviderModal({
   /** 「完成」时统一保存：登录成功只暂存 pendingLogin，名字确认后才落库 */
   const handleFinish = async (): Promise<void> => {
     if (saving) return
-    if (isApiKey || !pendingLogin) {
+    if (isApiKey) {
+      if (status === 'apikey-ok') {
+        onClose()
+        onDone?.()
+        return
+      }
+      const saved = await saveApiKey()
+      if (saved) {
+        onClose()
+        onDone?.()
+      }
+      return
+    }
+    if (!pendingLogin) {
       onClose()
       onDone?.()
       return
@@ -942,7 +971,13 @@ export function AddProviderModal({
           <button
             className="btn-sm primary"
             onClick={() => void handleFinish()}
-            disabled={saving || (status !== 'login-ok' && status !== 'apikey-ok' && status !== 'pick-account')}
+            disabled={
+              saving ||
+              (status !== 'login-ok' &&
+                status !== 'apikey-ok' &&
+                status !== 'pick-account' &&
+                !(isApiKey && apiKey.trim() && status === 'idle'))
+            }
           >
             {saving ? '保存中…' : '完成'}
           </button>

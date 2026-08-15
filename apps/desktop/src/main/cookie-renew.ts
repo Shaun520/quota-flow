@@ -103,7 +103,7 @@ async function tick(): Promise<void> {
 
     const keys = await providerSvc.listProviderKeys(config.userId)
     const candidates = keys.filter((k) => {
-      if (k.provider_id === 'mathmind' || k.auth_type === 'apikey') return false // 无 cookie 会话
+      if (k.auth_type === 'apikey') return false // 无 cookie 会话
       if (k.enabled === false) return false
       if ((failCount.get(k.id) ?? 0) >= MAX_CONSECUTIVE_FAILS) return false // 熔断
       if (k.health_status === 'expired') return false

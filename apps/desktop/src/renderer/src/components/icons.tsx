@@ -205,29 +205,6 @@ export const IconHailuo = (p: IconProps) => {
   )
 }
 
-// MathMind 为 MCP 接入（mcp_mathmind-video），无公开品牌 logo，使用统一风格字标
-export const IconMathMind = (p: IconProps) => {
-  const uid = useId()
-  return (
-    <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="0.5" y="0.5" width="23" height="23" rx="5.5" fill={`url(#${uid}-mm)`} />
-      <path
-        d="M7.5 16.5v-9l4.5 4.5 4.5-4.5v9"
-        stroke="#fff"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <defs>
-        <linearGradient id={`${uid}-mm`} x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#3B82F6" />
-          <stop offset="1" stopColor="#8B5CF6" />
-        </linearGradient>
-      </defs>
-    </svg>
-  )
-}
-
 export type ProviderIcon = (p: IconProps) => ReactNode
 
 /** 厂商 id -> 官方 logo 图标（调度台 / 厂商管理 / 新增厂商共用） */
@@ -238,6 +215,5 @@ export const PROVIDER_ICONS: Record<string, ProviderIcon> = {
   qwen: IconTongyi,
   yuanbao: IconYuanbao,
   kling: IconKling,
-  hailuo: IconHailuo,
-  mathmind: IconMathMind
+  hailuo: IconHailuo
 }

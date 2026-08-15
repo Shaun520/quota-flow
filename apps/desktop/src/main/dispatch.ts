@@ -222,7 +222,7 @@ export async function runGenerate(
   emit({ jobId: job.id, status: 'pending', message: '任务已创建' })
   onJobCreated?.(job.id, runCancelState)
 
-  // 1) 选号 + 解析 cookie：默认账号优先 → 剩余额度预检 → 失败自动换号（有界）
+  // 1) 选号 + 解析凭证：默认账号优先 → 剩余额度预检 → 失败自动换号（有界）
   const costInfo = providerCost(resolvedProviderId, input.durationSec, input.resolution)
   const cost = costInfo.amount
   const costUnit = costInfo.unitName
@@ -348,9 +348,10 @@ export async function runGenerate(
           }
           break
         }
+        const cookies = c ?? []
         if (resolvedProviderId === 'qwenwan') {
           result = await runQwenGeneration({
-            cookies: c,
+            cookies,
             storages,
             prompt: dispatchPrompt,
             model: input.model,
@@ -368,7 +369,7 @@ export async function runGenerate(
           })
         } else if (resolvedProviderId === 'yuanbao') {
           result = await runYuanbaoGeneration({
-            cookies: c,
+            cookies,
             storages,
             prompt: dispatchPrompt,
             images,
@@ -380,7 +381,7 @@ export async function runGenerate(
           })
         } else {
           result = await runDoubaoGeneration({
-            cookies: c,
+            cookies,
             localStorage: s,
             storages,
             prompt: dispatchPrompt,
@@ -426,7 +427,7 @@ export async function runGenerate(
           })
           break
         }
-        if (/未登录|登录/.test(lastError)) {
+        if (/未登录|登录|API Key/.test(lastError)) {
           try {
             await providerSvc.updateHealth(input.userId, cand.id, 'expired')
           } catch {}

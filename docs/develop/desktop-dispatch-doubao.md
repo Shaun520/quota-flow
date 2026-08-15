@@ -174,7 +174,7 @@ SSE 事件解析：
 已接入调度台（见第 4 节）。待办：
 
 1. 应用内登录态问题（auth.json 无法在本机解密）修复后，在真实 App 里点一次「开始生成」验证整条 UI → dispatch → jobs/ledger 链路。
-2. 把其它厂商（qwen/yuanbao/mathmind）按同一引擎框架接入。
+2. 把其它厂商（qwen/yuanbao）按同一引擎框架接入。
 
 ## 7. 参考资料
 

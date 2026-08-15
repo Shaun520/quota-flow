@@ -25,7 +25,6 @@ const PROVIDER_ORDER = [
   "yuanbao",
   "kling",
   "hailuo",
-  "mathmind",
   "qwen"
 ];
 

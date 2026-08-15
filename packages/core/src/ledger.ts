@@ -8,7 +8,6 @@ export const LEDGER_PATH = path.resolve(__dirname, "..", "..", "..", "data", "le
 
 /** 每个 provider 的默认每日额度（估算，可后续按实际调整） */
 export const DEFAULT_DAILY_QUOTA: Record<string, number> = {
-  mathmind: 10,
   qwenwan: 5, // 通义万相：每日5次免费视频生成
   seedance: 0,
   yuanbao: 5,

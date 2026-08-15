@@ -7,7 +7,7 @@ import type { JobRow } from '@quota-flow/db-supabase'
 import type { HistoryStatus, JobRecord, WatermarkBBox, WatermarkStatus } from '../../../shared/history'
 
 const PROVIDER_NAME: Record<string, string> = {
-  mathmind: 'MathMind', qwenwan: '通义万相', qwen: '通义万相', yuanbao: '元宝混元',
+  qwenwan: '通义万相', qwen: '通义万相', yuanbao: '元宝混元',
   doubao: '豆包', jimeng: '即梦', kling: '可灵', hailuo: '海螺'
 }
 
@@ -18,7 +18,7 @@ const MODE_LABEL: Record<string, string> = {
 }
 
 const UNIT_MAP: Record<string, string> = {
-  mathmind: '次', qwenwan: '额度', qwen: '额度', yuanbao: '个', doubao: '点',
+  qwenwan: '额度', qwen: '额度', yuanbao: '个', doubao: '点',
   jimeng: '灵感值', kling: '积分', hailuo: '次'
 }
 

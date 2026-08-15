@@ -8,8 +8,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
   qwenwan: '千问（通义万相）',
   yuanbao: '元宝混元',
   kling: '可灵',
-  hailuo: '海螺',
-  mathmind: 'MathMind'
+  hailuo: '海螺'
 }
 
 export const MODELS: Record<string, string[]> = {
@@ -20,8 +19,7 @@ export const MODELS: Record<string, string[]> = {
   qwenwan: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   yuanbao: ['混元'],
   kling: ['可灵-标准', '可灵-大师'],
-  hailuo: ['海螺-标准'],
-  mathmind: ['mathmind-v1', 'mathmind-v2']
+  hailuo: ['海螺-标准']
 }
 
 export interface DurationOption {
