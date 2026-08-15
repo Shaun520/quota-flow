@@ -55,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_keys_fp
 -- 如需硬约束：CREATE UNIQUE INDEX ... WHERE account_fingerprint IS NOT NULL;
 ```
 
-- `account_fingerprint TEXT NULL`：apikey 型厂商（mathmind）指纹 = sha256(apikey 明文) 也可覆盖；暂无提取脚本的厂商保持 NULL（不参与查重）
+- `account_fingerprint TEXT NULL`：apikey 型厂商指纹 = sha256(apikey 明文) 也可覆盖；暂无提取脚本的厂商保持 NULL（不参与查重）
 
 ## 5. 指纹提取脚本（每厂商一个）
 
@@ -76,7 +76,6 @@ CREATE INDEX IF NOT EXISTS idx_provider_keys_fp
 | 元宝混元 | 腾讯系抓 openid / 页面昵称 | QQ 与 WX 的 openid 区分账号 |
 | 可灵 | 个人中心手机号 / 用户 ID | 取手机号优先 |
 | 海螺 | 个人中心手机号 / 邮箱 | 同上 |
-| MathMind | apikey 直接作为标识（不抓页面） | sha256(apikey.trim()) |
 
 > 联调方法论：绑定后手动开 DevTools 看登录后页面 DOM / Network 请求里承载账号标识的字段，定稿提取脚本并回填本表。
 
@@ -131,7 +130,6 @@ findDuplicateFingerprint(userId, providerId, fingerprint): Promise<boolean>
 | 同账号去重 | 元宝登录 QQ → 再次登录 QQ | 第二次被拦截，提示已绑定 |
 | 异账号不误伤 | 元宝登录 QQ | 元宝登录 WX | 两次都成功，列表 2 个绑定 |
 | 提取失败兜底 | 提取脚本失效的厂商 | 绑定成功，指纹 NULL，去重跳过 |
-| apikey 去重 | MathMind 重贴同一 apikey | 被拦截（sha256(apikey) 相同） |
 | 解绑后重绑 | 解绑 QQ → 重新绑定 QQ | 指纹行已删，绑定成功 |
 
 ## 8. 与 P1 的关系

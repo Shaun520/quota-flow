@@ -185,7 +185,6 @@ ALTER TABLE provider_keys ADD COLUMN IF NOT EXISTS equivalent_count_divisor NUME
 | kling | text2video | 1 | 5 | 720p | default | 5 | 5 | 可灵 5s 720p = 5积分 |
 | kling | text2video | 1 | 5 | 1080p | default | 10 | 5 | 可灵 5s 1080p = 10积分 |
 | hailuo | text2video | 1 | 10 | 720p | default | 1 | 1 | 海螺 10s 内 = 1次 |
-| mathmind | img2video | 1 | 10 | 720p | default | 1 | 1 | mathmind = 1次 |
 
 ### 3.4 RLS 策略
 

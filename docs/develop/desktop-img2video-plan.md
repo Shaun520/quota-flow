@@ -10,7 +10,7 @@
 - Dashboard 上传区只有 UI（objectURL 缩略图），图片未随 IPC 发送；非 t2v 模式被 `handleGenerate` 拦截。
 - 引擎（`webview-engine.ts`）只实现文生视频（填 prompt → 提交）。
 - 厂商能力（迁移 0001）：豆包/即梦/元宝/可灵/海螺 = t2v+img；千问额外支持 multi_ref（≤5 图）/ first_last。
-- 适配器：`mathmind.ts` 真 API 支持 img2video/imgs2video；`qwen.ts` img2video 请求结构已带 `resource/url` 但上传未实现（materialId 为 placeholder）；`yuanbao.ts` HTTP 支持单图 `sendPrompt(prompt, imageUrl)`。
+- 适配器：`qwen.ts` img2video 请求结构已带 `resource/url` 但上传未实现（materialId 为 placeholder）；`yuanbao.ts` HTTP 支持单图 `sendPrompt(prompt, imageUrl)`。
 
 ## 2. 通用链路（WebView 厂商）
 
@@ -28,7 +28,6 @@
 | 豆包（优先） | WebView 注入上传 | 视频界面找 `input[type=file]`/上传按钮 → 注入本地图 → 等豆包上传出图 → 填 prompt 提交。**核心难点**：图片 chip 在编辑器内，不能用现有 `setContent(prompt)` 整体清空（会删掉图片）；时长 chip 冲突问题在图生视频下会重现，需实测编辑器节点结构后定策略。 |
 | 元宝 | WebView 上传为主 | 聊天附件上传 → 现有 autoSend/poll；HTTP 侧需先实现元宝上传接口（当前未抓）。限制：仅图片、≤10 张。 |
 | 千问 | WebView 上传 + 截获 CDN URL | img2video 请求带 `resource/url`（workspace CDN + auth_key）；WebView 选图后截获上传 URL 再走 chat/detail；multi_ref / first_last 是千问特有。 |
-| MathMind | 真 API（最容易） | `mathmind.ts` 已实现 img2video(imageUrl) / imgs2video(imageUrls)；需确认接受 base64 直传还是要求公网 URL。 |
 
 ## 4. 前端与链路改动
 
@@ -46,9 +45,8 @@
 ## 6. 接入顺序
 
 1. 豆包（优先）：WebView 上传 + 图生视频提交。
-2. MathMind：真 API，确认传图方式后最快。
-3. 元宝 → 千问：WebView 上传 + 现有轮询，先单图。
-4. 即梦/可灵/海螺：同框架后续补齐。
+2. 元宝 → 千问：WebView 上传 + 现有轮询，先单图。
+3. 即梦/可灵/海螺：同框架后续补齐。
 
 ## 7. 豆包界面需实测确认
 

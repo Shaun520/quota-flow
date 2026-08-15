@@ -17,7 +17,7 @@ import {
   saveLedger,
   todayLocal,
 } from "@quota-flow/core";
-import { MathmindDryRunContext, createAllProviders, toProviderMap } from "@quota-flow/providers";
+import { createAllProviders, toProviderMap } from "@quota-flow/providers";
 import { Router, type DispatchOptions } from "@quota-flow/core";
 import type { GenerateOptions, GenerateResult, RoutingStrategy, VideoMode } from "@quota-flow/core";
 
@@ -90,7 +90,7 @@ program
   .option("--videoUrls <list>", "Comma-separated video URLs (video2video)")
   .option("--voiceUrl <url>", "Voice/配音 URL")
   .option("--bgmUrl <url>", "BGM URL")
-  .option("--bgmVolume <n>", "BGM volume 0-100 (mathmind provider)", (v) => Number(v))
+  .option("--bgmVolume <n>", "BGM volume 0-100", (v) => Number(v))
   .option("--voiceVolume <n>", "Voice volume 0-100", (v) => Number(v))
   .option("--coverImageUrl <url>", "Cover image URL")
   .option("--coverImageDuration <n>", "Cover duration in seconds", (v) => Number(v))
@@ -124,8 +124,7 @@ program
       footerVideoUrl: raw.footerVideoUrl,
     };
 
-    const mathmindCtx: MathmindDryRunContext = { calls: [] };
-    const providers = createAllProviders({ mathmindCtx });
+    const providers = createAllProviders();
     void toProviderMap(providers);
 
     const dispatchOpts: DispatchOptions = {
@@ -159,7 +158,6 @@ program
                 errorMessage: res.result.errorMessage ?? null,
               }
             : null,
-          mathmindCalls: mathmindCtx.calls,
         }) + "\n",
         "utf-8",
       );
@@ -184,8 +182,7 @@ program
       rounds: res.rounds,
       attempts: res.attempts,
       result: res.result,
-      mathmindCalls: mathmindCtx.calls,
-      nextSteps: deriveNextSteps(res.result, mathmindCtx.calls),
+      nextSteps: deriveNextSteps(res.result),
       quotaSnapshot: quotaRows,
     };
 
@@ -324,7 +321,6 @@ function renderGenerate(payload: {
   rounds: number;
   attempts: Array<{ providerId: string; ok: boolean; errorMessage?: string }>;
   result: { providerId: string; traceId?: string; videoUrl?: string; downloadUrl?: string; quotaUsed: number; qualityScore?: number; errorMessage?: string; ok: boolean } | null;
-  mathmindCalls: Array<{ tool: string; args: Record<string, unknown> }>;
   nextSteps?: string[];
 }): string {
   const lines: string[] = [];
@@ -340,12 +336,6 @@ function renderGenerate(payload: {
     if (r.downloadUrl) lines.push(`downloadUrl=${r.downloadUrl}`);
     if (!r.ok && r.errorMessage) lines.push(`error=${r.errorMessage}`);
   }
-  if (payload.mathmindCalls.length > 0) {
-    lines.push("mathmind mcp calls (run via run_mcp mcp_mathmind-video):");
-    for (const c of payload.mathmindCalls) {
-      lines.push(`  - tool: ${c.tool}  args: ${JSON.stringify(c.args)}`);
-    }
-  }
   if (payload.nextSteps && payload.nextSteps.length > 0) {
     lines.push("next-steps:");
     for (const s of payload.nextSteps) lines.push(`  - ${s}`);
@@ -355,7 +345,6 @@ function renderGenerate(payload: {
 
 function deriveNextSteps(
   result: { ok: boolean; providerId?: string; traceId?: string; videoUrl?: string; errorMessage?: string } | null,
-  mathmindCalls: Array<{ tool: string; args: Record<string, unknown> }>,
 ): string[] {
   const steps: string[] = [];
   if (!result) {
@@ -365,12 +354,6 @@ function deriveNextSteps(
   if (!result.ok) {
     steps.push("Failure: either add more accounts/providers, or wait for cooldown to expire (see check-quota).");
     return steps;
-  }
-  if (result.providerId === "mathmind" && mathmindCalls.length > 0) {
-    steps.push(
-      "在支持 run_mcp 的 MCP 宿主中，用上面的 payload 调用 serverName=mcp_mathmind-video 的对应 toolName 即可触发生成，随后用 taskFetchByTraceID 或轮询任务结果。",
-    );
-    if (result.traceId) steps.push(`After the task is submitted, poll by traceId=${result.traceId}.`);
   }
   return steps;
 }

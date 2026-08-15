@@ -18,15 +18,13 @@ export type ProviderId =
   | 'yuanbao'
   | 'kling'
   | 'hailuo'
-  | 'mathmind'
 
 interface ProviderSite {
   loginUrl?: string
   healthUrl: string
-  apiKeyOnly?: boolean
 }
 
-// API Key 型厂商（mathmind）不走登录窗口；其余 cookie 型厂商走网页登录
+// 无 loginUrl 的厂商（例如 API Key 型）不走登录窗口；其余 cookie 型厂商走网页登录
 const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   doubao: {
     loginUrl: 'https://www.doubao.com/chat/',
@@ -55,10 +53,6 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   hailuo: {
     loginUrl: 'https://hailuoai.com/video',
     healthUrl: 'https://hailuoai.com/'
-  },
-  mathmind: {
-    healthUrl: '',
-    apiKeyOnly: true
   }
 }
 

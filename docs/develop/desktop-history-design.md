@@ -33,15 +33,15 @@
     "prompt": "画面缓慢推近",
     "imageUrl": "https://example.com/***"
   },
-  "attempts": [{ "providerId": "mathmind", "ok": true }],
+  "attempts": [{ "providerId": "yuanbao", "ok": true }],
   "result": {
     "ok": true,
-    "providerId": "mathmind",
-    "traceId": "mathmind-dryrun-1786073517142",
+    "providerId": "yuanbao",
+    "traceId": "yuanbao-dryrun-1786073517142",
     "quotaUsed": 1,
     "errorMessage": null
   },
-  "mathmindCalls": [...]
+  "yuanbaoCalls": [...]
 }
 ```
 
@@ -166,7 +166,6 @@ interface JobRecord {
 
 ```typescript
 const PROVIDER_NAME_MAP: Record<string, string> = {
-  mathmind: 'MathMind',
   qwenwan: '通义万相',
   yuanbao: '元宝混元',
   doubao: '豆包',
@@ -191,7 +190,6 @@ const MODE_LABEL: Record<string, string> = {
 
 ```typescript
 const UNIT_MAP: Record<string, string> = {
-  mathmind: '次',
   qwenwan: '额度',
   yuanbao: '个',
   doubao: '点',

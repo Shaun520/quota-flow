@@ -275,6 +275,7 @@ function ProviderRow({
   team: { id: string } | null
 }) {
   const IconComp = PROVIDER_ICONS[agg.providerId]
+  const isApiKeyProvider = agg.authType === 'apikey'
   const activeBindings = agg.bindings.filter((b) => b.enabled)
   const totalUsed = activeBindings.reduce((s, b) => s + b.used, 0)
   const remaining = activeBindings.reduce((s, b) => s + b.remaining, 0)
@@ -415,14 +416,17 @@ function ProviderRow({
                         )}
                       </td>
                       <td>
-                        <button
-                          className="btn-sm"
-                          onClick={() => void onOpenSite(acc.keyId, acc.encryptedKey)}
-                          disabled={acc.authType === 'apikey'}
-                          title={acc.authType === 'apikey' ? 'API Key 厂商不支持网页访问' : '打开该账号对应的官网页面'}
-                        >
-                          进入官网
-                        </button>{' '}
+                        {!isApiKeyProvider && (
+                          <>
+                            <button
+                              className="btn-sm"
+                              onClick={() => void onOpenSite(acc.keyId, acc.encryptedKey)}
+                              title="打开该账号对应的官网页面"
+                            >
+                              进入官网
+                            </button>{' '}
+                          </>
+                        )}
                         {acc.ownerUserId === currentUserId ? (
                           <>
                             {acc.teamId ? (
@@ -442,34 +446,32 @@ function ProviderRow({
                                 共享到团队
                               </button>
                             ) : null}{' '}
-                            <button
-                              className="btn-sm"
-                              disabled={acc.isDefault || !acc.enabled}
-                              onClick={() => void onSetDefault(acc.keyId)}
-                              title={
-                                !acc.enabled
-                                  ? '账号已停用，请先启用'
-                                  : acc.isDefault
-                                    ? '已是默认账号'
-                                    : '设为默认：优先扣减该账号额度'
-                              }
-                            >
-                              设为默认
-                            </button>{' '}
-                            <button
-                              className="btn-sm"
-                              onClick={() => void onTest(acc.keyId)}
-                              disabled={acc.authType !== 'cookie' || !acc.enabled}
-                              title={
-                                !acc.enabled
-                                  ? '账号已停用，请先启用'
-                                  : acc.authType !== 'cookie'
-                                    ? 'API Key 无需健康检查'
-                                    : undefined
-                              }
-                            >
-                              测试
-                            </button>{' '}
+                            {!isApiKeyProvider && (
+                              <>
+                                <button
+                                  className="btn-sm"
+                                  disabled={acc.isDefault || !acc.enabled}
+                                  onClick={() => void onSetDefault(acc.keyId)}
+                                  title={
+                                    !acc.enabled
+                                      ? '账号已停用，请先启用'
+                                      : acc.isDefault
+                                        ? '已是默认账号'
+                                        : '设为默认：优先扣减该账号额度'
+                                  }
+                                >
+                                  设为默认
+                                </button>{' '}
+                                <button
+                                  className="btn-sm"
+                                  onClick={() => void onTest(acc.keyId)}
+                                  disabled={!acc.enabled}
+                                  title={!acc.enabled ? '账号已停用，请先启用' : undefined}
+                                >
+                                  测试
+                                </button>{' '}
+                              </>
+                            )}
                             <button
                               className="btn-sm"
                               style={{ color: 'var(--error)' }}

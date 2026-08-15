@@ -106,19 +106,6 @@ export const PROVIDERS: Provider[] = [
     accounts: 1,
     models: ['海螺-标准'],
     accountsDetail: [{ name: '账号 1（默认）', quota: '1 / 3 次', health: 'healthy' }]
-  },
-  {
-    id: 'mathmind',
-    name: 'MathMind',
-    icon: 'M',
-    unit: '次',
-    remaining: '8 / 10',
-    state: 'online',
-    stateLabel: '正常',
-    fill: 80,
-    accounts: 1,
-    models: ['mathmind-v1', 'mathmind-v2'],
-    accountsDetail: [{ name: '账号 1（默认）', quota: '8 / 10 次', health: 'healthy' }]
   }
 ]
 
