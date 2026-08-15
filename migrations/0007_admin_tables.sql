@@ -1,6 +1,6 @@
 -- 0007_admin_tables.sql
 -- Admin console schema for apps/admin.
--- Aligns with docs/develop/admin-system-plan.md and docs/prototype/admin.html.
+-- Aligns with docs/管理后台/后台系统规划.md and docs/设计原型/admin.html.
 -- Idempotent: run in Supabase SQL Editor or via migration runner.
 
 -- ============ 1. profiles（用户扩展信息） ============

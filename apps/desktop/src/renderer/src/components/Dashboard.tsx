@@ -379,12 +379,13 @@ export default function Dashboard({
       setGenError('请先填写 Prompt 描述')
       return
     }
-    if (currentMode !== 't2v' && currentMode !== 'img' && imageFiles.length === 0) {
+    const imageCount = savedImagePaths.length + imageFiles.length
+    if (currentMode !== 't2v' && imageCount === 0) {
       const modeLabel = providerModeOptions(provider, model).find((m) => m.value === currentMode)?.label ?? '多参考'
       setGenError(`${modeLabel}需要至少上传一张素材图片`)
       return
     }
-    if (currentMode === 'img' && imageFiles.length === 0) {
+    if (currentMode === 'img' && imageCount === 0) {
       setGenError('图生视频需要先上传图片')
       return
     }

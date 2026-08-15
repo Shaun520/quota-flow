@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { createSupabaseClient, ProviderService } from '@quota-flow/db-supabase'
 import { encryptCookies, providerSite, visitAndCapture } from './providers'
 
-/** Cookie 自动续命：每日 03:00 全量访问厂商站点保活 + 临近过期的账号提前续命（详见 docs/develop/cookie-renew-design.md） */
+/** Cookie 自动续命：每日 03:00 全量访问厂商站点保活 + 临近过期的账号提前续命（详见 docs/桌面端/厂商与绑定/Cookie续命设计.md） */
 
 const RENEW_HOUR = 3 // 每日续命时段（凌晨低活跃）
 const RENEW_AHEAD_MS = 24 * 60 * 60 * 1000 // 距过期 24h 内的账号提前续命

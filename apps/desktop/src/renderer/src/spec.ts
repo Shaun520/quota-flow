@@ -1,4 +1,4 @@
-// 额度规格逻辑，与 docs/provider-quota-spec.md 保持一致
+// 额度规格逻辑，与 docs/数据库与额度/Provider额度规格.md 保持一致
 
 export const PROVIDER_LABEL: Record<string, string> = {
   auto: '智能调度',

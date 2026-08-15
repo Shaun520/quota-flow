@@ -28,7 +28,7 @@
 
 真正的问题出在**最后一步：渲染层 CSP 的 `img-src` 没有放行本地媒体服务**。
 
-[index.html](file:///d:/quota-flow/apps/desktop/src/renderer/index.html) 中的 CSP 原先为：
+[index.html](../../../apps/desktop/src/renderer/index.html) 中的 CSP 原先为：
 
 ```
 default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
@@ -52,7 +52,7 @@ connect-src 'self' https: ws://localhost:* http://localhost:*
 
 ## 三、修复方案
 
-在 [index.html](file:///d:/quota-flow/apps/desktop/src/renderer/index.html) 的 `img-src` 中补上 `http://127.0.0.1:*`，与 `media-src` 保持一致：
+在 [index.html](../../../apps/desktop/src/renderer/index.html) 的 `img-src` 中补上 `http://127.0.0.1:*`，与 `media-src` 保持一致：
 
 ```html
 <!-- Before -->
@@ -79,7 +79,7 @@ connect-src 'self' https: ws://localhost:* http://localhost:*
 
 | 文件 | 改动内容 |
 |---|---|
-| [index.html](file:///d:/quota-flow/apps/desktop/src/renderer/index.html) | CSP `img-src` 增加 `http://127.0.0.1:*`，放行本地媒体服务的图片 |
+| [index.html](../../../apps/desktop/src/renderer/index.html) | CSP `img-src` 增加 `http://127.0.0.1:*`，放行本地媒体服务的图片 |
 
 ---
 

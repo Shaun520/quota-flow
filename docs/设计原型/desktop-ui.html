@@ -1,0 +1,1904 @@
+<!--
+  Quota-Flow 桌面端静态 UI（实现版）
+  视觉基准：design-reference.html（古典艺术 · 米黄暖调 · 橙色点缀 · Playfair + Inter）
+  规格：千问 / 元宝 / 豆包额度消耗见 docs/数据库与额度/Provider额度规格.md
+  结构：上下布局（标题栏 → 导航 Tab → 内容区 → 状态栏）
+  原则：一屏显示，桌面端优先，无滚动
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quota-Flow 桌面端静态 UI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-base: #ede8dd;
+      --bg-card: #f5f1e8;
+      --bg-elevated: #faf7f0;
+      --bg-hover: #e5dfd3;
+      --fg-primary: #1a1a1a;
+      --fg-secondary: #5c5648;
+      --fg-muted: #9a9486;
+      --accent: #e07a3e;
+      --accent-hover: #c96a32;
+      --accent-light: #f4a261;
+      --accent-bg: rgba(224, 122, 62, 0.08);
+      --border: #d4cec2;
+      --border-light: #e2ddd1;
+      --success: #5a8f6e;
+      --warning: #c9a227;
+      --error: #c44d4d;
+      --shadow-sm: 0 1px 3px rgba(26,26,26,0.05);
+      --shadow-md: 0 4px 12px rgba(26,26,26,0.07);
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 10px;
+      --font-display: "Playfair Display", "Noto Sans SC", serif;
+      --font-body: "Inter", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      font-family: var(--font-body);
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--fg-primary);
+      background: var(--bg-base);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+
+    .app-shell {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* ===== 标题栏 ===== */
+    .title-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 36px;
+      padding: 0 16px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border-light);
+      -webkit-app-region: drag;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .title-bar .brand {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .title-bar .brand-icon {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      color: white;
+    }
+    .title-bar .window-controls {
+      display: flex;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+    }
+    .title-bar .window-controls button {
+      width: 24px; height: 24px;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--fg-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease;
+    }
+    .title-bar .window-controls button:hover { background: var(--bg-hover); }
+    .title-bar .window-controls .btn-close:hover { background: rgba(196, 77, 77, 0.12); color: var(--error); }
+
+    /* ===== 顶部导航 Tab ===== */
+    .top-nav {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      height: 44px;
+      padding: 0 16px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border-light);
+      flex-shrink: 0;
+      position: relative;
+    }
+    .top-nav::before {
+      content: "";
+      position: absolute;
+      left: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 32px; height: 32px;
+      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="%23e07a3e" stroke-width="0.5" opacity="0.3"/><circle cx="50" cy="50" r="25" fill="none" stroke="%23e07a3e" stroke-width="0.5" opacity="0.2"/><text x="50" y="55" text-anchor="middle" font-family="serif" font-size="14" fill="%235c5648" opacity="0.4">QF</text></svg>') no-repeat center;
+      background-size: contain;
+      opacity: 0.5;
+    }
+    .nav-tab {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 14px;
+      height: 32px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--fg-secondary);
+      font-family: var(--font-body);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .nav-tab:hover { color: var(--fg-primary); background: var(--bg-hover); }
+    .nav-tab.active { color: var(--accent); background: var(--accent-bg); font-weight: 600; }
+    .nav-tab .tab-icon { width: 15px; height: 15px; opacity: 0.7; }
+    .nav-tab.active .tab-icon { opacity: 1; }
+
+    /* 用户区域 + 下拉菜单 */
+    .top-nav .user-area {
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .user-area .team-badge {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-base);
+      border: 1px solid var(--border-light);
+      font-size: 11px;
+      color: var(--fg-secondary);
+    }
+    .avatar-wrap {
+      position: relative;
+    }
+    .avatar-wrap .avatar {
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    .avatar-wrap:hover .avatar { border-color: var(--accent); }
+    .avatar-dropdown {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: 140px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
+      padding: 4px;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-4px);
+      transition: all 0.2s ease;
+      z-index: 100;
+    }
+    .avatar-wrap:hover .avatar-dropdown,
+    .avatar-dropdown:hover {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
+    }
+    .avatar-dropdown::before {
+      content: "";
+      position: absolute;
+      top: -6px;
+      right: 8px;
+      width: 10px; height: 10px;
+      background: var(--bg-card);
+      border-left: 1px solid var(--border-light);
+      border-top: 1px solid var(--border-light);
+      transform: rotate(45deg);
+    }
+    .avatar-dropdown .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      color: var(--fg-secondary);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border: none;
+      background: transparent;
+      width: 100%;
+      font-family: var(--font-body);
+    }
+    .avatar-dropdown .dropdown-item:hover {
+      background: var(--bg-hover);
+      color: var(--fg-primary);
+    }
+    .avatar-dropdown .dropdown-divider {
+      height: 1px;
+      background: var(--border-light);
+      margin: 4px 0;
+    }
+
+    /* ===== 主体内容区（一屏显示） ===== */
+    .main-content {
+      flex: 1;
+      padding: 14px 20px;
+      overflow: hidden;
+      position: relative;
+    }
+    .main-content::before, .main-content::after {
+      content: "";
+      position: fixed;
+      width: 160px; height: 240px;
+      pointer-events: none;
+      opacity: 0.04;
+      z-index: 0;
+      background-size: contain;
+      background-repeat: no-repeat;
+    }
+    .main-content::before { top: 80px; left: -20px; background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300"><ellipse cx="100" cy="280" rx="60" ry="10" fill="%23d4cec2"/><path d="M100 280 Q80 200 70 150 Q60 100 80 80 Q90 70 100 70 Q110 70 120 80 Q140 100 130 150 Q120 200 100 280" fill="%239a9486" opacity="0.5"/><circle cx="100" cy="50" r="25" fill="%23e07a3e" opacity="0.3"/></svg>'); }
+    .main-content::after { top: 60px; right: -10px; background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300"><ellipse cx="100" cy="280" rx="60" ry="10" fill="%23d4cec2"/><path d="M100 280 Q120 200 130 150 Q140 100 120 80 Q110 70 100 70 Q90 70 80 80 Q60 100 70 150 Q80 200 100 280" fill="%239a9486" opacity="0.5"/><circle cx="140" cy="60" r="30" fill="%23e07a3e" opacity="0.2"/></svg>'); }
+
+    .content-inner {
+      position: relative;
+      z-index: 1;
+      max-width: 1280px;
+      margin: 0 auto;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .page-header .title-group {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+    }
+    .page-header h1 {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .page-header p { font-size: 12px; color: var(--fg-muted); font-weight: 300; }
+    .page-header .divider {
+      width: 32px; height: 2px;
+      background: var(--accent);
+      border-radius: 1px;
+      margin-top: 4px;
+    }
+
+    /* ===== Tab 内容切换 ===== */
+    .tab-content { display: none; height: 100%; flex-direction: column; gap: 10px; }
+    .tab-content.active { display: flex; }
+
+    /* ===== 调度台：左右分栏 ===== */
+    .dispatch-grid {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 12px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .generate-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .panel-header h2 {
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .panel-header .panel-meta { font-size: 11px; color: var(--fg-muted); }
+
+    .input-group { display: flex; flex-direction: column; gap: 4px; }
+    .input-group label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .input-group textarea {
+      width: 100%;
+      height: 56px;
+      min-height: 56px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      color: var(--fg-primary);
+      font-family: var(--font-body);
+      font-size: 13px;
+      line-height: 1.5;
+      resize: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .input-group textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(224, 122, 62, 0.1);
+    }
+    .input-group textarea::placeholder { color: var(--fg-muted); font-size: 12px; }
+
+    /* 级联选择：厂商 + 模型 */
+    .cascade-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .param-field { display: flex; flex-direction: column; gap: 4px; }
+    .param-field label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .param-field select {
+      width: 100%;
+      height: 32px;
+      padding: 0 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      color: var(--fg-primary);
+      font-family: var(--font-body);
+      font-size: 12px;
+      transition: border-color 0.2s ease;
+    }
+    .param-field select:focus { outline: none; border-color: var(--accent); }
+    .param-field select:disabled { opacity: 0.5; cursor: not-allowed; }
+    .param-field option:disabled { color: var(--fg-muted); }
+    .param-field .field-hint { font-size: 10px; color: var(--fg-muted); align-self: flex-end; padding-bottom: 8px; }
+
+    .param-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .upload-zone {
+      border: 1.5px dashed var(--border);
+      border-radius: var(--radius-md);
+      padding: 8px;
+      text-align: center;
+      color: var(--fg-muted);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+    .upload-zone:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-bg);
+    }
+
+    .generate-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      margin-top: auto;
+      padding-top: 4px;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      height: 36px;
+      padding: 0 18px;
+      border: none;
+      border-radius: var(--radius-md);
+      background: var(--accent);
+      color: white;
+      font-family: var(--font-body);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 6px rgba(224, 122, 62, 0.25);
+      white-space: nowrap;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 3px 10px rgba(224, 122, 62, 0.3);
+    }
+    .btn-primary:active { transform: translateY(0); }
+
+    .cost-estimate {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px;
+      background: var(--accent-bg);
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      color: var(--fg-secondary);
+      white-space: nowrap;
+    }
+    .cost-estimate .cost-highlight { color: var(--accent); font-weight: 600; }
+
+    /* 右侧：厂商实时状态 */
+    .provider-status-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+    .provider-status-list {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      overflow-y: auto;
+    }
+    .provider-status-list::-webkit-scrollbar { width: 4px; }
+    .provider-status-list::-webkit-scrollbar-track { background: transparent; }
+    .provider-status-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .ps-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-light);
+      background: var(--bg-elevated);
+      transition: all 0.15s ease;
+    }
+    .ps-item:hover { border-color: var(--border); }
+    .ps-item .ps-icon {
+      width: 26px; height: 26px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-base);
+      border: 1px solid var(--border-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--fg-secondary);
+      flex-shrink: 0;
+    }
+    .ps-item .ps-info { flex: 1; min-width: 0; }
+    .ps-item .ps-name { font-size: 12px; font-weight: 600; margin-bottom: 1px; }
+    .ps-item .ps-quota { font-size: 10px; color: var(--fg-muted); }
+    .ps-item .ps-state {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .ps-item .ps-state .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .ps-item .ps-state.online { color: var(--success); } .ps-item .ps-state.online .dot { background: var(--success); }
+    .ps-item .ps-state.degraded { color: var(--warning); } .ps-item .ps-state.degraded .dot { background: var(--warning); }
+    .ps-item .ps-state.offline { color: var(--error); } .ps-item .ps-state.offline .dot { background: var(--error); }
+
+    .quota-bar { width: 100%; height: 3px; background: var(--bg-hover); border-radius: 2px; margin-top: 2px; overflow: hidden; }
+    .quota-bar .quota-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+
+    /* 最近任务 */
+    .recent-jobs {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .section-header h2 {
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .section-header .section-link {
+      font-size: 11px;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-family: var(--font-body);
+    }
+    .section-header .section-link:hover { text-decoration: underline; }
+
+    .job-list {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+    .job-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    .job-card:hover { border-color: var(--border); box-shadow: var(--shadow-sm); }
+    .job-card .job-thumb {
+      width: 100%; height: 64px;
+      background: var(--bg-hover);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fg-muted);
+      font-size: 11px;
+      position: relative;
+    }
+    .job-card .job-thumb .job-badge {
+      position: absolute;
+      top: 4px; right: 4px;
+      padding: 1px 5px;
+      border-radius: var(--radius-sm);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .job-card .job-thumb .job-badge.success { background: rgba(90,143,110,0.12); color: var(--success); }
+    .job-card .job-thumb .job-badge.pending { background: rgba(201,162,39,0.12); color: var(--warning); }
+    .job-card .job-body { padding: 6px 8px; }
+    .job-card .job-prompt {
+      font-size: 11px;
+      color: var(--fg-primary);
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      margin-bottom: 3px;
+    }
+    .job-card .job-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--fg-muted);
+    }
+
+    /* ===== 厂商 Tab：列表型 + 多账号 + 筛选 ===== */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .filter-bar input, .filter-bar select {
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      color: var(--fg-primary);
+      font-family: var(--font-body);
+      font-size: 12px;
+    }
+    .filter-bar input:focus, .filter-bar select:focus { outline: none; border-color: var(--accent); }
+    .filter-bar input { width: 200px; }
+
+    .provider-table-wrap {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .provider-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .provider-table thead {
+      background: var(--bg-elevated);
+      position: sticky;
+      top: 0;
+    }
+    .provider-table th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border-light);
+      white-space: nowrap;
+    }
+    .provider-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-light);
+      color: var(--fg-primary);
+      vertical-align: middle;
+    }
+    .provider-table tbody tr:hover { background: var(--bg-hover); }
+    .provider-table tbody tr.expanded { background: var(--bg-hover); }
+    .provider-table .col-name { font-weight: 600; }
+    .provider-table .col-accounts { font-size: 11px; color: var(--fg-muted); }
+
+    .account-sublist {
+      background: var(--bg-base);
+    }
+    .account-sublist td {
+      padding: 0;
+      border-bottom: none;
+    }
+    .account-subtable {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .account-subtable td {
+      padding: 6px 12px 6px 36px;
+      border-bottom: 1px solid var(--border-light);
+      color: var(--fg-secondary);
+    }
+    .account-subtable tr:last-child td { border-bottom: none; }
+
+    .expand-btn {
+      width: 18px; height: 18px;
+      border: none;
+      background: transparent;
+      color: var(--fg-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 4px;
+      transition: transform 0.2s ease;
+    }
+    .expand-btn.expanded { transform: rotate(90deg); }
+
+    /* ===== 历史 Tab：筛选 + 视频预览 + 操作 ===== */
+    .history-table-wrap {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .history-table thead {
+      background: var(--bg-elevated);
+      position: sticky;
+      top: 0;
+    }
+    .history-table th {
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border-light);
+      white-space: nowrap;
+    }
+    .history-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border-light);
+      color: var(--fg-primary);
+      vertical-align: middle;
+    }
+    .history-table tbody tr:hover { background: var(--bg-hover); }
+    .history-table .col-prompt {
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .history-table .col-preview {
+      width: 80px;
+      padding: 6px 10px;
+    }
+    .history-table .preview-thumb {
+      width: 72px; height: 44px;
+      background: var(--bg-hover);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--fg-muted);
+      font-size: 10px;
+      overflow: hidden;
+    }
+    .history-table .col-actions {
+      width: 120px;
+      white-space: nowrap;
+    }
+    .action-btns {
+      display: flex;
+      gap: 4px;
+    }
+    .action-btn {
+      width: 26px; height: 26px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated);
+      color: var(--fg-secondary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      padding: 0;
+    }
+    .action-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-bg);
+    }
+    .action-btn.delete:hover {
+      border-color: var(--error);
+      color: var(--error);
+      background: rgba(196,77,77,0.08);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      font-weight: 500;
+    }
+    .badge-success { background: rgba(90,143,110,0.1); color: var(--success); }
+    .badge-pending { background: rgba(201,162,39,0.1); color: var(--warning); }
+    .badge-error { background: rgba(196,77,77,0.1); color: var(--error); }
+
+    .table-scroll {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .table-scroll::-webkit-scrollbar { width: 5px; }
+    .table-scroll::-webkit-scrollbar-track { background: transparent; }
+    .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ===== 团队 Tab ===== */
+    .team-grid {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 12px;
+      flex: 1;
+      min-height: 0;
+    }
+    .team-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .team-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .team-table thead { background: var(--bg-elevated); position: sticky; top: 0; }
+    .team-table th {
+      text-align: left;
+      padding: 8px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .team-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border-light);
+      color: var(--fg-primary);
+    }
+    .team-table tbody tr:hover { background: var(--bg-hover); }
+
+    .config-card {
+      padding: 10px;
+      background: var(--bg-elevated);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-light);
+    }
+    .config-card .config-label { font-size: 11px; color: var(--fg-muted); margin-bottom: 2px; }
+    .config-card .config-val { font-size: 14px; font-weight: 600; }
+
+    .btn-sm {
+      height: 26px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated);
+      color: var(--fg-secondary);
+      font-family: var(--font-body);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .btn-sm:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-bg);
+    }
+    .btn-sm.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    .btn-sm.primary:hover { background: var(--accent-hover); }
+
+    /* ===== 底部状态栏 ===== */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 28px;
+      padding: 0 16px;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border-light);
+      font-size: 11px;
+      color: var(--fg-muted);
+      flex-shrink: 0;
+    }
+    .status-bar .status-left { display: flex; align-items: center; gap: 14px; }
+    .status-bar .status-item { display: flex; align-items: center; gap: 4px; }
+    .status-bar .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
+    .status-bar .status-right { display: flex; align-items: center; gap: 10px; }
+
+    /* ===== 弹窗 ===== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(26,26,26,0.3);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      backdrop-filter: blur(2px);
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      width: 480px;
+      max-width: 90vw;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .modal-header h3 {
+      font-family: var(--font-display);
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .modal-close {
+      width: 28px; height: 28px;
+      border: none;
+      background: transparent;
+      color: var(--fg-muted);
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-close:hover { background: var(--bg-hover); color: var(--fg-primary); }
+    .modal-body {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .modal-body .form-group {
+      margin-bottom: 14px;
+    }
+    .modal-body .form-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--fg-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+    .modal-body .form-group input,
+    .modal-body .form-group select {
+      width: 100%;
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      color: var(--fg-primary);
+      font-family: var(--font-body);
+      font-size: 13px;
+    }
+    .modal-body .form-group input:focus,
+    .modal-body .form-group select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-light);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- 标题栏 -->
+    <div class="title-bar">
+      <div class="brand">
+        <div class="brand-icon">Q</div>
+        <span>Quota-Flow</span>
+      </div>
+      <div class="window-controls">
+        <button title="最小化"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><rect x="1" y="5.5" width="10" height="1" fill="currentColor"/></svg></button>
+        <button title="最大化"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor"/></svg></button>
+        <button class="btn-close" title="关闭"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      </div>
+    </div>
+
+    <!-- 导航 Tab（4个，设置已移除） -->
+    <nav class="top-nav">
+      <button class="nav-tab active" onclick="switchTab('dispatch')">
+        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        调度台
+      </button>
+      <button class="nav-tab" onclick="switchTab('providers')">
+        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        厂商
+      </button>
+      <button class="nav-tab" onclick="switchTab('history')">
+        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        历史
+      </button>
+      <button class="nav-tab" onclick="switchTab('team')">
+        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        团队
+      </button>
+
+      <div class="user-area">
+        <div class="team-badge">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          团队免费 · 2/3
+        </div>
+        <div class="avatar-wrap">
+          <div class="avatar">L</div>
+          <div class="avatar-dropdown">
+            <button class="dropdown-item" onclick="openModal('profile')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              个人中心
+            </button>
+            <button class="dropdown-item" onclick="openModal('settings')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              设置
+            </button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" onclick="openModal('settings')" style="color: var(--error);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              退出登录
+            </button>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- 主体内容 -->
+    <main class="main-content">
+      <div class="content-inner">
+
+        <!-- ===== 调度台 Tab ===== -->
+        <div id="tab-dispatch" class="tab-content active">
+          <div class="page-header">
+            <div class="title-group">
+              <div><h1>调度台</h1><div class="divider"></div></div>
+              <p>聚合 7 家厂商免费额度 · 智能调度 · 一键生成</p>
+            </div>
+          </div>
+
+          <div class="dispatch-grid">
+            <!-- 生成面板 -->
+            <div class="generate-panel">
+              <div class="panel-header">
+                <h2>生成视频</h2>
+                <span class="panel-meta">智能调度 · 可用优先</span>
+              </div>
+
+              <div class="input-group">
+                <label for="prompt">Prompt 描述</label>
+                <textarea id="prompt" placeholder="描述你想生成的视频内容，例如：一只橘猫在阳光下打盹，微风轻拂窗帘..."></textarea>
+              </div>
+
+              <!-- 厂商 + 模型 级联选择 -->
+              <div class="cascade-row">
+                <div class="param-field">
+                  <label for="provider">选择厂商</label>
+                  <select id="provider" onchange="onProviderChange()">
+                    <option value="auto">智能调度（推荐）</option>
+                    <option value="doubao">豆包</option>
+                    <option value="jimeng">即梦</option>
+                    <option value="qwen">通义万相</option>
+                    <option value="yuanbao">元宝混元</option>
+                    <option value="kling">可灵</option>
+                    <option value="hailuo">海螺</option>
+                    <option value="mathmind">MathMind</option>
+                  </select>
+                </div>
+                <div class="param-field">
+                  <label for="model">选择模型</label>
+                  <select id="model" onchange="updateParams()"></select>
+                </div>
+              </div>
+
+              <div class="param-row">
+                <div class="param-field">
+                  <label for="mode">生成模式</label>
+                  <select id="mode" onchange="updateParams()">
+                    <option value="t2v">文生视频</option>
+                    <option value="img">图生视频</option>
+                    <option value="multi_ref">多参考生成</option>
+                    <option value="first_last">首尾帧</option>
+                  </select>
+                </div>
+                <div class="param-field">
+                  <label for="duration">时长</label>
+                  <select id="duration" onchange="updateParams()"></select>
+                </div>
+                <div class="param-field">
+                  <label for="resolution">分辨率</label>
+                  <select id="resolution" onchange="updateParams()"></select>
+                </div>
+              </div>
+
+              <div class="param-row">
+                <div class="param-field">
+                  <label for="audio">智能配音</label>
+                  <select id="audio">
+                    <option value="on">开</option>
+                    <option value="off">关</option>
+                  </select>
+                </div>
+                <div class="param-field">
+                  <label for="ratio">视频比例</label>
+                  <select id="ratio">
+                    <option value="9:16">9:16</option>
+                    <option value="16:9">16:9</option>
+                    <option value="1:1">1:1</option>
+                  </select>
+                </div>
+                <div class="param-field">
+                  <span class="field-hint">配音 / 比例不影响额度</span>
+                </div>
+              </div>
+
+              <div class="upload-zone">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-3px;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <span id="upload-text">拖拽图片到此处，或点击选择文件（图生视频）</span>
+              </div>
+
+              <div class="generate-actions">
+                <button class="btn-primary">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  开始生成
+                </button>
+                <div class="cost-estimate">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                  预计 <span class="cost-highlight" id="cost-text">1 额度</span> · <span class="cost-highlight" id="cost-who">通义万相</span> 执行
+                </div>
+              </div>
+            </div>
+
+            <!-- 厂商状态 -->
+            <div class="provider-status-panel">
+              <div class="panel-header">
+                <h2>厂商实时状态</h2>
+                <span class="panel-meta">7 家接入</span>
+              </div>
+              <div class="provider-status-list">
+                <div class="ps-item">
+                  <div class="ps-icon">豆</div>
+                  <div class="ps-info"><div class="ps-name">豆包</div><div class="ps-quota">7 / 10 点</div><div class="quota-bar"><div class="quota-fill" style="width:70%"></div></div></div>
+                  <div class="ps-state online"><span class="dot"></span>正常</div>
+                </div>
+                <div class="ps-item">
+                  <div class="ps-icon">梦</div>
+                  <div class="ps-info"><div class="ps-name">即梦</div><div class="ps-quota">640 / 800 灵感值</div><div class="quota-bar"><div class="quota-fill" style="width:80%"></div></div></div>
+                  <div class="ps-state online"><span class="dot"></span>正常</div>
+                </div>
+                <div class="ps-item">
+                  <div class="ps-icon">问</div>
+                  <div class="ps-info"><div class="ps-name">通义万相</div><div class="ps-quota">6 / 10 额度</div><div class="quota-bar"><div class="quota-fill" style="width:60%"></div></div></div>
+                  <div class="ps-state online"><span class="dot"></span>正常</div>
+                </div>
+                <div class="ps-item">
+                  <div class="ps-icon">元</div>
+                  <div class="ps-info"><div class="ps-name">元宝混元</div><div class="ps-quota">4 / 5 个</div><div class="quota-bar"><div class="quota-fill" style="width:80%"></div></div></div>
+                  <div class="ps-state degraded"><span class="dot"></span>将过期</div>
+                </div>
+                <div class="ps-item">
+                  <div class="ps-icon">灵</div>
+                  <div class="ps-info"><div class="ps-name">可灵</div><div class="ps-quota">186 / 216 积分</div><div class="quota-bar"><div class="quota-fill" style="width:86%"></div></div></div>
+                  <div class="ps-state online"><span class="dot"></span>正常</div>
+                </div>
+                <div class="ps-item">
+                  <div class="ps-icon">螺</div>
+                  <div class="ps-info"><div class="ps-name">海螺</div><div class="ps-quota">1 / 3 次</div><div class="quota-bar"><div class="quota-fill" style="width:33%"></div></div></div>
+                  <div class="ps-state online"><span class="dot"></span>正常</div>
+                </div>
+                <div class="ps-item">
+                  <div class="ps-icon">M</div>
+                  <div class="ps-info"><div class="ps-name">MathMind</div><div class="ps-quota">8 / 10 次</div><div class="quota-bar"><div class="quota-fill" style="width:80%"></div></div></div>
+                  <div class="ps-state online"><span class="dot"></span>正常</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 最近任务 -->
+          <div class="recent-jobs">
+            <div class="section-header">
+              <h2>最近生成</h2>
+              <button class="section-link" onclick="switchTab('history')">查看全部 →</button>
+            </div>
+            <div class="job-list">
+              <div class="job-card">
+                <div class="job-thumb"><span>视频预览</span><span class="job-badge success">成功</span></div>
+                <div class="job-body">
+                  <div class="job-prompt">一只橘猫在阳光下打盹，微风轻拂窗帘，画面温馨宁静</div>
+                  <div class="job-meta"><span>豆包 · 5 秒</span><span>720p</span></div>
+                </div>
+              </div>
+              <div class="job-card">
+                <div class="job-thumb"><span>视频预览</span><span class="job-badge success">成功</span></div>
+                <div class="job-body">
+                  <div class="job-prompt">赛博朋克风格的城市夜景，霓虹灯闪烁，雨夜街道</div>
+                  <div class="job-meta"><span>即梦 · 5 秒</span><span>720p</span></div>
+                </div>
+              </div>
+              <div class="job-card">
+                <div class="job-thumb"><span>生成中…</span><span class="job-badge pending">排队</span></div>
+                <div class="job-body">
+                  <div class="job-prompt">古风女子在樱花树下抚琴，花瓣飘落，意境悠远</div>
+                  <div class="job-meta"><span>可灵 · 10 秒</span><span>1080p</span></div>
+                </div>
+              </div>
+              <div class="job-card">
+                <div class="job-thumb"><span>视频预览</span><span class="job-badge success">成功</span></div>
+                <div class="job-body">
+                  <div class="job-prompt">机器人 danced 在火星表面，背景是巨大的蓝色地球</div>
+                  <div class="job-meta"><span>MathMind · 5 秒</span><span>720p</span></div>
+                </div>
+              </div>
+              <div class="job-card">
+                <div class="job-thumb"><span>视频预览</span><span class="job-badge success">成功</span></div>
+                <div class="job-body">
+                  <div class="job-prompt">海浪拍打礁石，夕阳西下的慢镜头，金色余晖</div>
+                  <div class="job-meta"><span>海螺 · 5 秒</span><span>720p</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 厂商 Tab：列表型 + 多账号 + 筛选 ===== -->
+        <div id="tab-providers" class="tab-content">
+          <div class="page-header">
+            <div class="title-group">
+              <div><h1>厂商管理</h1><div class="divider"></div></div>
+              <p>绑定账号 · 查看额度 · 管理 Cookie</p>
+            </div>
+            <div class="filter-bar">
+              <input type="text" placeholder="搜索厂商..." id="providerFilter" onkeyup="filterProviders()">
+              <select id="providerStatusFilter" onchange="filterProviders()">
+                <option value="">全部状态</option>
+                <option value="online">正常</option>
+                <option value="degraded">异常</option>
+                <option value="offline">离线</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="provider-table-wrap">
+            <div class="table-scroll">
+              <table class="provider-table">
+                <thead>
+                  <tr>
+                    <th style="width:30px;"></th>
+                    <th>厂商</th>
+                    <th>额度单位</th>
+                    <th>今日剩余</th>
+                    <th>账号数</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="providerTableBody">
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">豆包</td>
+                    <td>点</td>
+                    <td>7 / 10</td>
+                    <td class="col-accounts">2 个账号</td>
+                    <td><span class="badge badge-success">正常</span></td>
+                    <td><button class="btn-sm primary">绑定账号</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>账号 1</strong> (默认)</td><td>4 / 5 点</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                        <tr><td><strong>账号 2</strong></td><td>3 / 5 点</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">即梦</td>
+                    <td>灵感值</td>
+                    <td>640 / 800</td>
+                    <td class="col-accounts">1 个账号</td>
+                    <td><span class="badge badge-success">正常</span></td>
+                    <td><button class="btn-sm primary">绑定账号</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>账号 1</strong> (默认)</td><td>640 / 800 灵感值</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">通义万相</td>
+                    <td>额度</td>
+                    <td>6 / 10</td>
+                    <td class="col-accounts">1 个账号</td>
+                    <td><span class="badge badge-success">正常</span></td>
+                    <td><button class="btn-sm primary">绑定账号</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>账号 1</strong> (默认)</td><td>6 / 10 额度</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">元宝混元</td>
+                    <td>个</td>
+                    <td>4 / 5</td>
+                    <td class="col-accounts">1 个账号</td>
+                    <td><span class="badge badge-pending">将过期</span></td>
+                    <td><button class="btn-sm primary">绑定账号</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>账号 1</strong> (默认)</td><td>4 / 5 个</td><td> expiring</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">可灵</td>
+                    <td>积分</td>
+                    <td>186 / 216</td>
+                    <td class="col-accounts">1 个账号</td>
+                    <td><span class="badge badge-success">正常</span></td>
+                    <td><button class="btn-sm primary">绑定账号</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>账号 1</strong> (默认)</td><td>186 / 216 积分</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">海螺</td>
+                    <td>次数</td>
+                    <td>1 / 3</td>
+                    <td class="col-accounts">1 个账号</td>
+                    <td><span class="badge badge-success">正常</span></td>
+                    <td><button class="btn-sm primary">绑定账号</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>账号 1</strong> (默认)</td><td>1 / 3 次</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">解绑</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><button class="expand-btn" onclick="toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                    <td class="col-name">MathMind</td>
+                    <td>次数</td>
+                    <td>8 / 10</td>
+                    <td class="col-accounts">1 个账号 (API Key)</td>
+                    <td><span class="badge badge-success">正常</span></td>
+                    <td><button class="btn-sm primary">配置 Key</button></td>
+                  </tr>
+                  <tr class="account-sublist" style="display:none;">
+                    <td colspan="7">
+                      <table class="account-subtable">
+                        <tr><td><strong>Key 1</strong> (默认)</td><td>8 / 10 次</td><td> healthy</td><td><button class="btn-sm">测试</button> <button class="btn-sm" style="color:var(--error);">删除</button></td></tr>
+                      </table>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 历史 Tab：筛选 + 视频预览 + 操作 ===== -->
+        <div id="tab-history" class="tab-content">
+          <div class="page-header">
+            <div class="title-group">
+              <div><h1>生成历史</h1><div class="divider"></div></div>
+              <p>查看所有生成任务记录与状态</p>
+            </div>
+            <div class="filter-bar">
+              <input type="text" placeholder="搜索 prompt..." id="historyFilter" onkeyup="filterHistory()">
+              <select id="historyProviderFilter" onchange="filterHistory()">
+                <option value="">全部厂商</option>
+                <option>豆包</option>
+                <option>即梦</option>
+                <option>通义万相</option>
+                <option>元宝混元</option>
+                <option>可灵</option>
+                <option>海螺</option>
+                <option>MathMind</option>
+              </select>
+              <select id="historyStatusFilter" onchange="filterHistory()">
+                <option value="">全部状态</option>
+                <option>成功</option>
+                <option>排队</option>
+                <option>失败</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="history-table-wrap">
+            <div class="table-scroll">
+              <table class="history-table" id="historyTable">
+                <thead>
+                  <tr>
+                    <th class="col-preview">预览</th>
+                    <th>Prompt</th>
+                    <th>厂商</th>
+                    <th>模式</th>
+                    <th>消耗</th>
+                    <th>状态</th>
+                    <th>质量</th>
+                    <th class="col-actions">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="historyTableBody">
+                  <tr data-provider="豆包" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">一只橘猫在阳光下打盹，微风轻拂窗帘</td>
+                    <td>豆包</td><td>文生视频</td><td>1 点</td>
+                    <td><span class="badge badge-success">成功</span></td><td>4.5</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="即梦" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">赛博朋克风格的城市夜景，霓虹灯闪烁</td>
+                    <td>即梦</td><td>文生视频</td><td>80 灵感值</td>
+                    <td><span class="badge badge-success">成功</span></td><td>4.2</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="可灵" data-status="排队">
+                    <td class="col-preview"><div class="preview-thumb">生成中</div></td>
+                    <td class="col-prompt">古风女子在樱花树下抚琴，花瓣飘落</td>
+                    <td>可灵</td><td>文生视频</td><td>10 积分</td>
+                    <td><span class="badge badge-pending">排队</span></td><td>-</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="MathMind" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">机器人 danced 在火星表面，背景是巨大的蓝色地球</td>
+                    <td>MathMind</td><td>图生视频</td><td>1 次</td>
+                    <td><span class="badge badge-success">成功</span></td><td>3.8</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="海螺" data-status="失败">
+                    <td class="col-preview"><div class="preview-thumb">失败</div></td>
+                    <td class="col-prompt">海浪拍打礁石，夕阳西下的慢镜头</td>
+                    <td>海螺</td><td>文生视频</td><td>1 次</td>
+                    <td><span class="badge badge-error">失败</span></td><td>-</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="元宝混元" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">未来城市飞行汽车穿梭于摩天大楼之间</td>
+                    <td>元宝混元</td><td>文生视频</td><td>1 次</td>
+                    <td><span class="badge badge-success">成功</span></td><td>4.0</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="豆包" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">水墨画风格的山水动画，云雾缭绕</td>
+                    <td>豆包</td><td>文生视频</td><td>2 点</td>
+                    <td><span class="badge badge-success">成功</span></td><td>4.7</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="即梦" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">热带雨林中的瀑布，阳光透过树叶洒落</td>
+                    <td>即梦</td><td>图生视频</td><td>80 灵感值</td>
+                    <td><span class="badge badge-success">成功</span></td><td>4.3</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="可灵" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">冰川崩塌的震撼瞬间，慢动作回放</td>
+                    <td>可灵</td><td>文生视频</td><td>5 积分</td>
+                    <td><span class="badge badge-success">成功</span></td><td>3.9</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr data-provider="MathMind" data-status="成功">
+                    <td class="col-preview"><div class="preview-thumb">预览</div></td>
+                    <td class="col-prompt">微观世界的细胞分裂过程，科学可视化</td>
+                    <td>MathMind</td><td>文生视频</td><td>1 次</td>
+                    <td><span class="badge badge-success">成功</span></td><td>4.1</td>
+                    <td class="col-actions">
+                      <div class="action-btns">
+                        <button class="action-btn" title="查看"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button class="action-btn" title="下载"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                        <button class="action-btn delete" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 团队 Tab ===== -->
+        <div id="tab-team" class="tab-content">
+          <div class="page-header">
+            <div class="title-group">
+              <div><h1>团队额度池</h1><div class="divider"></div></div>
+              <p>3 人团队 · 共享 128 次/日</p>
+            </div>
+          </div>
+
+          <div class="team-grid">
+            <div class="team-panel">
+              <div class="panel-header">
+                <h2>成员列表</h2>
+                <span class="panel-meta">2/3 席位</span>
+              </div>
+              <div class="history-table-wrap" style="flex:1;min-height:0;">
+                <div class="table-scroll">
+                  <table class="team-table">
+                    <thead><tr><th>成员</th><th>角色</th><th>今日消耗</th><th>日上限</th><th>自带额度</th><th>状态</th></tr></thead>
+                    <tbody>
+                      <tr><td><strong>我 (Admin)</strong></td><td>管理员</td><td>12 次</td><td>无限制</td><td>豆包x2, 即梦x1</td><td><span class="badge badge-success">正常</span></td></tr>
+                      <tr><td>小王</td><td>成员</td><td>8 次</td><td>30 次</td><td>元宝x1</td><td><span class="badge badge-success">正常</span></td></tr>
+                      <tr><td>小李</td><td>成员</td><td>0 次</td><td>30 次</td><td>无</td><td><span class="badge badge-pending">未激活</span></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="team-panel">
+              <div class="panel-header"><h2>团队配置</h2></div>
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <div class="config-card"><div class="config-label">当前套餐</div><div class="config-val">团队免费</div></div>
+                <div class="config-card"><div class="config-label">席位上限</div><div class="config-val">3 人</div></div>
+                <div class="config-card"><div class="config-label">成员日上限</div><div class="config-val">30 次/人</div></div>
+                <div class="config-card"><div class="config-label">公共额度账号</div><div class="config-val">6 个账号</div></div>
+                <div style="margin-top:auto;display:flex;gap:6px;">
+                  <button class="btn-sm" style="flex:1;">邀请成员</button>
+                  <button class="btn-sm primary" style="flex:1;">升级套餐</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- 底部状态栏 -->
+    <footer class="status-bar">
+      <div class="status-left">
+        <div class="status-item"><span class="status-dot"></span>调度引擎正常</div>
+        <div class="status-item">上次刷新：14:32</div>
+        <div class="status-item">自动续命：03:00</div>
+      </div>
+      <div class="status-right"><div class="status-item">Quota-Flow v0.9.0</div></div>
+    </footer>
+  </div>
+
+  <!-- ===== 弹窗：个人中心 ===== -->
+  <div class="modal-overlay" id="modal-profile" onclick="closeModalOnBackdrop(event)">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>个人中心</h3>
+        <button class="modal-close" onclick="closeModal('profile')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group"><label>邮箱</label><input type="text" value="user@example.com" readonly></div>
+        <div class="form-group"><label>显示名称</label><input type="text" value="Leo"></div>
+        <div class="form-group"><label>所属团队</label><input type="text" value="Quota-Flow Team" readonly></div>
+        <div class="form-group"><label>角色</label><input type="text" value="管理员" readonly></div>
+        <div class="form-group"><label>注册时间</label><input type="text" value="2026-07-15" readonly></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-sm" onclick="closeModal('profile')">取消</button>
+        <button class="btn-sm primary" onclick="closeModal('profile')">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 弹窗：设置 ===== -->
+  <div class="modal-overlay" id="modal-settings" onclick="closeModalOnBackdrop(event)">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>设置</h3>
+        <button class="modal-close" onclick="closeModal('settings')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group"><label>调度策略</label><select><option>可用优先</option><option>轮询均衡</option><option>质量优先</option><option>成本优先</option></select></div>
+        <div class="form-group"><label>质量阈值（低于此值自动重试）</label><input type="range" min="1" max="5" step="0.1" value="3" style="accent-color:var(--accent);"></div>
+        <div class="form-group"><label>运行模式</label><select><option>官方托管（推荐）</option><option>自部署</option></select></div>
+        <div class="form-group"><label>自动续命 Cookie</label><select><option>开启</option><option>关闭</option></select></div>
+        <div class="form-group"><label>健康检查频率</label><select><option>每 4 小时</option><option>每 8 小时</option><option>每 12 小时</option></select></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-sm" onclick="closeModal('settings')">取消</button>
+        <button class="btn-sm primary" onclick="closeModal('settings')">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 额度规格见 docs/数据库与额度/Provider额度规格.md
+    const VIP = false; // 静态示例：当前按普通用户展示（VIP 可解锁豆包 15s）
+
+    const MODELS = {
+      auto: ['自动选择'],
+      doubao: ['Seedance 2.0 Mini'],
+      jimeng: ['视频 S2.0', '视频 S2.0 Pro'],
+      qwen: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
+      yuanbao: ['混元（固定）'],
+      kling: ['可灵-标准', '可灵-大师'],
+      hailuo: ['海螺-标准'],
+      mathmind: ['mathmind-v1', 'mathmind-v2']
+    };
+
+    const PROVIDER_LABEL = {
+      auto: '智能调度', doubao: '豆包', jimeng: '即梦', qwen: '通义万相',
+      yuanbao: '元宝混元', kling: '可灵', hailuo: '海螺', mathmind: 'MathMind'
+    };
+
+    const DURATION_POINT = { 5: 0, 10: 1, 15: 2 };
+
+    function fillSelect(sel, options, fixed) {
+      sel.innerHTML = '';
+      options.forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = String(o.value);
+        opt.textContent = o.label;
+        if (o.disabled) opt.disabled = true;
+        sel.appendChild(opt);
+      });
+      sel.disabled = !!fixed;
+    }
+
+    function onProviderChange() {
+      const provider = document.getElementById('provider').value;
+      fillSelect(document.getElementById('model'), MODELS[provider].map(m => ({ value: m, label: m })));
+      updateParams();
+    }
+
+    function updateParams() {
+      const provider = document.getElementById('provider').value;
+      const model = document.getElementById('model').value;
+      const mode = document.getElementById('mode').value;
+      const duration = document.getElementById('duration');
+      const resolution = document.getElementById('resolution');
+      const uploadText = document.getElementById('upload-text');
+
+      // 时长：按厂商 / 模型 / 模式限制
+      const durations = [
+        { value: 5, label: '5 秒' },
+        { value: 10, label: '10 秒' },
+        { value: 15, label: '15 秒' }
+      ];
+      if (provider === 'yuanbao') {
+        durations.length = 1;
+        durations[0].label = '5 秒（固定）';
+      }
+      if (provider === 'doubao' && !VIP) {
+        durations[2].label = '15 秒（仅 VIP）';
+        durations[2].disabled = true;
+      }
+      if (provider === 'qwen') {
+        if (model === '万相 2.6' && mode === 'multi_ref') {
+          durations[2].label = '15 秒（多参考不支持）';
+          durations[2].disabled = true;
+        }
+        if (model === 'HappyHorse 1.0 Beta') {
+          durations[2].label = '15 秒（该模型不支持）';
+          durations[2].disabled = true;
+        }
+      }
+      fillSelect(duration, durations);
+
+      // 分辨率：元宝固定 720p
+      if (provider === 'yuanbao') {
+        fillSelect(resolution, [{ value: '720', label: '720p（固定）' }], true);
+      } else {
+        fillSelect(resolution, [
+          { value: '720', label: '720p' },
+          { value: '1080', label: '1080p' }
+        ]);
+      }
+
+      // 上传提示
+      if (provider === 'yuanbao') {
+        uploadText.textContent = '上传图片作为参考（最多 10 张，不支持视频）';
+      } else if (mode === 'multi_ref') {
+        uploadText.textContent = '拖拽图片 / 视频到此处（多参考生成，最多 5 个）';
+      } else if (mode === 'img' || mode === 'first_last') {
+        uploadText.textContent = '拖拽图片到此处，或点击选择文件';
+      } else {
+        uploadText.textContent = '文生视频无需上传素材';
+      }
+
+      // 预计消耗：按确认规格实时计算
+      const dur = parseInt(duration.value, 10) || 5;
+      const res = resolution.value || '720';
+      const d = DURATION_POINT[dur] ?? 0;
+      const costText = document.getElementById('cost-text');
+      const costWho = document.getElementById('cost-who');
+
+      if (provider === 'qwen') {
+        costText.textContent = (1 + d + (res === '1080' ? 1 : 0)) + ' 额度';
+        costWho.textContent = model + ' · ' + dur + 's · ' + res + 'p';
+      } else if (provider === 'doubao') {
+        costText.textContent = (1 + d) + ' 点';
+        costWho.textContent = 'Seedance 2.0 Mini · ' + dur + 's';
+      } else if (provider === 'yuanbao') {
+        costText.textContent = '1 个';
+        costWho.textContent = '元宝混元（固定 5 秒）';
+      } else {
+        costText.textContent = '1 次';
+        costWho.textContent = PROVIDER_LABEL[provider] + ' 执行';
+      }
+    }
+
+    // 初始化默认参数
+    onProviderChange();
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + tabName).classList.add('active');
+      const idx = ['dispatch', 'providers', 'history', 'team'].indexOf(tabName);
+      document.querySelectorAll('.nav-tab')[idx].classList.add('active');
+    }
+
+    function openModal(name) {
+      document.getElementById('modal-' + name).classList.add('active');
+    }
+    function closeModal(name) {
+      document.getElementById('modal-' + name).classList.remove('active');
+    }
+    function closeModalOnBackdrop(e) {
+      if (e.target.classList.contains('modal-overlay')) {
+        e.target.classList.remove('active');
+      }
+    }
+
+    function toggleExpand(btn) {
+      const row = btn.closest('tr');
+      const nextRow = row.nextElementSibling;
+      if (nextRow && nextRow.classList.contains('account-sublist')) {
+        const isHidden = nextRow.style.display === 'none';
+        nextRow.style.display = isHidden ? 'table-row' : 'none';
+        btn.classList.toggle('expanded', isHidden);
+      }
+    }
+
+    function filterProviders() {
+      const text = document.getElementById('providerFilter').value.toLowerCase();
+      const status = document.getElementById('providerStatusFilter').value;
+      const rows = document.querySelectorAll('#providerTableBody > tr:not(.account-sublist)');
+      rows.forEach(row => {
+        const name = row.querySelector('.col-name')?.textContent.toLowerCase() || '';
+        const badge = row.querySelector('.badge');
+        let rowStatus = '';
+        if (badge) {
+          if (badge.classList.contains('badge-success')) rowStatus = 'online';
+          else if (badge.classList.contains('badge-pending')) rowStatus = 'degraded';
+          else if (badge.classList.contains('badge-error')) rowStatus = 'offline';
+        }
+        const matchText = name.includes(text);
+        const matchStatus = !status || rowStatus === status;
+        row.style.display = (matchText && matchStatus) ? '' : 'none';
+        const sub = row.nextElementSibling;
+        if (sub && sub.classList.contains('account-sublist')) {
+          sub.style.display = 'none';
+        }
+      });
+    }
+
+    function filterHistory() {
+      const text = document.getElementById('historyFilter').value.toLowerCase();
+      const provider = document.getElementById('historyProviderFilter').value;
+      const status = document.getElementById('historyStatusFilter').value;
+      const rows = document.querySelectorAll('#historyTableBody tr');
+      rows.forEach(row => {
+        const prompt = row.querySelector('.col-prompt')?.textContent.toLowerCase() || '';
+        const rowProvider = row.dataset.provider || '';
+        const rowStatus = row.dataset.status || '';
+        const matchText = prompt.includes(text);
+        const matchProvider = !provider || rowProvider === provider;
+        const matchStatus = !status || rowStatus === status;
+        row.style.display = (matchText && matchProvider && matchStatus) ? '' : 'none';
+      });
+    }
+
+    // 支持 #tab=xxx 直达（便于静态预览）
+    const initialTab = (location.hash.match(/#tab=(.+)/) || [])[1];
+    if (initialTab && ['dispatch', 'providers', 'history', 'team'].includes(initialTab)) {
+      switchTab(initialTab);
+    }
+  </script>
+</body>
+</html>
