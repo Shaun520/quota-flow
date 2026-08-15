@@ -1,7 +1,7 @@
-# 多厂商视频生成接入计划（含账号绑定，第一轮：豆包 / 千问 / 元宝）
+# 多厂商视频生成接入计划（含账号绑定，第一轮：豆包 / 千问 / 元宝 / Dola）
 
-> 状态：实施中（第一轮：豆包 / 千问 / 元宝；千问 `qwenwan` 账号绑定完成、多参考/首帧/首尾帧已接入真实 DOM 参数选择与素材上传；元宝 `yuanbao` 账号绑定已接入，视频生成已接入；MathMind 因无免费额度已移除，不接入）
-> 日期：2026-08-14
+> 状态：实施中（第一轮：豆包 / 千问 / 元宝 / Dola；千问 `qwenwan` 账号绑定完成、多参考/首帧/首尾帧已接入真实 DOM 参数选择与素材上传；元宝 `yuanbao` 账号绑定已接入，视频生成已接入；Dola `dola` 官网地址为 `https://www.dola.com/`，账号绑定已接入，多参考生成已接入，素材图片通过 Ctrl+V 上传（最多 10 张），生成模式/时长/比例通过真实 DOM 操作，不接 `auto`；MathMind 因无免费额度已移除，不接入）
+> 日期：2026-08-15
 > 适用范围：apps/desktop、packages/db-supabase、migrations
 
 ## Summary
@@ -12,11 +12,12 @@
 - 当前完成：千问账号绑定去重/刷新已对齐豆包；`qwenwan` 显式选择可走 WebView 生成，模型/生成模式/清晰度/比例/时长/配音通过页面真实 DOM 操作选择，不再拼进 prompt；生成模式按模型限定（万相 2.7 多参考/首尾帧，万相 2.6 与 HappyHorse 1.0 多参考/首帧），必须至少上传一张素材图片；HappyHorse 1.0 不设置智能配音；`auto` 暂不包含千问。
 - 本轮完成：元宝 `yuanbao` 账号绑定复用现有 cookie 登录窗口与账号分区，登录页为 `https://yuanbao.tencent.com/chat/naQivTmsDa`，健康页为 `https://yuanbao.tencent.com/`；指纹沿用 `pt2gguin/hy_user`；绑定 UI 对齐豆包/千问去重语义，已有账号重复绑定直接刷新，不出现“新增账号/刷新已有账号”选择弹层；视频生成已接入，发送时在 prompt 前补 `视频生成：`，素材图片通过输入框 Ctrl+V 粘贴上传，调度台不接 `auto`。
 - 本轮调整：MathMind 确认无免费额度，已移除全部代码与账号绑定/生成入口；相关 provider seed、cost table、adapter、dispatch 分支、renderer UI、admin 原型与文档声明同步清理。
-- 素材上限：千问本轮限制最多上传 5 张图片，元宝最多上传 10 张；dispatch 对 `qwenwan` 按 5 张、`yuanbao` 按 10 张裁剪，UI 上传区同步限制。
+- 本轮调整：Dola `dola` 按豆包国际站 cookie 型厂商接入账号绑定，官网地址为 `https://www.dola.com/`；登录/健康检查/打开官网均指向该站点；账号绑定复用现有 cookie 登录窗口、分区保存、指纹去重链路。Dola 多参考生成已接入：进入官网后点击“视频生成”，通过真实 DOM 选择模型（`Dreamina Seedance 2.5` / `Dreamina Seedance 2.0 Fast` / `Dreamina Seedance 1.0`）、时长（10s/5s）、比例，素材图片通过输入框 Ctrl+V 粘贴上传（最多 10 张），参数不注入 prompt；暂不接 `auto` fallback。
+- 素材上限：千问本轮限制最多上传 5 张图片，元宝最多上传 10 张，Dola 最多上传 10 张；dispatch 对 `qwenwan` 按 5 张、`yuanbao`/`dola` 按 10 张裁剪，UI 上传区同步限制。
 
 ## Public API / Interface Changes
 
-- `GenerateInput.providerId` 支持 `auto | doubao | qwenwan | yuanbao`；renderer 不再把 `auto` 转成 `doubao`。
+- `GenerateInput.providerId` 支持 `auto | doubao | qwenwan | yuanbao | dola`；renderer 不再把 `auto` 转成 `doubao`。
 - 新增 desktop provider 契约：`DesktopVideoProvider` 提供 `id/capabilities/supportedDurations/cost/runGenerate/downloadContext/isNonRetryable`，统一返回 `VideoGenerateResult`。
 - credential 解析统一从 `providers.ts`/共享 helper 导出，删除 `dispatch.ts` 里的重复解析；解析不再默认豆包 origin，新厂商 storage 按各自 `providerSite` origin 处理。
 - `spec.ts`/renderer 增加 `qwenwan`、`yuanbao` 的显示、模型、时长、成本规则。
@@ -37,12 +38,25 @@
 - **额度初始化**：保存元宝账号继续走 `addProviderKey` + `getOrInitLedger`，沿用迁移中 seed 的 `default_daily_quota=5`、`supported_durations=[5]`。
 - **本轮不做**：元宝 `auto` fallback、API key 接入均不在本轮范围。
 
+## Dola Account Binding Changes
+
+- **官网地址**：`https://www.dola.com/`。
+- **厂商类型**：`dola` 按 cookie 型厂商接入，不走 API Key；登录窗口保持可见，由用户本人完成登录，不自动绕过区域/验证码等风控。
+- **登录与存储**：复用 `provider:login`、`partitionFor`、`providerSite`、`health-check` 框架；登录分区与账号分区继续使用 `persist:qf-p:dola:<keyId>`。
+- **站点配置**：`PROVIDER_SITES` 中 `dola` 的 loginUrl/healthUrl 均配置为 `https://www.dola.com/`；默认存储 origin 由 `providerSite(providerId)` 自动解析，避免回退到豆包 origin。
+- **去重兜底**：`Modals.tsx` 的 `AUTO_RESOLVE_EXISTING_PROVIDER_IDS` 增加 `dola`；已有 Dola 账号时重复绑定直接刷新已有 keyId，不出现“新增账号/刷新已有账号”选择 UI。
+- **指纹**：`ACCOUNT_FINGERPRINT_EXTRACTORS` 对 `dola` 使用通用 DOM 脚本 + cookie 优先；`FINGERPRINT_COOKIE_KEYS` 暂定候选为 `flow_cur_user_sec_id`、`sessionid`、`sid_tt`，不用 `msToken`/`s_v_web_id` 这类高风险会话 cookie 做账号指纹；真实登录后按 debug 记录校准。
+- **调度/生成**：`dispatch.ts` 已接入 `dola` 显式生成分支，`Dashboard.tsx` 已放开 Dola 生成候选；Dola 只显示“多参考生成”，展示上传区（最多 10 张），不展示分辨率、智能配音。`auto` 仍只由豆包触发，Dola 不进入 `auto` fallback。
+- **DB**：新增 `migrations/0021_add_dola_provider.sql` 幂等 seed `dola`，auth_type 为 `cookie`，默认日额度 `10`，unit 暂用“点”，capabilities 含基础时长；不新增 cost table。
+- **本轮不做**：Dola `auto` fallback、Dola 成本表接入。
+
 ## Implementation Changes
 
-- **调度执行**：`dispatch.ts` 已支持显式 `qwenwan` 走 `runQwenGeneration`、显式 `yuanbao` 走 `runYuanbaoGeneration`；元宝生成任务在创建前将 prompt 改为 `视频生成：<prompt>`，图片按最多 10 张传给 WebView。本轮继续保留 `auto` 映射到 `doubao`，不把千问/元宝纳入 auto fallback。后续再改成 provider registry + fallback，显式厂商只尝试该厂商；`blocked/content policy` 和手动取消立即停止。
-- **WebView 框架**：保留豆包 DOM 脚本，把 `webview-engine.ts` 重构为通用 WebView provider 基础（partition、cookie/storage 注入、窗口生命周期、进度事件、轮询/取消）加 `doubao/qwenwan/yuanbao` adapter。千问、元宝走真实 WebView 页面流；现有 HTTP adapter 只作参考。
+- **调度执行**：`dispatch.ts` 已支持显式 `qwenwan` 走 `runQwenGeneration`、显式 `yuanbao` 走 `runYuanbaoGeneration`、显式 `dola` 走 `runDolaGeneration`；元宝生成任务在创建前将 prompt 改为 `视频生成：<prompt>`，图片按最多 10 张传给 WebView。本轮继续保留 `auto` 映射到 `doubao`，不把千问/元宝/Dola 纳入 auto fallback。后续再改成 provider registry + fallback，显式厂商只尝试该厂商；`blocked/content policy` 和手动取消立即停止。
+- **WebView 框架**：保留豆包 DOM 脚本，把 `webview-engine.ts` 重构为通用 WebView provider 基础（partition、cookie/storage 注入、窗口生命周期、进度事件、轮询/取消）加 `doubao/qwenwan/yuanbao/dola` adapter。千问、元宝、Dola 走真实 WebView 页面流；现有 HTTP adapter 只作参考。
 - **千问 WebView**：`qwen-webview.ts` 负责千问视频生成：cookie/storage 注入 → 打开 `www.qianwen.com/chat` → 点击“AI生视频”入口并强制 guide 容器可交互 → 选择模型、生成模式（万相 2.7：多参考/首尾帧；万相 2.6 与 HappyHorse 1.0：多参考/首帧）、上传素材图片、点击参数摘要按钮（如 `720P·5s`）设置清晰度/比例/时长/配音（HappyHorse 1.0 跳过智能配音）→ 填写 prompt → 点击发送 → 捕获 chat 请求 → 轮询 detail 提取 mp4。当前仅支持需要素材的多参考/首帧/首尾帧；参数通过页面真实 DOM 控件选择，不注入 prompt；已补充登录态、提交失败、等待超时、内容审核拒绝等错误语义。
 - **元宝 WebView**：新增 `yuanbao-webview.ts` 负责元宝视频生成：cookie/storage 注入 → 打开 `https://yuanbao.tencent.com/chat/naQivTmsDa` → 聚焦输入框并通过 Ctrl+V 粘贴素材图片（最多 10 张）→ 在输入框末尾追加调度台已补 `视频生成：` 前缀的 prompt → 点击发送 → 从 `webRequest` 捕获 chat/detail 请求里的 `conversationId` 与请求头 → 轮询 `conversation/detail` 提取视频 URL。元宝当前没有独立视频生成 DOM，因此不操作生成模式/清晰度/比例/时长/配音控件。
+- **Dola WebView**：新增 `dola-webview.ts` 负责 Dola 多参考生成：cookie/storage 注入 → 打开 `https://www.dola.com/chat/` → 关闭 Cookie 提示后点击“视频生成” → 通过真实 DOM 操作选择模型、时长、比例 → 聚焦 `.tiptap.ProseMirror` 并通过 Ctrl+V 粘贴多参考图片（最多 10 张）→ 追加 prompt → 点击带 `bg-dbx-text-highlight`/`text-dbx-text-static-white-primary` 的发送按钮 → 轮询页面视频元素、mp4 属性与 `webRequest` 捕获的 mp4 URL 提取结果。Dola 仅支持需要图片素材的多参考生成，不接 `auto`，不拼参数到 prompt。
 - **成本/额度/下载**：成本改为 provider 的 `cost(input)` 或 `provider_cost_tables` 等价规则；job 的 `providerId/costAmount/costUnit`、`consumeLedger/consumeTeamQuotaAndFinalize` 使用实际厂商；`downloadVideo` 使用 provider 的 Referer/UA 上下文。
 - **UI**：生成页 provider 选项按已绑定、启用、支持当前 mode/duration 过滤；`qwenwan` 只显示当前模型支持的素材生成模式，并显示上传区，未上传素材时阻止生成；HappyHorse 1.0 隐藏智能配音入口；`handleGenerate` 传真实 `provider` 值；stage 文案去掉豆包硬编码。
 - **DB**：新增迁移删除 MathMind provider 配置，避免调度/UI 误判。
@@ -53,11 +67,12 @@
 - 绑定：真实账号验证千问、元宝登录绑定、健康检查、账号指纹去重。
 - 回归：豆包 `doubao` 与 `auto` 文生/图生视频仍能生成、下载、扣豆包额度；`blocked` 不换号。
 - 新厂商生成：千问、元宝 WebView 文生视频；图生视频和 `auto` 待后续。
-- 素材上限：千问多参考/首帧/首尾帧最多 5 张，元宝图片参考最多 10 张；超过上限时 UI 不再追加，dispatch 侧也按对应上限裁剪。
+- 新厂商绑定与生成：Dola 登录绑定、健康检查、账号指纹去重；生成页显式选择 Dola 后仅显示多参考生成、模型、时长、比例，上传 1-10 张参考图片后可生成并下载视频；`auto` 不包含 Dola。
+- 素材上限：千问多参考/首帧/首尾帧最多 5 张，元宝/Dola 图片参考最多 10 张；超过上限时 UI 不再追加，dispatch 侧也按对应上限裁剪。
 - Fallback：构造第一厂商失败（过期/额度不足/风控），`auto` 切到下一可用厂商；遇到内容政策/手动取消立即停止。
 
 ## Assumptions / Defaults
 
-- 第一轮只接 `doubao / qwenwan / yuanbao`；即梦、可灵、海螺按同一框架后续补齐。
-- 千问、元宝以 WebView 为默认，静态 cookie HTTP adapter 不进入 desktop 调度。
+- 第一轮只接 `doubao / qwenwan / yuanbao / dola`；即梦、可灵、海螺按同一框架后续补齐。
+- 千问、元宝、Dola 以 WebView 为默认，静态 cookie HTTP adapter 不进入 desktop 调度。
 - `auto` 总尝试上限默认 3 次；每个 provider 内账号排序优先 default、healthy、剩余额度充足，再按成本排序。

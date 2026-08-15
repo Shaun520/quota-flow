@@ -479,8 +479,8 @@ function firstEnabledProvider(providers: ProviderOption[]): ProviderOption | und
   return providers.find((p) => p.enabled !== false)
 }
 
-/** 千问/元宝这类 cookie 型厂商，已有账号存在时避免重复绑定，优先自动刷新或保存新指纹明确的账号。 */
-const AUTO_RESOLVE_EXISTING_PROVIDER_IDS = new Set(['qwenwan', 'yuanbao'])
+/** 千问/元宝/Dola 这类 cookie 型厂商，已有账号存在时避免重复绑定，优先自动刷新或保存新指纹明确的账号。 */
+const AUTO_RESOLVE_EXISTING_PROVIDER_IDS = new Set(['qwenwan', 'yuanbao', 'dola'])
 
 function shouldAutoResolveExistingProvider(providerId: string): boolean {
   return AUTO_RESOLVE_EXISTING_PROVIDER_IDS.has(providerId)

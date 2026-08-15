@@ -7,6 +7,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
   qwen: '通义万相',
   qwenwan: '千问（通义万相）',
   yuanbao: '元宝混元',
+  dola: 'Dola',
   kling: '可灵',
   hailuo: '海螺'
 }
@@ -18,6 +19,7 @@ export const MODELS: Record<string, string[]> = {
   qwen: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   qwenwan: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   yuanbao: ['混元'],
+  dola: ['Dreamina Seedance 2.5', 'Dreamina Seedance 2.0 Fast', 'Dreamina Seedance 1.0'],
   kling: ['可灵-标准', '可灵-大师'],
   hailuo: ['海螺-标准']
 }
@@ -48,6 +50,9 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
   }
   // 元宝没有独立视频生成 DOM，只按提示词 + 多参考图片执行，避免暴露无实际作用的模式选项。
   if (provider === 'yuanbao') {
+    return [{ value: 'multi_ref', label: '多参考生成' }]
+  }
+  if (provider === 'dola') {
     return [{ value: 'multi_ref', label: '多参考生成' }]
   }
   return [
@@ -118,6 +123,16 @@ export function resolutionOptions(
 }
 
 export function ratioOptions(provider: string): Array<{ value: string; label: string }> {
+  if (provider === 'dola') {
+    return [
+      { value: '1:1', label: '1:1' },
+      { value: '3:4', label: '3:4' },
+      { value: '4:3', label: '4:3' },
+      { value: '9:16', label: '9:16' },
+      { value: '16:9', label: '16:9' },
+      { value: '21:9', label: '21:9' }
+    ]
+  }
   if (provider === 'qwenwan') {
     return [
       { value: '9:16', label: '9:16' },
@@ -136,6 +151,7 @@ export function ratioOptions(provider: string): Array<{ value: string; label: st
 
 export function uploadHint(provider: string, mode: string): string {
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
+  if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (mode === 'multi_ref') return '拖拽图片 / 视频到此处（多参考生成，最多 5 个）'
   if (mode === 'img' || mode === 'first_last' || mode === 'first_frame') return '拖拽图片到此处，最多 5 张，或点击选择文件'
   return '文生视频无需上传素材'
@@ -164,6 +180,9 @@ export function computeCost(
   }
   if (provider === 'yuanbao') {
     return { text: '1 个', who: '元宝混元 · 5s' }
+  }
+  if (provider === 'dola') {
+    return { text: 1 + d + ' 点', who: model + ' · ' + duration + 's' }
   }
   return { text: '1 次', who: (PROVIDER_LABEL[provider] ?? provider) + ' 执行' }
 }
