@@ -1038,6 +1038,102 @@ input:focus, select:focus, textarea:focus {
   white-space: nowrap;
 }
 
+.permission-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.permission-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-background);
+  min-width: 0;
+}
+
+.permission-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+
+.permission-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.permission-tab-grid {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.permission-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.permission-check-item:hover {
+  background: var(--color-background-subtle, rgba(0, 0, 0, 0.03));
+}
+
+.permission-check-item input {
+  margin-top: 3px;
+  accent-color: var(--color-primary, #2563eb);
+}
+
+.permission-check-item > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.permission-check-label {
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.permission-check-hint {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.permission-tab-check {
+  background: var(--color-background-subtle, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border);
+}
+
+.permission-tab-check:hover {
+  background: var(--color-background);
+}
+
+.permission-tab-check-label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.permission-tab-check-label input {
+  margin-top: 3px;
+  accent-color: var(--color-primary, #2563eb);
+}
+
+.permission-tab-check .btn-sm {
+  white-space: nowrap;
+}
+
 .toggle {
   position: relative;
   display: inline-block;

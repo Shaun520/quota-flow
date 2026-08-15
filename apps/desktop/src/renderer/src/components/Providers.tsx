@@ -24,9 +24,10 @@ interface ProvidersProps {
   usageScope: UsageScope
   onBound?: () => void
   providers: ProvidersResult
+  canBind?: boolean
 }
 
-export default function Providers({ fresh, viewScope, usageScope, onBound, providers }: ProvidersProps) {
+export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
   const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind } = providers
   const [text, setText] = useState('')
@@ -109,9 +110,11 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
             <IconRefresh size={14} className={loading || refreshing ? 'spin' : undefined} />
             {loading || refreshing ? '\u5237\u65b0\u4e2d' : justRefreshed ? '\u5df2\u5237\u65b0' : '\u5237\u65b0'}
           </button>
-          <button className="btn-sm primary" onClick={() => openAdd()}>
-            + 新增厂商
-          </button>
+          {canBind && (
+            <button className="btn-sm primary" onClick={() => openAdd()}>
+              + 新增厂商
+            </button>
+          )}
         </div>
       </div>
 
@@ -157,9 +160,13 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                       title="还没有绑定任何厂商账号"
                       description="选择你想使用的厂商，绑定账号后即可获取免费额度"
                       action={
-                        <button className="btn-sm primary" onClick={() => openAdd()}>
-                          + 新增厂商
-                        </button>
+                        canBind ? (
+                          <button className="btn-sm primary" onClick={() => openAdd()}>
+                            + 新增厂商
+                          </button>
+                        ) : (
+                          <span className="providers-hint">管理员已关闭账号绑定入口</span>
+                        )
                       }
                     />
                   </td>
@@ -178,6 +185,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                         expanded={isExpanded}
                         onToggle={() => setExpanded((prev) => ({ ...prev, [p.providerId]: !prev[p.providerId] }))}
                         onBind={() => openAdd(p.providerId)}
+                        canBind={canBind}
                         onRename={async (keyId, name) => {
                           if (!name.trim()) return
                           await rename(keyId, name)
@@ -248,6 +256,7 @@ function ProviderRow({
   expanded,
   onToggle,
   onBind,
+  canBind,
   onTest,
   onRename,
   onSetDefault,
@@ -264,6 +273,7 @@ function ProviderRow({
   expanded: boolean
   onToggle: () => void
   onBind: () => void
+  canBind: boolean
   onRename: (keyId: string, name: string) => Promise<void>
   onTest: (keyId: string) => Promise<void>
   onSetDefault: (keyId: string) => Promise<void>
@@ -308,10 +318,10 @@ function ProviderRow({
           <button
             className="btn-sm primary"
             onClick={onBind}
-            disabled={!agg.enabled}
-            title={agg.enabled ? undefined : '厂商已停用，暂不能绑定账号'}
+            disabled={!canBind || !agg.enabled}
+            title={!canBind ? '管理员已关闭账号绑定入口' : agg.enabled ? undefined : '厂商已停用，暂不能绑定账号'}
           >
-            {agg.enabled ? '绑定账号' : '已停用'}
+            {!canBind ? '绑定已关闭' : agg.enabled ? '绑定账号' : '已停用'}
           </button>
         </td>
       </tr>

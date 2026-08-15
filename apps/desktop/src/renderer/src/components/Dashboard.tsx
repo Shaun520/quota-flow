@@ -24,6 +24,7 @@ import { getAuthService, getSupabaseConfig } from '../auth/service'
 import { ensureFreshSession } from '../auth/session'
 import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
+import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
 
 const VIP = false
 /** 本轮 auto 仍只走豆包；避免只绑千问/元宝时把 auto 展示成可用项 */
@@ -80,6 +81,7 @@ interface DashboardProps {
   onGoProviders: () => void
   providers: ProvidersResult
   jobs: JobsResult
+  features: DesktopFeatureFlags
   regenerateDraft?: RegenerateDraft | null
   onRegenerateConsumed?: () => void
 }
@@ -104,6 +106,21 @@ function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
   return 't2v'
 }
 
+function visibleModeOptions(
+  provider: string,
+  model: string,
+  features: DesktopFeatureFlags
+): Array<{ value: string; label: string }> {
+  return providerModeOptions(provider, model).filter((option) => {
+    if (option.value === 't2v') return features['dispatch.text2video']
+    if (option.value === 'img') return features['dispatch.img2video']
+    if (option.value === 'multi_ref') return features['dispatch.multi_ref']
+    if (option.value === 'first_last') return features['dispatch.first_last']
+    if (option.value === 'first_frame') return features['dispatch.first_frame']
+    return true
+  })
+}
+
 export default function Dashboard({
   fresh,
   banner,
@@ -116,6 +133,7 @@ export default function Dashboard({
   onGoProviders,
   providers,
   jobs,
+  features,
   regenerateDraft,
   onRegenerateConsumed
 }: DashboardProps) {
@@ -155,7 +173,11 @@ export default function Dashboard({
     const nextModel = MODELS[nextProvider]?.includes(regenerateDraft.model)
       ? regenerateDraft.model
       : MODELS[nextProvider]?.[0] ?? MODELS.auto[0]
-    const nextMode = normalizeRegenerateMode(nextProvider, regenerateDraft.mode)
+    const normalizedMode = normalizeRegenerateMode(nextProvider, regenerateDraft.mode)
+    const nextModes = visibleModeOptions(nextProvider, nextModel, features)
+    const nextMode = nextModes.some((m) => m.value === normalizedMode)
+      ? normalizedMode
+      : (nextModes[0]?.value ?? 't2v')
 
     setProvider(nextProvider)
     setModel(nextModel)
@@ -186,7 +208,7 @@ export default function Dashboard({
     return () => {
       cancelled = true
     }
-  }, [regenerateDraft, onRegenerateConsumed])
+  }, [regenerateDraft, features, onRegenerateConsumed])
 
   const activeBoundAggs = useMemo(
     () => provAggs.filter((a) => a.enabled && a.boundCount > 0),
@@ -202,6 +224,10 @@ export default function Dashboard({
     return providerDurations.get(provider) ?? DEFAULT_SUPPORTED_DURATIONS
   }, [provider, activeBoundAggs, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
+  const modeOptions = useMemo(
+    () => visibleModeOptions(provider, model, features),
+    [provider, model, features]
+  )
   const resolutions = resolutionOptions(provider)
   const ratios = ratioOptions(provider)
   const cost = computeCost(provider === 'auto' ? 'doubao' : provider, model, duration, resolution)
@@ -226,13 +252,13 @@ export default function Dashboard({
       const next = valid.includes('auto') ? 'auto' : valid[0]
       setProvider(next)
       setModel(MODELS[next]?.[0] ?? MODELS.auto[0])
-      const nextModes = providerModeOptions(next, MODELS[next]?.[0] ?? MODELS.auto[0])
+      const nextModes = visibleModeOptions(next, MODELS[next]?.[0] ?? MODELS.auto[0], features)
       setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
       setImageFiles([])
       setSavedImagePaths([])
     }
-  }, [providerOptions, provider])
+  }, [providerOptions, provider, features])
 
   useEffect(() => {
     if (!durations.some((d) => d.value === duration)) {
@@ -257,14 +283,14 @@ export default function Dashboard({
 
   // 千问生成模式按模型限定；模型变化后若当前模式不可用，自动落到该模型第一个可用模式
   useEffect(() => {
-    const validModes = providerModeOptions(provider, model).map((m) => m.value)
+    const validModes = visibleModeOptions(provider, model, features).map((m) => m.value)
     if (!validModes.includes(mode)) {
       setMode(validModes[0] ?? 't2v')
       setImages([])
       setImageFiles([])
       setSavedImagePaths([])
     }
-  }, [provider, model, mode])
+  }, [provider, model, mode, features])
 
   // 主进程生成事件：仅终态（成功/失败）刷新列表，进度事件不触发，避免历史页列表/分页反复闪加载
   useEffect(() => {
@@ -379,9 +405,14 @@ export default function Dashboard({
       setGenError('请先填写 Prompt 描述')
       return
     }
+    const validModes = visibleModeOptions(provider, model, features).map((m) => m.value)
+    if (!validModes.includes(currentMode)) {
+      setGenError('当前生成模式已被管理员关闭，请选择可用的生成模式')
+      return
+    }
     const imageCount = savedImagePaths.length + imageFiles.length
     if (currentMode !== 't2v' && imageCount === 0) {
-      const modeLabel = providerModeOptions(provider, model).find((m) => m.value === currentMode)?.label ?? '多参考'
+      const modeLabel = visibleModeOptions(provider, model, features).find((m) => m.value === currentMode)?.label ?? '多参考'
       setGenError(`${modeLabel}需要至少上传一张素材图片`)
       return
     }
@@ -460,7 +491,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, features, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -497,7 +528,7 @@ export default function Dashboard({
     setProvider(value)
     const nextModel = MODELS[value]?.[0] ?? MODELS.auto[0]
     setModel(nextModel)
-    const nextModes = providerModeOptions(value, nextModel)
+    const nextModes = visibleModeOptions(value, nextModel, features)
     setMode(nextModes[0]?.value ?? 't2v')
     setImages([])
     setImageFiles([])
@@ -515,7 +546,7 @@ export default function Dashboard({
 
   const onModelChange = (value: string): void => {
     setModel(value)
-    const nextModes = providerModeOptions(provider, value)
+    const nextModes = visibleModeOptions(provider, value, features)
     if (!nextModes.some((m) => m.value === mode)) {
       setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
@@ -653,7 +684,7 @@ export default function Dashboard({
                 id="mode"
                 value={mode}
                 onChange={onModeChange}
-                options={providerModeOptions(provider, model)}
+                options={modeOptions}
               />
             </div>
             <div className="param-field">
