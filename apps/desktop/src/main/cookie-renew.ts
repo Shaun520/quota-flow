@@ -101,7 +101,7 @@ async function tick(): Promise<void> {
     })
     providerSvc = new ProviderService(client)
 
-    const keys = await providerSvc.listProviderKeys(config.userId)
+    const keys = await providerSvc.listProviderKeysWithSecrets(config.userId)
     const candidates = keys.filter((k) => {
       if (k.auth_type === 'apikey') return false // 无 cookie 会话
       if (k.enabled === false) return false

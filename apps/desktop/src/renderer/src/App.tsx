@@ -123,10 +123,10 @@ function MainApp({
   const jobs = useJobs()
   const [bannerDismissed, setBannerDismissed] = useState(() => readWelcomeDismissed(user.id))
   const onboardStep = useMemo<1 | 2 | 3>(() => {
-    if (jobs.items.some((j) => j.record.status === '成功')) return 3
+    if (jobs.hasAnySuccess) return 3
     if (providers.totalBound > 0) return 2
     return 1
-  }, [jobs.items, providers.totalBound])
+  }, [jobs.hasAnySuccess, providers.totalBound])
   const fresh = onboardStep < 3
   const onboardingReady = !providers.loading && !jobs.loading
   const bannerVisible = onboardingReady && fresh && !bannerDismissed

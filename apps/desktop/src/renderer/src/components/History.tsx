@@ -7,8 +7,9 @@ import Pagination from './Pagination'
 import Select from './Select'
 import { VideoThumb } from './VideoThumb'
 import { useAuth } from '../hooks/useAuth'
-import { getAuthService, getSupabaseConfig } from '../auth/service'
+import { getAuthService, getProviderService, getSupabaseConfig } from '../auth/service'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
+import type { JobStatus } from '@quota-flow/db-supabase'
 
 const PAGE_SIZE = 10
 
@@ -145,7 +146,7 @@ export default function History({
   features?: Partial<DesktopFeatureFlags>
   onRegenerate?: (item: JobItem) => void
 }) {
-  const { loading, error, items, reload, remove, removeMany } = jobs
+  const { loading, error, items, total, page, setPage, setFilters, reload, remove, removeMany } = jobs
   const { user } = useAuth()
   const canDetail = features['history.detail'] !== false
   const canRegenerate = features['history.regenerate'] !== false && !!onRegenerate
@@ -177,10 +178,29 @@ export default function History({
   const boxFrameRef = useRef<HTMLDivElement | null>(null)
   const [text, setText] = useState('')
   const [provider, setProvider] = useState('')
-  const [status, setStatus] = useState('')
-  const [page, setPage] = useState(1)
+  const [status, setStatus] = useState<JobStatus | ''>('')
+  const [allProviderOptions, setProviderOptions] = useState<Array<{ value: string; label: string }>>([])
   const [notice, setNotice] = useState<string | null>(null)
   const [copiedPrompt, setCopiedPrompt] = useState(false)
+
+  useEffect(() => {
+    const svc = getProviderService()
+    if (!svc) return
+    let cancelled = false
+    svc
+      .listAllProviders()
+      .then((providers) => {
+        if (!cancelled) {
+          setProviderOptions(providers.map((p) => ({ value: p.id, label: p.name })))
+        }
+      })
+      .catch(() => {
+        // 非关键：筛选器仍可用当前页出现的厂商；列表加载失败也不影响历史数据。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // 打开详情时，把上传图片的本地路径解析成可预览的 http 地址
   useEffect(() => {
@@ -231,7 +251,7 @@ export default function History({
   }
 
   const toggleSelectAll = (): void => {
-    const ids = filtered.map((i) => i.id)
+    const ids = items.map((i) => i.id)
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (ids.every((id) => next.has(id))) {
@@ -491,21 +511,25 @@ export default function History({
     setPreview({ id: item.id, src })
   }
 
-  const providers = Array.from(new Set(items.map((i) => i.record.provider)))
-  const filtered = items.filter((i) => {
-    const r = i.record
-    const matchText = r.prompt.toLowerCase().includes(text.trim().toLowerCase())
-    const matchProvider = !provider || r.provider === provider
-    const matchStatus = !status || r.status === status
-    return matchText && matchProvider && matchStatus
-  })
+  const pageProviders = Array.from(new Set(items.map((i) => i.record.providerId).filter((id): id is string => !!id)))
+  const providerOptions = [...allProviderOptions]
+  for (const id of pageProviders) {
+    if (!providerOptions.some((opt) => opt.value === id)) {
+      providerOptions.push({ value: id, label: items.find((i) => i.record.providerId === id)?.record.provider ?? id })
+    }
+  }
+  if (provider && !providerOptions.some((opt) => opt.value === provider)) {
+    providerOptions.unshift({ value: provider, label: provider })
+  }
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const pagedItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const maxPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const safePage = Math.min(page, maxPage)
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage)
+  }, [page, safePage, setPage])
   const colSpan = batchMode ? (canWatermark ? 11 : 10) : (canWatermark ? 10 : 9)
-  const selectedCount = filtered.filter((i) => selectedIds.has(i.id)).length
-  const allSelected = filtered.length > 0 && selectedCount === filtered.length
+  const selectedCount = items.filter((i) => selectedIds.has(i.id)).length
+  const allSelected = items.length > 0 && selectedCount === items.length
 
   // 全选框半选态：当前筛选结果只选了一部分
   useEffect(() => {
@@ -573,22 +597,23 @@ export default function History({
             type="text"
             placeholder="搜索提示词..."
             value={text}
-            onChange={(e) => { setText(e.target.value); setPage(1) }}
+            onChange={(e) => { setText(e.target.value); setFilters({ search: e.target.value }) }}
           />
           <Select
             value={provider}
-            onChange={(v) => { setProvider(v); setPage(1) }}
-            options={[{ value: '', label: '全部厂商' }, ...providers.map((p) => ({ value: p, label: p }))]}
+            onChange={(v) => { setProvider(v); setFilters({ providerId: v }) }}
+            options={[{ value: '', label: '全部厂商' }, ...providerOptions]}
           />
           <Select
             value={status}
-            onChange={(v) => { setStatus(v); setPage(1) }}
+            onChange={(v) => { setStatus(v as JobStatus | ''); setFilters({ status: v as JobStatus | '' }) }}
             options={[
               { value: '', label: '全部状态' },
-              { value: '成功', label: '成功' },
-              { value: '排队', label: '排队' },
-              { value: '失败', label: '失败' },
-              { value: '未生成', label: '未生成' }
+              { value: 'success', label: '成功' },
+              { value: 'pending', label: '排队' },
+              { value: 'failed', label: '失败' },
+              { value: 'not_generated', label: '未生成' },
+              { value: 'interrupted', label: '意外中断' }
             ]}
           />
         </div>
@@ -631,8 +656,8 @@ export default function History({
                       type="checkbox"
                       checked={allSelected}
                       onChange={toggleSelectAll}
-                      disabled={filtered.length === 0}
-                      aria-label="全选当前筛选结果"
+                      disabled={items.length === 0}
+                      aria-label="全选当前页结果"
                     />
                   </th>
                 )}
@@ -648,7 +673,7 @@ export default function History({
               </tr>
             </thead>
             <tbody>
-              {pagedItems.map((item) => {
+              {items.map((item) => {
                 const r = item.record
                 const localPath = r.localPath
                 const wmStatus = r.watermarkStatus
@@ -774,7 +799,7 @@ export default function History({
                   </Fragment>
                 )
               })}
-              {filtered.length === 0 && (
+              {items.length === 0 && (
                 <tr>
                   <td colSpan={colSpan} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: '24px' }}>
                     没有匹配的记录
@@ -785,8 +810,8 @@ export default function History({
           </table>
         </div>
         <div className="table-footer">
-          <span className="table-total">共 {filtered.length} 项</span>
-          <Pagination page={safePage} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} />
+          <span className="table-total">共 {total} 项</span>
+          <Pagination page={safePage} total={total} pageSize={PAGE_SIZE} onChange={setPage} />
         </div>
       </div>
 

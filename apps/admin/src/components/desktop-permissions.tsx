@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
-import { listTeams, type AdminTeam } from "@/lib/api/teams";
+import { listTeamOptions, type TeamOption } from "@/lib/api/teams";
 import { insertAuditLog } from "@/lib/utils/audit";
 
 export const PERMISSION_FEATURE_KEYS = [
@@ -127,7 +127,7 @@ function applyRows(values: Record<FeatureKey, boolean>, rows: PermissionRow[]): 
 }
 
 export function DesktopPermissionsPage() {
-  const [teams, setTeams] = useState<AdminTeam[]>([]);
+  const [teams, setTeams] = useState<TeamOption[]>([]);
   const [scopeKey, setScopeKey] = useState("global");
   const [values, setValues] = useState<Record<FeatureKey, boolean>>(() => ({ ...DEFAULT_VALUES }));
   const [loading, setLoading] = useState(true);
@@ -147,8 +147,8 @@ export function DesktopPermissionsPage() {
 
   const loadTeams = useCallback(async () => {
     try {
-      const res = await listTeams({ pageSize: 1000 });
-      setTeams(res.items);
+      const options = await listTeamOptions();
+      setTeams(options);
     } catch (e) {
       setError(e instanceof Error ? e.message : "团队列表加载失败");
     }

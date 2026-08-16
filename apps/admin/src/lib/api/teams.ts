@@ -73,6 +73,11 @@ export interface TeamSettingsInput {
   status?: TeamStatus;
 }
 
+export interface TeamOption {
+  id: string;
+  name: string;
+}
+
 export async function listTeams(params: TeamListParams = {}): Promise<TeamListResult> {
   const supabase = createAdminBrowserClient();
   const page = params.page ?? 1;
@@ -91,6 +96,16 @@ export async function listTeams(params: TeamListParams = {}): Promise<TeamListRe
     total: Number(raw.total ?? 0),
     items: (raw.items ?? []).map((it) => normalizeTeam(it as Record<string, unknown>))
   };
+}
+
+export async function listTeamOptions(): Promise<TeamOption[]> {
+  const supabase = createAdminBrowserClient();
+  const { data, error } = await supabase
+    .from("teams")
+    .select("id, name")
+    .order("name");
+  if (error) throw error;
+  return (data ?? []) as TeamOption[];
 }
 
 export async function listTeamMembers(teamId: string): Promise<AdminTeamMember[]> {

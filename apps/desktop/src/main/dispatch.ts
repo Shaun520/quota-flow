@@ -258,8 +258,8 @@ export async function runGenerate(
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
   const keys = input.teamId
-    ? await providerSvc.listTeamProviderKeys(input.teamId)
-    : (await providerSvc.listProviderKeys(input.userId)).filter((k) => !k.team_id)
+    ? await providerSvc.listTeamProviderKeysWithSecrets(input.teamId)
+    : (await providerSvc.listProviderKeysWithSecrets(input.userId)).filter((k) => !k.team_id)
   const providerKeys = keys.filter((k) => k.provider_id === resolvedProviderId && k.enabled !== false)
 
   let selectedKey: { id: string; accountName: string | null } | null = null

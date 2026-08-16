@@ -3,8 +3,10 @@ import { getJobService } from '../auth/service'
 import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
-import type { JobRow } from '@quota-flow/db-supabase'
+import type { JobListItem, JobListQuery, JobStatus } from '@quota-flow/db-supabase'
 import type { HistoryStatus, JobRecord, WatermarkBBox, WatermarkStatus } from '../../../shared/history'
+
+const PAGE_SIZE = 10
 
 const PROVIDER_NAME: Record<string, string> = {
   qwenwan: '通义万相', qwen: '通义万相', yuanbao: '元宝混元',
@@ -36,49 +38,55 @@ export interface JobItem {
   record: JobRecord
 }
 
-function toJobItem(row: JobRow): JobItem {
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((p): p is string => typeof p === 'string') : []
+}
+
+function toJobItem(row: JobListItem): JobItem {
   const pid = row.provider_id ?? ''
   const quotaUsed = Number(row.cost_amount ?? 0)
-  const opts = (row.options ?? {}) as Record<string, unknown>
-  const watermarkBBox = readWatermarkBBox(opts.watermarkBBox)
-  const watermarkBBoxes = readWatermarkBBoxes(opts.watermarkBBoxes, watermarkBBox)
-  const accountName = typeof opts.accountName === 'string' && opts.accountName ? opts.accountName : null
-  const localPath =
-    typeof opts.localPath === 'string' && opts.localPath
-      ? opts.localPath
-      : row.result_url && !/^https?:/i.test(row.result_url)
-        ? row.result_url
-        : null
-  const cleanLocalPath =
-    typeof opts.cleanLocalPath === 'string' && opts.cleanLocalPath
-      ? opts.cleanLocalPath
-      : null
-  const watermarkStatus =
-    typeof opts.watermarkStatus === 'string' ? opts.watermarkStatus as WatermarkStatus : null
-  const watermarkMethod =
-    typeof opts.watermarkMethod === 'string' ? opts.watermarkMethod : null
-  const watermarkError =
-    typeof opts.watermarkError === 'string' ? opts.watermarkError : null
+  const watermarkBBox = readWatermarkBBox(row.watermarkBBox)
+  const watermarkBBoxes = readWatermarkBBoxes(row.watermarkBBoxes, watermarkBBox)
+  const accountName = readString(row.accountName)
+  const localPath = readString(row.localPath) ?? (
+    row.result_url && !/^https?:/i.test(row.result_url) ? row.result_url : null
+  )
+  const cleanLocalPath = readString(row.cleanLocalPath)
+  const watermarkStatus = readString(row.watermarkStatus) as WatermarkStatus | null
+  const watermarkMethod = readString(row.watermarkMethod)
+  const watermarkError = readString(row.watermarkError)
+  const durationSec = readNumber(row.durationSec)
   const params =
-    opts.mode || opts.durationSec || opts.ratio || opts.audio || opts.resolution
+    row.mode || durationSec || row.ratio || row.audio || row.resolution
       ? {
-          mode: typeof opts.mode === 'string' ? opts.mode : undefined,
-          durationSec: typeof opts.durationSec === 'number' ? opts.durationSec : undefined,
-          ratio: typeof opts.ratio === 'string' ? opts.ratio : undefined,
-          audio: typeof opts.audio === 'string' ? opts.audio : undefined,
-          resolution: typeof opts.resolution === 'string' ? opts.resolution : undefined
+          mode: row.mode,
+          durationSec: durationSec ?? undefined,
+          ratio: readString(row.ratio) ?? undefined,
+          audio: readString(row.audio) ?? undefined,
+          resolution: readString(row.resolution) ?? undefined
         }
       : null
-  const images = Array.isArray(opts.images)
-    ? opts.images.filter((p): p is string => typeof p === 'string')
-    : []
+  const images = readStringArray(row.images)
   return {
     id: row.id,
     record: {
       at: row.created_at,
       provider: PROVIDER_NAME[pid] ?? (pid || '—'),
       providerId: pid || undefined,
-      model: typeof opts.model === 'string' ? opts.model : undefined,
+      model: readString(row.model) ?? undefined,
       accountName,
       mode: MODE_LABEL[row.mode] ?? row.mode,
       prompt: row.prompt ?? '',
@@ -137,9 +145,20 @@ export interface JobsResult {
   loading: boolean
   error: string | null
   items: JobItem[]
+  total: number
+  page: number
+  hasAnySuccess: boolean
+  setPage: (page: number) => void
+  setFilters: (filters: Partial<JobFilters>) => void
   reload: () => void
   remove: (jobId: string) => Promise<boolean>
   removeMany: (ids: string[]) => Promise<number>
+}
+
+export interface JobFilters {
+  search: string
+  providerId: string
+  status: JobStatus | ''
 }
 
 export function useJobs(): JobsResult {
@@ -147,11 +166,19 @@ export function useJobs(): JobsResult {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<JobItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [filters, setFiltersState] = useState<JobFilters>({ search: '', providerId: '', status: '' })
+  const [hasAnySuccess, setHasAnySuccess] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   // 是否已加载过：首次加载显示 loading，后续刷新静默（保留旧数据，避免整页闪“加载中”）
   const loadedRef = useRef(false)
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+  const setFilters = useCallback((next: Partial<JobFilters>) => {
+    setFiltersState((prev) => ({ ...prev, ...next }))
+    setPage(1)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -167,12 +194,21 @@ export function useJobs(): JobsResult {
     }
     if (!loadedRef.current) setLoading(true)
     setError(null)
+    const query: JobListQuery = {
+      page,
+      pageSize: PAGE_SIZE,
+      search: filters.search,
+      providerId: filters.providerId || undefined,
+      status: filters.status || undefined
+    }
     svc
-      .listJobs(user.id)
-      .then((rows) => {
+      .listJobs(user.id, query)
+      .then((res) => {
         if (!cancelled) {
           loadedRef.current = true
-          setItems(rows.map(toJobItem))
+          setItems(res.items.map(toJobItem))
+          setTotal(res.total)
+          setPage(res.page)
         }
       })
       .catch(async (e: unknown) => {
@@ -192,6 +228,24 @@ export function useJobs(): JobsResult {
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, reloadKey, page, filters.search, filters.providerId, filters.status])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!user) return
+    const svc = getJobService()
+    if (!svc) return
+    svc
+      .hasAnySuccess(user.id)
+      .then((value) => {
+        if (!cancelled) setHasAnySuccess(value)
+      })
+      .catch(() => {
+        // 非关键：只影响欢迎横幅是否把用户视为已完成首次生成。
       })
     return () => {
       cancelled = true
@@ -230,5 +284,5 @@ export function useJobs(): JobsResult {
     [reload, user]
   )
 
-  return { loading, error, items, reload, remove, removeMany }
+  return { loading, error, items, total, page, hasAnySuccess, setPage, setFilters, reload, remove, removeMany }
 }
