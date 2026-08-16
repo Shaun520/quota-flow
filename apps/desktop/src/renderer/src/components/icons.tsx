@@ -165,6 +165,14 @@ export const IconMaximize = (p: IconProps) => (
   </Svg>
 )
 
+export const IconSparkles = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" />
+    <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z" />
+    <path d="M5 15l.7 1.7L7.5 17.5l-1.8.8L5 20l-.7-1.7L2.5 17.5l1.8-.8L5 15z" />
+  </Svg>
+)
+
 // 厂商图标（官方品牌 logo，来源：LobeHub @lobehub/icons-static-svg v1.94.0，https://lobehub.com/icons）
 export const IconDoubao = (p: IconProps) => (
   <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24" aria-hidden="true">

@@ -21,8 +21,11 @@ export const PERMISSION_FEATURE_KEYS = [
   "history.regenerate",
   "history.copy_prompt",
   "history.watermark_removal",
+  "creation.ai_toolbox",
   "creation.watermark",
+  "creation.prompt_expander",
   "creation.storyboard",
+  "creation.video_library",
   "creation.community"
 ] as const;
 
@@ -39,7 +42,7 @@ const FEATURES: FeatureItem[] = [
   { key: "tab.providers", label: "厂商", description: "桌面端主 Tab：厂商管理" },
   { key: "tab.history", label: "历史", description: "桌面端主 Tab：历史记录" },
   { key: "tab.team", label: "团队", description: "桌面端主 Tab：团队" },
-  { key: "tab.creation", label: "创作中心", description: "桌面端主 Tab：创作中心（预留）" },
+  { key: "tab.creation", label: "创作中心", description: "桌面端主 Tab：创作中心" },
   { key: "dispatch.text2video", label: "文生视频", description: "调度台生成模式：文生视频" },
   { key: "dispatch.img2video", label: "图生视频", description: "调度台生成模式：图生视频" },
   { key: "dispatch.multi_ref", label: "多参考生成", description: "调度台生成模式：多参考生成" },
@@ -50,39 +53,90 @@ const FEATURES: FeatureItem[] = [
   { key: "history.regenerate", label: "重新生成", description: "历史详情重新生成入口" },
   { key: "history.copy_prompt", label: "复制提示词", description: "历史详情复制提示词入口" },
   { key: "history.watermark_removal", label: "去水印", description: "历史记录去水印/框选/重试入口" },
-  { key: "creation.watermark", label: "去水印工作台", description: "创作中心去水印（预留）" },
-  { key: "creation.storyboard", label: "分镜生成", description: "创作中心分镜生成（预留）" },
-  { key: "creation.community", label: "社区优秀视频", description: "创作中心社区视频（预留）" }
+  { key: "creation.watermark", label: "去水印", description: "创作中心 AI 工具箱：去水印入口" },
+  { key: "creation.prompt_expander", label: "提示词扩展", description: "创作中心 AI 工具箱：提示词扩展（待接入）" },
+  { key: "creation.storyboard", label: "分镜生成", description: "创作中心 AI 工具箱：分镜生成（待接入）" },
+  { key: "creation.community", label: "视频灵感库", description: "创作中心视频灵感库：优秀视频与参考提示词" }
 ];
 
 const MAIN_TAB_FEATURES = FEATURES.filter((feature) => feature.key.startsWith("tab."));
 
-const FEATURES_BY_TAB: Array<{
+interface FeatureGroup {
+  groupKey: FeatureKey;
   tabKey: FeatureKey;
   tabLabel: string;
+  title: string;
+  sectionTitle: string;
   features: FeatureItem[];
-}> = [
-  {
-    tabKey: "tab.dispatch",
-    tabLabel: "调度台",
-    features: FEATURES.filter((feature) => feature.key.startsWith("dispatch."))
-  },
-  {
-    tabKey: "tab.providers",
-    tabLabel: "厂商",
-    features: FEATURES.filter((feature) => feature.key.startsWith("providers."))
-  },
-  {
-    tabKey: "tab.history",
-    tabLabel: "历史",
-    features: FEATURES.filter((feature) => feature.key.startsWith("history."))
-  },
-  {
-    tabKey: "tab.creation",
-    tabLabel: "创作中心",
-    features: FEATURES.filter((feature) => feature.key.startsWith("creation."))
+}
+
+const CREATION_AI_TOOLBOX_KEYS = new Set<string>([
+  "creation.watermark",
+  "creation.prompt_expander",
+  "creation.storyboard"
+]);
+
+function buildFeatureGroups(): FeatureGroup[] {
+  const groups: FeatureGroup[] = [];
+  const tabs: Array<{ tabKey: FeatureKey; tabLabel: string; match: (key: string) => boolean }> = [
+    {
+      tabKey: "tab.dispatch",
+      tabLabel: "调度台",
+      match: (key) => key.startsWith("dispatch.")
+    },
+    {
+      tabKey: "tab.providers",
+      tabLabel: "厂商",
+      match: (key) => key.startsWith("providers.")
+    },
+    {
+      tabKey: "tab.history",
+      tabLabel: "历史",
+      match: (key) => key.startsWith("history.")
+    },
+    {
+      tabKey: "tab.creation",
+      tabLabel: "创作中心",
+      match: (key) => key.startsWith("creation.")
+    }
+  ];
+
+  for (const tab of tabs) {
+    const features = FEATURES.filter((feature) => tab.match(feature.key));
+    if (tab.tabKey !== "tab.creation") {
+      groups.push({
+        groupKey: tab.tabKey,
+        tabKey: tab.tabKey,
+        tabLabel: tab.tabLabel,
+        title: `${tab.tabLabel}功能`,
+        sectionTitle: `${tab.tabLabel}功能`,
+        features
+      });
+      continue;
+    }
+
+    groups.push({
+      groupKey: "creation.ai_toolbox",
+      tabKey: "tab.creation",
+      tabLabel: "创作中心",
+      title: "AI 工具箱",
+      sectionTitle: "创作中心 · AI 工具箱",
+      features: features.filter((feature) => CREATION_AI_TOOLBOX_KEYS.has(feature.key))
+    });
+    groups.push({
+      groupKey: "creation.video_library",
+      tabKey: "tab.creation",
+      tabLabel: "创作中心",
+      title: "视频灵感库",
+      sectionTitle: "创作中心 · 视频灵感库",
+      features: features.filter((feature) => feature.key === "creation.community")
+    });
   }
-];
+
+  return groups;
+}
+
+const FEATURE_GROUPS = buildFeatureGroups();
 
 type Scope = { kind: "global"; id: null; label: string } | { kind: "team"; id: string; label: string };
 
@@ -134,7 +188,7 @@ export function DesktopPermissionsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [expandedTabs, setExpandedTabs] = useState<string[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
 
   const scope = useMemo<Scope>(() => {
     if (scopeKey.startsWith("team:")) {
@@ -165,6 +219,16 @@ export function DesktopPermissionsPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const handleGroupToggle = useCallback((group: FeatureGroup, checked: boolean) => {
+    setValues((prev) => {
+      const next = { ...prev, [group.groupKey]: checked };
+      for (const feature of group.features) {
+        next[feature.key] = checked;
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -314,36 +378,103 @@ export function DesktopPermissionsPage() {
                           </span>
                         </span>
                       </label>
-                      <button
-                        className="btn-sm"
-                        type="button"
-                        disabled={!values[feature.key]}
-                        onClick={() =>
-                          setExpandedTabs((prev) =>
-                            prev.includes(feature.key)
-                              ? prev.filter((key) => key !== feature.key)
-                              : [...prev, feature.key]
-                          )
-                        }
-                      >
-                        {expandedTabs.includes(feature.key) ? "收起功能" : "展开功能"}
-                      </button>
+                      <div className="permission-tab-actions">
+                        {FEATURE_GROUPS.filter((group) => group.tabKey === feature.key).map((group) => {
+                          const expanded = expandedGroups.includes(group.groupKey);
+                          const label =
+                            group.tabKey === "tab.creation"
+                              ? `${expanded ? "收起 " : "展开 "}${group.title}`
+                              : expanded
+                                ? "收起功能"
+                                : "展开功能";
+                          if (group.tabKey === "tab.creation") {
+                            const groupEnabled = values[group.groupKey];
+                            return (
+                              <div
+                                className={"permission-tab-subgroup" + (groupEnabled ? "" : " muted")}
+                                key={group.groupKey}
+                              >
+                                <label className="permission-tab-subgroup-label">
+                                  <input
+                                    type="checkbox"
+                                    checked={groupEnabled}
+                                    onChange={(e) => handleGroupToggle(group, e.target.checked)}
+                                  />
+                                  <span>{group.title}</span>
+                                </label>
+                                <button
+                                  className="btn-sm"
+                                  type="button"
+                                  disabled={!values[feature.key]}
+                                  onClick={() =>
+                                    setExpandedGroups((prev) =>
+                                      prev.includes(group.groupKey)
+                                        ? prev.filter((key) => key !== group.groupKey)
+                                        : [...prev, group.groupKey]
+                                    )
+                                  }
+                                >
+                                  {label}
+                                </button>
+                              </div>
+                            );
+                          }
+                          return (
+                            <button
+                              key={group.groupKey}
+                              className="btn-sm"
+                              type="button"
+                              disabled={!values[feature.key]}
+                              onClick={() =>
+                                setExpandedGroups((prev) =>
+                                  prev.includes(group.groupKey)
+                                    ? prev.filter((key) => key !== group.groupKey)
+                                    : [...prev, group.groupKey]
+                                )
+                              }
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   ))}
                 </div>
               </section>
 
-              {FEATURES_BY_TAB.map((group) => {
-                if (!values[group.tabKey] || !expandedTabs.includes(group.tabKey)) return null;
+              {FEATURE_GROUPS.map((group) => {
+                if (!values[group.tabKey] || !expandedGroups.includes(group.groupKey)) return null;
+                const isCreationGroup = group.tabKey === "tab.creation";
+                const groupEnabled = values[group.groupKey];
                 return (
-                  <section className="permission-section" key={group.tabKey}>
-                    <div className="permission-section-title">{group.tabLabel}功能</div>
+                  <section
+                    className={"permission-section" + (isCreationGroup && !groupEnabled ? " permission-group-disabled" : "")}
+                    key={group.groupKey}
+                  >
+                    <div className="permission-section-title-row">
+                      <div className="permission-section-title">{group.sectionTitle}</div>
+                      {isCreationGroup ? (
+                        <label className="permission-section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={groupEnabled}
+                            onChange={(e) => handleGroupToggle(group, e.target.checked)}
+                          />
+                          <span>{groupEnabled ? "显示该模块" : "隐藏该模块"}</span>
+                        </label>
+                      ) : null}
+                    </div>
                     <div className="permission-check-grid">
                       {group.features.map((feature) => (
-                        <label className="permission-check-item" key={feature.key}>
+                        <label
+                          className={"permission-check-item" + (isCreationGroup && !groupEnabled ? " disabled" : "")}
+                          key={feature.key}
+                        >
                           <input
                             type="checkbox"
                             checked={values[feature.key]}
+                            disabled={isCreationGroup && !groupEnabled}
                             onChange={(e) =>
                               setValues((prev) => ({ ...prev, [feature.key]: e.target.checked }))
                             }
