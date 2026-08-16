@@ -131,7 +131,9 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
     setLoadError(null);
     try {
       const supabase = createAdminBrowserClient();
-      const { data, error } = await supabase.from("providers").select("*");
+      const { data, error } = await supabase
+        .from("providers")
+        .select("id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota, equivalent_count_divisor");
       if (error) throw error;
       setProviders(sortProviders((data ?? []) as ProviderRow[]));
     } catch (e) {

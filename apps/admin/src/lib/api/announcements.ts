@@ -34,7 +34,7 @@ export async function listAnnouncements(params: AnnouncementListParams = {}): Pr
   const supabase = createAdminBrowserClient();
   let query = supabase
     .from("announcements")
-    .select("*")
+    .select("id, title, content, kind, target, team_id, created_by, published, created_at, updated_at, deleted_at")
     .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(500);
@@ -68,7 +68,7 @@ export async function createAnnouncement(input: AnnouncementInput): Promise<Admi
       created_by: authData.user?.id ?? null,
       updated_at: now
     })
-    .select("*")
+    .select("id, title, content, kind, target, team_id, created_by, published, created_at, updated_at, deleted_at")
     .single();
   if (error) throw error;
 
@@ -92,7 +92,7 @@ export async function updateAnnouncement(id: string, input: AnnouncementInput): 
       updated_at: new Date().toISOString()
     })
     .eq("id", id)
-    .select("*")
+    .select("id, title, content, kind, target, team_id, created_by, published, created_at, updated_at, deleted_at")
     .single();
   if (error) throw error;
 
@@ -143,4 +143,3 @@ export function kindLabel(kind: AnnouncementKind): string {
 export function publishedLabel(published: boolean): string {
   return published ? "已发布" : "草稿";
 }
-

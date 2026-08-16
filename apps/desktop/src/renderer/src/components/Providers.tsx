@@ -5,6 +5,7 @@ import Pagination from './Pagination'
 import { EmptyState } from './EmptyState'
 import Select from './Select'
 import type { ProviderAgg, ProvidersResult } from '../hooks/useProviders'
+import { getProviderService } from '../auth/service'
 import { useAuth } from '../hooks/useAuth'
 import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
 
@@ -68,10 +69,20 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
     setShowAddModal(true)
   }
 
-  const openSite = async (providerId: string, keyId: string, encryptedKey: string) => {
+  const openSite = async (providerId: string, keyId: string) => {
     setSiteError('')
     try {
-      const res = await window.api.providers.openSite(providerId, keyId, encryptedKey)
+      const svc = getProviderService()
+      if (!svc || !user) {
+        setSiteError('登录状态异常，无法打开官网')
+        return
+      }
+      const secret = await svc.getProviderKeySecret(user.id, keyId)
+      if (!secret) {
+        setSiteError('未找到该账号密钥，无法打开官网')
+        return
+      }
+      const res = await window.api.providers.openSite(providerId, keyId, secret.encrypted_key)
       if (!res.ok) setSiteError(res.error || '无法打开官网')
     } catch (e) {
       setSiteError(e instanceof Error ? e.message : String(e))
@@ -205,7 +216,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                         onSetScope={async (keyId, teamId) => {
                           await setProviderKeyScope(keyId, teamId)
                         }}
-                        onOpenSite={(keyId, encryptedKey) => openSite(p.providerId, keyId, encryptedKey)}
+                        onOpenSite={(keyId) => openSite(p.providerId, keyId)}
                         currentUserId={user?.id ?? ''}
                         team={team}
                       />
@@ -280,7 +291,7 @@ function ProviderRow({
   onToggleEnabled: (keyId: string, enabled: boolean) => Promise<void>
   onUnbind: (keyId: string) => Promise<void>
   onSetScope: (keyId: string, teamId: string | null) => Promise<void>
-  onOpenSite: (keyId: string, encryptedKey: string) => Promise<void>
+  onOpenSite: (keyId: string) => Promise<void>
   currentUserId: string
   team: { id: string } | null
 }) {
@@ -429,7 +440,7 @@ function ProviderRow({
                           <>
                             <button
                               className="btn-sm"
-                              onClick={() => void onOpenSite(acc.keyId, acc.encryptedKey)}
+                              onClick={() => void onOpenSite(acc.keyId)}
                               title="打开该账号对应的官网页面"
                             >
                               进入官网

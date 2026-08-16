@@ -142,7 +142,8 @@ async function main() {
   // 确保 ledger 行存在
   async function ensureLedger(keyId, dailyTotal = 10) {
     const { data: existing } = await client.from('quota_ledger')
-      .select('*').eq('date', today).eq('owner_user_id', userId)
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+      .eq('date', today).eq('owner_user_id', userId)
       .eq('provider_id', testProviderId).eq('account_key_id', keyId)
       .maybeSingle()
     if (existing) return existing
@@ -150,7 +151,7 @@ async function main() {
       date: today, owner_user_id: userId, provider_id: testProviderId,
       account_key_id: keyId, unit_name: '点', daily_total: dailyTotal,
       used: 0, remaining: dailyTotal
-    }).select().single()
+    }).select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at').single()
     return data
   }
 
@@ -172,7 +173,7 @@ async function main() {
     const payload = { date: today, owner_user_id: userId, provider_id: testProviderId,
       account_key_id: testKeyId, unit_name: '点', daily_total: 10, used: 0, remaining: 10 }
     const inserts = Array.from({ length: PARALLEL }, () =>
-      client.from('quota_ledger').insert(payload).select().single()
+      client.from('quota_ledger').insert(payload).select('id').single()
     )
     const results = await Promise.allSettled(inserts)
     const successes = results.filter(r => r.status === 'fulfilled').length
@@ -181,7 +182,8 @@ async function main() {
 
     // 验证：只有 1 行（partial unique index 保证）
     const { data: rows, error } = await client.from('quota_ledger')
-      .select('*').eq('date', today).eq('owner_user_id', userId)
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+      .eq('date', today).eq('owner_user_id', userId)
       .eq('provider_id', testProviderId).eq('account_key_id', testKeyId)
     if (error) throw new Error(error.message)
     if (rows.length !== 1) throw new Error(`期望 1 行，实际 ${rows.length} 行（成功:${successes}, 重复冲突:${duplicates}）`)
@@ -215,7 +217,8 @@ async function main() {
 
     // 验证：used 正好 = min(CONCURRENT, 10) = 10
     const { data: row } = await client.from('quota_ledger')
-      .select('*').eq('date', today).eq('owner_user_id', userId)
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+      .eq('date', today).eq('owner_user_id', userId)
       .eq('provider_id', testProviderId).eq('account_key_id', testKeyId).single()
 
     if (Number(row.used) !== 10) throw new Error(`期望 used=10，实际 used=${row.used}（成功:${consumed}, 耗尽:${exhausted}）`)
@@ -253,7 +256,8 @@ async function main() {
 
     // used 应为 10（原来的 2 + 8），remaining 被修正为 0
     const { data: row } = await client.from('quota_ledger')
-      .select('*').eq('date', today).eq('owner_user_id', userId)
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+      .eq('date', today).eq('owner_user_id', userId)
       .eq('provider_id', testProviderId).eq('account_key_id', testKeyId).single()
     if (Number(row.used) !== 10) throw new Error(`期望 used=10，实际 used=${row.used}`)
     if (Number(row.remaining) !== 0) throw new Error(`期望 remaining=0（被重新计算），实际 remaining=${row.remaining}`)
@@ -278,7 +282,8 @@ async function main() {
 
     // 验证：恰好 1 个默认（partial unique index + FOR UPDATE 串行化保证）
     const { data: keys } = await client.from('provider_keys')
-      .select('*').eq('owner_user_id', userId)
+      .select('id, is_default')
+      .eq('owner_user_id', userId)
       .eq('provider_id', testProviderId).in('id', [testKeyId, testKeyId2])
     const defaults = keys.filter(k => k.is_default)
     const errors = results.filter(r => r.status === 'rejected')
@@ -322,7 +327,8 @@ async function main() {
 
     // 验证：used 正好 = 2（只扣一次）
     const { data: row } = await client.from('quota_ledger')
-      .select('*').eq('date', today).eq('owner_user_id', userId)
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+      .eq('date', today).eq('owner_user_id', userId)
       .eq('provider_id', testProviderId).eq('account_key_id', testKeyId).single()
     if (Number(row.used) !== 2) {
       throw new Error(`期望 used=2（只扣一次），实际 used=${row.used}（扣了 ${consumed} 次，跳过 ${skipped} 次）`)
@@ -330,7 +336,8 @@ async function main() {
 
     // 验证：恰好 1 条 finalize 记录
     const { data: ops } = await client.from('quota_operations')
-      .select('*').eq('job_id', jobId).eq('operation_type', 'finalize')
+      .select('id, job_id, ledger_id, operation_type, amount, created_at')
+      .eq('job_id', jobId).eq('operation_type', 'finalize')
     if (ops.length !== 1) throw new Error(`期望 1 条 finalize 记录，实际 ${ops.length} 条`)
 
     console.log(`    扣减 ${consumed} 次，跳过 ${skipped} 次，used=${row.used}，finalize 记录 ${ops.length} 条`)

@@ -6,7 +6,7 @@ import { errMsg } from '../utils/error'
 import { getHealthCheckIntervalMs } from '../components/Modals'
 import { DEFAULT_SUPPORTED_DURATIONS } from '../spec'
 import type {
-  ProviderKey,
+  ProviderKeySummary,
   ProviderMeta,
   ProviderService,
   QuotaLedgerRow,
@@ -26,7 +26,6 @@ export interface BindingView {
   dailyTotal: number
   used: number
   remaining: number
-  encryptedKey: string
 }
 
 export interface ProviderAgg {
@@ -95,7 +94,7 @@ let healthCheckUserId: string | null = null
 async function runHealthChecks(
   svc: ProviderService,
   userId: string,
-  keys: ProviderKey[],
+  keys: ProviderKeySummary[],
   onResult: (keyId: string, status: string) => void
 ): Promise<void> {
   const now = Date.now()
@@ -122,7 +121,9 @@ async function runHealthChecks(
       while (i < due.length) {
         const key = due[i++]
         try {
-          const res = await window.api.providers.healthCheck(key.provider_id, key.encrypted_key)
+          const secret = await svc.getProviderKeySecret(userId, key.id)
+          if (!secret) continue
+          const res = await window.api.providers.healthCheck(key.provider_id, secret.encrypted_key)
           const newStatus = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, now)
           await svc.updateHealth(userId, key.id, newStatus)
           onResult(key.id, newStatus)
@@ -167,7 +168,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [providers, setProviders] = useState<ProviderMeta[]>([])
-  const [keys, setKeys] = useState<ProviderKey[]>([])
+  const [keys, setKeys] = useState<ProviderKeySummary[]>([])
   const [ledgers, setLedgers] = useState<QuotaLedgerRow[]>([])
   const [reloadKey, setReloadKey] = useState(0)
   // 健康检查结果会话内覆盖：只更新 map，不重建 keys 数组，避免下游 memo / 效应链整体重算
@@ -201,7 +202,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     setError(null)
     const loadScopedData = async (): Promise<{
       providers: ProviderMeta[]
-      keys: ProviderKey[]
+      keys: ProviderKeySummary[]
       ledgers: QuotaLedgerRow[]
     }> => {
       const [p] = await Promise.all([svc.listAllProviders()])
@@ -218,7 +219,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       }
       const [personalKeys, teamKeys, personalLedgers, teamLedgers] = await Promise.all([
         svc.listProviderKeys(user.id).then((all) => all.filter((k) => !k.team_id)),
-        team ? svc.listTeamProviderKeys(team.id) : Promise.resolve<ProviderKey[]>([]),
+        team ? svc.listTeamProviderKeys(team.id) : Promise.resolve<ProviderKeySummary[]>([]),
         svc.listTodayLedger(user.id),
         team ? svc.listTeamTodayLedger(team.id) : Promise.resolve<QuotaLedgerRow[]>([])
       ])
@@ -392,8 +393,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         enabled: k.enabled !== false,
         dailyTotal: defaultTotal,
         used,
-        remaining: Math.max(defaultTotal - used, 0),
-        encryptedKey: k.encrypted_key
+        remaining: Math.max(defaultTotal - used, 0)
       })
       map.set(k.provider_id, list)
     }
@@ -426,10 +426,12 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     async (providerId: string, keyId: string) => {
       const svc = getProviderService()
       if (!svc || !user) return
-      const key = keys.find((k) => k.id === keyId)
-      if (!key) return
       try {
-        const res = await window.api.providers.healthCheck(providerId, key.encrypted_key)
+        const key = keys.find((k) => k.id === keyId)
+        if (!key) return
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return
+        const res = await window.api.providers.healthCheck(providerId, secret.encrypted_key)
         const status = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, Date.now())
         await svc.updateHealth(user.id, keyId, status)
         // 手动测试同样计入节流窗口，避免随后自动检查重复触发

@@ -60,8 +60,7 @@ export async function processWatermarkJob(input: WatermarkJobInput): Promise<Wat
     })
     await client.auth.setSession({ access_token: input.accessToken, refresh_token: input.refreshToken })
     const jobSvc = new JobService(client)
-    const jobs = await jobSvc.listJobs(input.userId)
-    const job = jobs.find((j) => j.id === input.jobId)
+    const job = await jobSvc.getJob(input.userId, input.jobId)
     if (!job) {
       return { ok: false, status: 'failed', error: '任务不存在' }
     }
@@ -156,8 +155,7 @@ export async function getWatermarkStatus(
     })
     await client.auth.setSession({ access_token: input.accessToken, refresh_token: input.refreshToken })
     const jobSvc = new JobService(client)
-    const jobs = await jobSvc.listJobs(input.userId)
-    const job = jobs.find((j) => j.id === input.jobId)
+    const job = await jobSvc.getJob(input.userId, input.jobId)
     if (!job) {
       return { ok: false, jobId: input.jobId, error: '任务不存在' }
     }

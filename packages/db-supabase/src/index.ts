@@ -365,13 +365,12 @@ export interface ProviderMeta {
   default_daily_quota: number
 }
 
-export interface ProviderKey {
+export interface ProviderKeySummary {
   id: string
   team_id: string | null
   owner_user_id: string
   provider_id: string
   account_name: string | null
-  encrypted_key: string
   auth_type: string
   cookie_expires_at: string | null
   last_health_check: string | null
@@ -381,6 +380,13 @@ export interface ProviderKey {
   is_default: boolean
   created_at: string
 }
+
+export interface ProviderKeySecret extends ProviderKeySummary {
+  encrypted_key: string
+}
+
+/** @deprecated Use ProviderKeySecret for internal credential flows. */
+export type ProviderKey = ProviderKeySecret
 
 export interface QuotaLedgerRow {
   id: string
@@ -418,7 +424,7 @@ export class ProviderService {
   async listProviders(): Promise<ProviderMeta[]> {
     const { data, error } = await this.client
       .from('providers')
-      .select('*')
+      .select('id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota')
       .eq('enabled', true)
       .order('name')
     if (error) throw error
@@ -428,33 +434,64 @@ export class ProviderService {
   async listAllProviders(): Promise<ProviderMeta[]> {
     const { data, error } = await this.client
       .from('providers')
-      .select('*')
+      .select('id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota')
       .order('name')
     if (error) throw error
     return (data ?? []) as unknown as ProviderMeta[]
   }
 
-  async listProviderKeys(userId: string): Promise<ProviderKey[]> {
+  async listProviderKeys(userId: string): Promise<ProviderKeySummary[]> {
     const { data, error } = await this.client
       .from('provider_keys')
-      .select('*')
+      .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('owner_user_id', userId)
       .order('created_at', { ascending: false })
     if (error) throw error
-    return (data ?? []) as unknown as ProviderKey[]
+    return (data ?? []) as unknown as ProviderKeySummary[]
   }
 
-  async listTeamProviderKeys(teamId: string): Promise<ProviderKey[]> {
+  async listTeamProviderKeys(teamId: string): Promise<ProviderKeySummary[]> {
     const { data, error } = await this.client
       .from('provider_keys')
-      .select('*')
+      .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('team_id', teamId)
       .order('created_at', { ascending: false })
     if (error) throw error
-    return (data ?? []) as unknown as ProviderKey[]
+    return (data ?? []) as unknown as ProviderKeySummary[]
   }
 
-  async addProviderKey(input: AddProviderKeyInput): Promise<ProviderKey | null> {
+  /** 主进程/后台任务需要真实加密凭证时使用，避免列表接口重复下发大字段。 */
+  async listProviderKeysWithSecrets(userId: string): Promise<ProviderKeySecret[]> {
+    const { data, error } = await this.client
+      .from('provider_keys')
+      .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+      .eq('owner_user_id', userId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as ProviderKeySecret[]
+  }
+
+  async listTeamProviderKeysWithSecrets(teamId: string): Promise<ProviderKeySecret[]> {
+    const { data, error } = await this.client
+      .from('provider_keys')
+      .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+      .eq('team_id', teamId)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return (data ?? []) as unknown as ProviderKeySecret[]
+  }
+
+  async getProviderKeySecret(userId: string, keyId: string): Promise<ProviderKeySecret | null> {
+    const { data, error } = await this.client
+      .from('provider_keys')
+      .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+      .eq('id', keyId)
+      .maybeSingle()
+    if (error) throw error
+    return (data ?? null) as unknown as ProviderKeySecret | null
+  }
+
+  async addProviderKey(input: AddProviderKeyInput): Promise<ProviderKeySummary | null> {
     const payload: Record<string, unknown> = {
       owner_user_id: input.ownerUserId,
       provider_id: input.providerId,
@@ -473,10 +510,10 @@ export class ProviderService {
     const { data, error } = await this.client
       .from('provider_keys')
       .insert(payload)
-      .select()
+      .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .single()
     if (error) throw error
-    return (data ?? null) as unknown as ProviderKey | null
+    return (data ?? null) as unknown as ProviderKeySummary | null
   }
 
   /** 重新登录后刷新已有账号的 cookie（保留 keyId，不丢额度归属） */
@@ -506,16 +543,16 @@ export class ProviderService {
     userId: string,
     providerId: string,
     fingerprint: string
-  ): Promise<ProviderKey | null> {
+  ): Promise<ProviderKeySummary | null> {
     const { data, error } = await this.client
       .from('provider_keys')
-      .select('*')
+      .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('owner_user_id', userId)
       .eq('provider_id', providerId)
       .eq('account_fingerprint', fingerprint)
       .maybeSingle()
     if (error) throw error
-    return (data ?? null) as unknown as ProviderKey | null
+    return (data ?? null) as unknown as ProviderKeySummary | null
   }
 
   async removeProviderKey(userId: string, keyId: string): Promise<void> {
@@ -581,9 +618,10 @@ export class ProviderService {
     // RLS 在服务端隔离数据；按 account_key_id 归属过滤 + 全量个人行
     const { data, error } = await this.client
       .from('quota_ledger')
-      .select('*')
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
       .eq('owner_user_id', userId)
       .order('date', { ascending: false })
+      .limit(500)
     if (error) throw error
     return (data ?? []) as unknown as QuotaLedgerRow[]
   }
@@ -591,9 +629,10 @@ export class ProviderService {
   async listTeamLedger(teamId: string): Promise<QuotaLedgerRow[]> {
     const { data, error } = await this.client
       .from('quota_ledger')
-      .select('*')
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
       .eq('team_id', teamId)
       .order('date', { ascending: false })
+      .limit(500)
     if (error) throw error
     return (data ?? []) as unknown as QuotaLedgerRow[]
   }
@@ -602,10 +641,11 @@ export class ProviderService {
     const today = todayKey()
     const { data, error } = await this.client
       .from('quota_ledger')
-      .select('*')
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
       .eq('owner_user_id', userId)
       .eq('date', today)
       .order('date', { ascending: false })
+      .limit(500)
     if (error) throw error
     return (data ?? []) as unknown as QuotaLedgerRow[]
   }
@@ -614,10 +654,11 @@ export class ProviderService {
     const today = todayKey()
     const { data, error } = await this.client
       .from('quota_ledger')
-      .select('*')
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
       .eq('team_id', teamId)
       .eq('date', today)
       .order('date', { ascending: false })
+      .limit(500)
     if (error) throw error
     return (data ?? []) as unknown as QuotaLedgerRow[]
   }
@@ -651,7 +692,7 @@ export class ProviderService {
     const today = todayKey()
     let query = this.client
       .from('quota_ledger')
-      .select('*')
+      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
       .eq('date', today)
       .eq('owner_user_id', input.userId)
       .eq('provider_id', input.providerId)
@@ -682,7 +723,7 @@ export class ProviderService {
       const { data: created, error: insertError } = await this.client
         .from('quota_ledger')
         .insert(insertPayload)
-        .select()
+        .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
         .single()
       if (insertError) throw insertError
       return (created ?? null) as unknown as QuotaLedgerRow
@@ -816,7 +857,7 @@ export class ProviderService {
         { job_id: jobId, ledger_id: ledgerId, operation_type: operationType, amount },
         { onConflict: 'job_id,operation_type', ignoreDuplicates: true }
       )
-      .select()
+      .select('id, job_id, ledger_id, operation_type, amount, created_at')
       .single()
     if (error) throw error
     if (data) return data as unknown as QuotaOperationRow
@@ -824,7 +865,7 @@ export class ProviderService {
     // ignoreDuplicates 跳过了已存在行 → 读回已有记录
     const { data: existing, error: readErr } = await this.client
       .from('quota_operations')
-      .select('*')
+      .select('id, job_id, ledger_id, operation_type, amount, created_at')
       .eq('job_id', jobId)
       .eq('operation_type', operationType)
       .maybeSingle()
@@ -885,6 +926,56 @@ export interface JobRow {
   completed_at: string | null
 }
 
+export interface JobListItem {
+  id: string
+  team_id: string | null
+  provider_id: string | null
+  mode: string
+  prompt: string | null
+  model: string | null
+  accountName: string | null
+  localPath: string | null
+  cleanLocalPath: string | null
+  watermarkStatus: string | null
+  watermarkMethod: string | null
+  watermarkError: string | null
+  watermarkBBox: unknown
+  watermarkBBoxes: unknown
+  durationSec: number | null
+  ratio: string | null
+  audio: string | null
+  resolution: string | null
+  images: string[] | null
+  status: JobStatus
+  trace_id: string | null
+  result_url: string | null
+  error: string | null
+  cost_unit: string | null
+  cost_amount: number | null
+  created_at: string
+}
+
+export interface JobListQuery {
+  page?: number
+  pageSize?: number
+  search?: string
+  providerId?: string
+  status?: JobStatus | ''
+}
+
+export interface JobListResult {
+  items: JobListItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface JobMutationResult {
+  id: string
+  status: JobStatus
+  created_at: string | null
+}
+
 export interface InsertJobInput {
   teamId?: string | null
   providerId?: string | null
@@ -925,17 +1016,55 @@ export class JobService {
   constructor(private readonly client: SupabaseClient) {}
 
   /** 列出当前用户的任务（明确按账号过滤，避免团队/其他记录混入时区），最新在前 */
-  async listJobs(userId: string): Promise<JobRow[]> {
-    const { data, error } = await this.client
+  async listJobs(userId: string, query: JobListQuery = {}): Promise<JobListResult> {
+    const page = Math.max(1, Math.floor(query.page ?? 1))
+    const pageSize = Math.min(100, Math.max(1, Math.floor(query.pageSize ?? 20)))
+    const from = (page - 1) * pageSize
+    const to = from + pageSize - 1
+    let builder = this.client
       .from('jobs')
-      .select('*')
+      .select('id, team_id, provider_id, mode, prompt, model:options->model, accountName:options->accountName, localPath:options->localPath, cleanLocalPath:options->cleanLocalPath, watermarkStatus:options->watermarkStatus, watermarkMethod:options->watermarkMethod, watermarkError:options->watermarkError, watermarkBBox:options->watermarkBBox, watermarkBBoxes:options->watermarkBBoxes, durationSec:options->durationSec, ratio:options->ratio, audio:options->audio, resolution:options->resolution, images:options->images, status, trace_id, result_url, error, cost_unit, cost_amount, created_at', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
+    const search = query.search?.trim()
+    if (search) builder = builder.ilike('prompt', `%${search}%`)
+    if (query.providerId) builder = builder.eq('provider_id', query.providerId)
+    if (query.status) builder = builder.eq('status', query.status)
+    const { data, error, count } = await builder.range(from, to)
     if (error) throw error
-    return (data ?? []) as unknown as JobRow[]
+    return {
+      items: (data ?? []) as unknown as JobListItem[],
+      total: Number(count ?? data?.length ?? 0),
+      page,
+      pageSize
+    }
   }
 
-  async insertJob(userId: string, input: InsertJobInput): Promise<JobRow | null> {
+  /** 详情/去水印/重试等需要完整 options、attempts、cost_breakdown 的路径使用。 */
+  async getJob(userId: string, jobId: string): Promise<JobRow | null> {
+    const { data, error } = await this.client
+      .from('jobs')
+      .select('id, team_id, user_id, provider_id, account_id, mode, prompt, options, attempts, status, trace_id, result_url, quality_score, error, cost_unit, cost_amount, cost_breakdown, equivalent_count, created_at, completed_at')
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error) throw error
+    return (data ?? null) as unknown as JobRow | null
+  }
+
+  async hasAnySuccess(userId: string): Promise<boolean> {
+    const { data, error } = await this.client
+      .from('jobs')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('status', 'success')
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    return !!data
+  }
+
+  async insertJob(userId: string, input: InsertJobInput): Promise<JobMutationResult | null> {
     const payload: Record<string, unknown> = {
       user_id: userId,
       mode: input.mode,
@@ -959,14 +1088,14 @@ export class JobService {
     const { data, error } = await this.client
       .from('jobs')
       .insert(payload)
-      .select()
+      .select('id, status, created_at')
       .single()
     if (error) throw error
-    return (data ?? null) as unknown as JobRow | null
+    return (data ?? null) as unknown as JobMutationResult | null
   }
 
   /** 更新本人任务（RLS 同约束），支持状态流转与结果回写 */
-  async updateJob(userId: string, jobId: string, input: UpdateJobInput): Promise<JobRow | null> {
+  async updateJob(userId: string, jobId: string, input: UpdateJobInput): Promise<JobMutationResult | null> {
     const payload: Record<string, unknown> = {}
     if (input.status !== undefined) payload.status = input.status
     if (input.providerId !== undefined) payload.provider_id = input.providerId
@@ -988,10 +1117,10 @@ export class JobService {
       .update(payload)
       .eq('id', jobId)
       .eq('user_id', userId)
-      .select()
+      .select('id, status, created_at')
       .single()
     if (error) throw error
-    return (data ?? null) as unknown as JobRow | null
+    return (data ?? null) as unknown as JobMutationResult | null
   }
 
   /** 仅本人可删除自己的任务（RLS 同约束） */
