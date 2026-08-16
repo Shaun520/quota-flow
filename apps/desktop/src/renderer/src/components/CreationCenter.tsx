@@ -2,116 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
+import { useCommunityVideos, type CommunityVideo } from '../hooks/useCommunityVideos'
 import type { RegenerateDraft } from './Dashboard'
 import { IconClose, IconGrid, IconPlay, IconSparkles } from './icons'
-
-const COMMUNITY_CATEGORIES = ['全部', '国漫3D风', '动作打斗', '赛博都市', '古风仙侠', '治愈系'] as const
-type CommunityCategory = (typeof COMMUNITY_CATEGORIES)[number]
-
-export interface CommunityVideo {
-  id: string
-  title: string
-  cover: string
-  videoUrl?: string
-  durationSec: number
-  category: CommunityCategory
-  tags: string[]
-  prompt: string
-  providerHint?: string
-}
-
-const COMMUNITY_VIDEOS: CommunityVideo[] = [
-  {
-    id: 'community-01',
-    title: '雪后山巅少年剑客',
-    cover: 'https://images.unsplash.com/photo-1533106418989-88406c7cc8ca?auto=format&fit=crop&w=640&q=80',
-    durationSec: 10,
-    category: '国漫3D风',
-    tags: ['国漫3D', '雪山', '云海'],
-    prompt: '高规格国漫3D风格，少年剑客站在雪后山巅，衣摆随风翻飞，远处云海翻涌，镜头从正面缓慢推进，金色晨光穿透云层照亮剑锋。',
-    providerHint: '豆包 · Seedance 2.0 Mini'
-  },
-  {
-    id: 'community-02',
-    title: '雨夜霓虹巷战',
-    cover: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=640&q=80',
-    durationSec: 5,
-    category: '动作打斗',
-    tags: ['打斗', '雨夜', '慢镜头'],
-    prompt: '高速动作打斗，雨夜巷战，两道人影在霓虹灯光下贴身交锋，慢镜头捕捉拳脚与雨滴碰撞，镜头快速切换，压迫感强。',
-    providerHint: '可灵 · 标准'
-  },
-  {
-    id: 'community-03',
-    title: '霓虹雨幕天桥',
-    cover: 'https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=640&q=80',
-    durationSec: 10,
-    category: '赛博都市',
-    tags: ['赛博朋克', '城市夜景', '全息广告'],
-    prompt: '赛博都市夜景，巨型全息广告在雨幕中闪烁，主角撑伞穿过拥挤天桥，霓虹色彩反射在积水路面，航拍缓慢拉升。',
-    providerHint: '豆包 · Seedance 2.0 Mini'
-  },
-  {
-    id: 'community-04',
-    title: '白衣仙人御剑过云海',
-    cover: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=640&q=80',
-    durationSec: 5,
-    category: '古风仙侠',
-    tags: ['仙侠', '御剑', '云海'],
-    prompt: '古风仙侠意境，白衣仙人御剑飞过云海，衣袂飘动，瀑布从青翠山崖倾泻，镜头围绕仙人环绕半周。',
-    providerHint: '千问 · 万相'
-  },
-  {
-    id: 'community-05',
-    title: '午后窗台的小猫',
-    cover: 'https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&w=640&q=80',
-    durationSec: 5,
-    category: '治愈系',
-    tags: ['治愈', '猫咪', '阳光'],
-    prompt: '治愈系田园短片，小猫在午后窗台伸懒腰，阳光洒进房间，窗帘随风轻摆，镜头缓慢靠近猫爪，画面温暖柔光。',
-    providerHint: '海螺 · 标准'
-  },
-  {
-    id: 'community-06',
-    title: '黄昏停机坪的机甲少女',
-    cover: 'https://images.unsplash.com/photo-1528459801416-a9e53bbf4e17?auto=format&fit=crop&w=640&q=80',
-    durationSec: 10,
-    category: '国漫3D风',
-    tags: ['国漫3D', '机甲', '黄昏'],
-    prompt: '国漫3D风战斗前奏，少女机甲在黄昏停机坪单膝落地，装甲表面亮起蓝色能量纹路，镜头低角度环绕展示细节。',
-    providerHint: '豆包 · Seedance 2.0 Mini'
-  },
-  {
-    id: 'community-07',
-    title: '悬浮载具追车',
-    cover: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=640&q=80',
-    durationSec: 10,
-    category: '赛博都市',
-    tags: ['追车', '悬浮载具', '光轨'],
-    prompt: '科幻城市追车戏，悬浮载具贴着高架桥高速穿行，车灯拖出光轨，镜头跟拍并切换俯冲视角，城市灯火快速掠过。',
-    providerHint: '可灵 · 大师'
-  },
-  {
-    id: 'community-08',
-    title: '竹林红袖剑气',
-    cover: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?auto=format&fit=crop&w=640&q=80',
-    durationSec: 5,
-    category: '古风仙侠',
-    tags: ['古风', '剑气', '竹海'],
-    prompt: '古风仙侠，林间竹海起雾，女子红袖掠过竹叶，剑气切开雾气，镜头跟随红色衣袂穿行，风起叶落。',
-    providerHint: '千问 · 万相'
-  },
-  {
-    id: 'community-09',
-    title: '雨天咖啡馆窗边',
-    cover: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=640&q=80',
-    durationSec: 5,
-    category: '治愈系',
-    tags: ['治愈', '咖啡馆', '雨天'],
-    prompt: '治愈系动画，雨天咖啡馆窗边，热咖啡升起白雾，小猫趴在桌角看雨滴滑落，镜头缓慢推近，色调温柔安静。',
-    providerHint: '海螺 · 标准'
-  }
-]
 
 const DEFAULT_COMMUNITY_DRAFT: RegenerateDraft = {
   prompt: '',
@@ -171,21 +64,35 @@ function IconDrop({ size = 16 }: { size?: number }) {
 
 interface CreationCenterProps {
   features: DesktopFeatureFlags
+  userId?: string
   onReferenceGenerate?: (draft: RegenerateDraft) => void
   onNotify?: (message: string) => void
 }
 
-export default function CreationCenter({ features, onReferenceGenerate, onNotify }: CreationCenterProps) {
-  const [category, setCategory] = useState<CommunityCategory>('全部')
+export default function CreationCenter({ features, userId, onReferenceGenerate, onNotify }: CreationCenterProps) {
+  const communityVideos = useCommunityVideos(userId)
+  const videos = communityVideos.items
+  const [category, setCategory] = useState<string>('全部')
   const [selected, setSelected] = useState<CommunityVideo | null>(null)
   const [favorites, setFavorites] = useState<Set<string>>(readFavorites)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [imageFailed, setImageFailed] = useState<Record<string, boolean>>({})
 
+  const categories = useMemo(() => {
+    const unique = Array.from(new Set(videos.map((v) => v.category).filter(Boolean)))
+    return ['全部', ...unique]
+  }, [videos])
+
   const visibleVideos = useMemo(
-    () => (category === '全部' ? COMMUNITY_VIDEOS : COMMUNITY_VIDEOS.filter((v) => v.category === category)),
-    [category]
+    () => (category === '全部' ? videos : videos.filter((v) => v.category === category)),
+    [category, videos]
   )
+
+  useEffect(() => {
+    if (category !== '全部' && !categories.includes(category)) {
+      setCategory('全部')
+    }
+  }, [categories, category])
 
   useEffect(() => {
     if (!selected) return
@@ -333,10 +240,10 @@ export default function CreationCenter({ features, onReferenceGenerate, onNotify
         <section className="community-section" aria-label="视频灵感库">
           <div className="creation-section-heading">
             <h2>视频灵感库</h2>
-            <span>{visibleVideos.length} 个灵感视频</span>
+            <span>{communityVideos.loading ? '加载中' : `${videos.length} 个灵感视频`}</span>
           </div>
           <div className="community-category-row" role="tablist" aria-label="视频分类">
-            {COMMUNITY_CATEGORIES.map((c) => (
+            {categories.map((c) => (
               <button
                 key={c}
                 className={'community-chip' + (category === c ? ' active' : '')}
@@ -346,42 +253,50 @@ export default function CreationCenter({ features, onReferenceGenerate, onNotify
               </button>
             ))}
           </div>
-          <div className="community-grid">
-            {visibleVideos.map((video) => {
-              const isFavorite = favorites.has(video.id)
-              return (
-                <article
-                  key={video.id}
-                  className="community-card"
-                  onClick={() => setSelected(video)}
-                >
-                  <div className="community-card-cover">
-                    {renderCover(video)}
-                    <button
-                      className={'community-fav' + (isFavorite ? ' active' : '')}
-                      title={isFavorite ? '取消收藏' : '收藏'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        toggleFavorite(video)
-                      }}
-                    >
-                      {isFavorite ? '★' : '☆'}
-                    </button>
-                  </div>
-                  <div className="community-card-body">
-                    <h3>{video.title}</h3>
-                    <div className="community-tags">
-                      {video.tags.map((tag) => (
-                        <span key={tag}>{tag}</span>
-                      ))}
+          {communityVideos.loading ? (
+            <div className="community-state">加载中...</div>
+          ) : communityVideos.error ? (
+            <div className="community-state error">加载失败：{communityVideos.error}</div>
+          ) : videos.length === 0 ? (
+            <div className="community-state">暂无灵感视频，管理员可在后台添加。</div>
+          ) : (
+            <div className="community-grid">
+              {visibleVideos.map((video) => {
+                const isFavorite = favorites.has(video.id)
+                return (
+                  <article
+                    key={video.id}
+                    className="community-card"
+                    onClick={() => setSelected(video)}
+                  >
+                    <div className="community-card-cover">
+                      {renderCover(video)}
+                      <button
+                        className={'community-fav' + (isFavorite ? ' active' : '')}
+                        title={isFavorite ? '取消收藏' : '收藏'}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleFavorite(video)
+                        }}
+                      >
+                        {isFavorite ? '★' : '☆'}
+                      </button>
                     </div>
-                    <p className="community-prompt">{video.prompt}</p>
-                    {renderActions(video, video.id)}
-                  </div>
-                </article>
-              )
-            })}
-          </div>
+                    <div className="community-card-body">
+                      <h3>{video.title}</h3>
+                      <div className="community-tags">
+                        {video.tags.map((tag) => (
+                          <span key={tag}>{tag}</span>
+                        ))}
+                      </div>
+                      <p className="community-prompt">{video.prompt}</p>
+                      {renderActions(video, video.id)}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
         </section>
       ) : (
         <div className="creation-disabled">视频灵感库未开启</div>
@@ -415,7 +330,19 @@ export default function CreationCenter({ features, onReferenceGenerate, onNotify
                 </button>
               </div>
               <div className="community-detail-body">
-                <div className="community-detail-media">{renderCover(selected, true)}</div>
+                <div className="community-detail-media">
+                  {selected.videoUrl ? (
+                    <video
+                      className="community-detail-video"
+                      src={selected.videoUrl}
+                      poster={selected.cover}
+                      controls
+                      preload="metadata"
+                    />
+                  ) : (
+                    renderCover(selected, true)
+                  )}
+                </div>
                 <div className="community-detail-info">
                   <div className="community-tags">
                     {selected.tags.map((tag) => (

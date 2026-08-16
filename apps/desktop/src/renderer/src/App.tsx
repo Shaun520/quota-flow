@@ -505,6 +505,7 @@ function MainApp({
           <div className="tab-pane" style={{ display: resolvedTab === 'creation' ? 'flex' : 'none' }}>
             <CreationCenter
               features={permissions.features}
+              userId={user.id}
               onReferenceGenerate={handleCommunityReference}
               onNotify={showToast}
             />

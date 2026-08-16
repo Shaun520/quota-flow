@@ -1,5 +1,4 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
-import { insertAuditLog } from "@/lib/utils/audit";
 
 export type AnnouncementKind = "notice" | "update";
 export type AnnouncementKindFilter = "" | AnnouncementKind;
@@ -72,10 +71,6 @@ export async function createAnnouncement(input: AnnouncementInput): Promise<Admi
     .single();
   if (error) throw error;
 
-  await insertAuditLog("announcement.create", {
-    target: data.id,
-    metadata: { title: data.title, kind: data.kind, published: data.published }
-  });
   return data as AdminAnnouncement;
 }
 
@@ -96,10 +91,6 @@ export async function updateAnnouncement(id: string, input: AnnouncementInput): 
     .single();
   if (error) throw error;
 
-  await insertAuditLog("announcement.update", {
-    target: id,
-    metadata: { title: data.title, kind: data.kind, published: data.published }
-  });
   return data as AdminAnnouncement;
 }
 
@@ -114,8 +105,6 @@ export async function deleteAnnouncement(id: string, title: string): Promise<voi
     })
     .eq("id", id);
   if (error) throw error;
-
-  await insertAuditLog("announcement.delete", { target: id, metadata: { title } });
 }
 
 export async function toggleAnnouncementPublished(id: string, published: boolean, title: string): Promise<void> {
@@ -129,11 +118,6 @@ export async function toggleAnnouncementPublished(id: string, published: boolean
     })
     .eq("id", id);
   if (error) throw error;
-
-  await insertAuditLog(published ? "announcement.publish" : "announcement.unpublish", {
-    target: id,
-    metadata: { title }
-  });
 }
 
 export function kindLabel(kind: AnnouncementKind): string {

@@ -61,6 +61,16 @@ const NAV_SECTIONS: Array<{
             <line x1="2" y1="10" x2="22" y2="10" />
           </svg>
         )
+      },
+      {
+        href: "/creation-videos",
+        label: "创作中心视频",
+        icon: (
+          <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7" />
+            <rect x="1" y="5" width="15" height="14" rx="2" />
+          </svg>
+        )
       }
     ]
   },
@@ -98,30 +108,6 @@ const NAV_SECTIONS: Array<{
           <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="11" width="18" height="10" rx="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-          </svg>
-        )
-      }
-    ]
-  },
-  {
-    title: "安全与合规",
-    items: [
-      {
-        href: "/security",
-        label: "安全与合规",
-        icon: (
-          <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
-        )
-      },
-      {
-        href: "/audit",
-        label: "审计日志",
-        icon: (
-          <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 20h9" />
-            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
           </svg>
         )
       }
