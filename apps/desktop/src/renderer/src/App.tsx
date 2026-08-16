@@ -6,6 +6,7 @@ import Providers from './components/Providers'
 import History from './components/History'
 import type { JobItem } from './hooks/useJobs'
 import Team from './components/Team'
+import CreationCenter from './components/CreationCenter'
 import TitleBar from './components/TitleBar'
 import WelcomeBanner from './components/WelcomeBanner'
 import { EmptyState } from './components/EmptyState'
@@ -38,13 +39,14 @@ import {
   IconInfo,
   IconLogout,
   IconMonitor,
+  IconSparkles,
   IconUpload,
   IconUser,
   IconUsers
 } from './components/icons'
 import desktopPackage from '../../../package.json'
 
-type TabId = 'dispatch' | 'providers' | 'history' | 'team'
+type TabId = 'dispatch' | 'providers' | 'creation' | 'history' | 'team'
 
 function readStoredViewScope(hasTeam: boolean): ViewScope {
   const stored = localStorage.getItem('qf-view-scope')
@@ -94,6 +96,7 @@ function writeWelcomeDismissed(userId: string, dismissed: boolean): void {
 const TABS: TabDef[] = [
   { id: 'dispatch', label: '调度台', icon: IconGrid },
   { id: 'providers', label: '厂商', icon: IconMonitor },
+  { id: 'creation', label: '创作中心', icon: IconSparkles },
   { id: 'history', label: '历史', icon: IconClock },
   { id: 'team', label: '团队', icon: IconUsers }
 ]
@@ -149,7 +152,7 @@ function MainApp({
   const [tab, setTab] = useState<TabId>(() => {
     const hit = location.hash.match(/#tab=(.+)/)
     const t = hit ? hit[1] : 'dispatch'
-    return (['dispatch', 'providers', 'history', 'team'] as TabId[]).includes(t as TabId)
+    return (['dispatch', 'providers', 'creation', 'history', 'team'] as TabId[]).includes(t as TabId)
       ? (t as TabId)
       : 'dispatch'
   })
@@ -187,6 +190,12 @@ function MainApp({
       mode: p?.mode ?? 'text2video',
       images: r.images ?? []
     })
+    setTab('dispatch')
+    location.hash = 'tab=dispatch'
+  }, [])
+
+  const handleCommunityReference = useCallback((draft: RegenerateDraft): void => {
+    setRegenerateDraft(draft)
     setTab('dispatch')
     location.hash = 'tab=dispatch'
   }, [])
@@ -491,6 +500,13 @@ function MainApp({
               usageScope={usageScope}
               providers={providers}
               canBind={permissions.features['providers.bind']}
+            />
+          </div>
+          <div className="tab-pane" style={{ display: resolvedTab === 'creation' ? 'flex' : 'none' }}>
+            <CreationCenter
+              features={permissions.features}
+              onReferenceGenerate={handleCommunityReference}
+              onNotify={showToast}
             />
           </div>
           <div className="tab-pane" style={{ display: resolvedTab === 'history' ? 'flex' : 'none' }}>

@@ -19,8 +19,11 @@ export const DESKTOP_FEATURE_KEYS = [
   'history.regenerate',
   'history.copy_prompt',
   'history.watermark_removal',
+  'creation.ai_toolbox',
   'creation.watermark',
+  'creation.prompt_expander',
   'creation.storyboard',
+  'creation.video_library',
   'creation.community'
 ] as const
 

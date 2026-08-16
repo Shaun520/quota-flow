@@ -1058,6 +1058,36 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: var(--space-3);
 }
 
+.permission-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.permission-section-title-row .permission-section-title {
+  margin-bottom: 0;
+}
+
+.permission-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.permission-section-toggle input {
+  accent-color: var(--color-primary, #2563eb);
+}
+
+.permission-group-disabled {
+  background: var(--color-background-subtle, rgba(0, 0, 0, 0.03));
+}
+
 .permission-check-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -1081,6 +1111,10 @@ input:focus, select:focus, textarea:focus {
 
 .permission-check-item:hover {
   background: var(--color-background-subtle, rgba(0, 0, 0, 0.03));
+}
+
+.permission-check-item.disabled {
+  opacity: 0.65;
 }
 
 .permission-check-item input {
@@ -1110,6 +1144,7 @@ input:focus, select:focus, textarea:focus {
 .permission-tab-check {
   background: var(--color-background-subtle, rgba(0, 0, 0, 0.03));
   border-color: var(--color-border);
+  flex-wrap: wrap;
 }
 
 .permission-tab-check:hover {
@@ -1131,6 +1166,51 @@ input:focus, select:focus, textarea:focus {
 }
 
 .permission-tab-check .btn-sm {
+  white-space: nowrap;
+}
+
+.permission-tab-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  width: 100%;
+}
+
+.permission-tab-subgroup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  min-width: 0;
+}
+
+.permission-tab-subgroup.muted {
+  opacity: 0.75;
+}
+
+.permission-tab-subgroup-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  cursor: pointer;
+}
+
+.permission-tab-subgroup-label input {
+  accent-color: var(--color-primary, #2563eb);
+}
+
+.permission-tab-subgroup-label span {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.permission-tab-subgroup .btn-sm {
   white-space: nowrap;
 }
 

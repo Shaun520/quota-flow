@@ -835,7 +835,7 @@ export default function History({
               </div>
               <p style={{ color: 'var(--fg-secondary)', margin: '0 0 16px', lineHeight: 1.7 }}>
                 {confirm.kind === 'one'
-                  ? `确定删除这条历史记录？该任务会从数据库中移除。\n「${confirm.item.record.prompt}」`
+                  ? '确定删除这条历史记录？该任务会从数据库中移除。'
                   : `确定删除选中的 ${confirm.ids.length} 条历史记录？该操作会从数据库中移除这些任务。`}
               </p>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
