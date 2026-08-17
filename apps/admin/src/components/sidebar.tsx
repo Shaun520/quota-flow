@@ -71,6 +71,15 @@ const NAV_SECTIONS: Array<{
             <rect x="1" y="5" width="15" height="14" rx="2" />
           </svg>
         )
+      },
+      {
+        href: "/feedback",
+        label: "反馈管理",
+        icon: (
+          <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        )
       }
     ]
   },
