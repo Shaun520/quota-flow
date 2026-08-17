@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
+import { insertAuditLog } from "@/lib/utils/audit";
 import { PROVIDER_ICONS } from "./provider-icons";
 
 export interface ProviderRow {
@@ -177,6 +178,11 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
       );
 
       setMessage({ tone: "success", text: `已${nextEnabled ? "启用" : "停用"} ${provider.name}。` });
+
+      await insertAuditLog("provider.toggle_enabled", {
+        target: provider.id,
+        metadata: { provider_id: provider.id, enabled: nextEnabled }
+      });
     } catch (e) {
       setMessage({
         tone: "danger",
@@ -250,6 +256,19 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
             : row
         )
       );
+
+      await insertAuditLog("provider.update", {
+        target: editing.id,
+        metadata: {
+          provider_id: editing.id,
+          name,
+          auth_type: values.auth_type,
+          unit_name: values.unit_name,
+          default_daily_quota: values.default_daily_quota,
+          equivalent_count_divisor: values.equivalent_count_divisor,
+          enabled: values.enabled
+        }
+      });
 
       setMessage({ tone: "success", text: `已更新 ${name}。` });
       setEditing(null);
@@ -339,6 +358,19 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
       };
       setProviders((prev) => sortProviders([...prev, newRow]));
 
+      await insertAuditLog("provider.create", {
+        target: id,
+        metadata: {
+          provider_id: id,
+          name,
+          auth_type: values.auth_type,
+          unit_name: values.unit_name,
+          default_daily_quota: values.default_daily_quota,
+          equivalent_count_divisor: values.equivalent_count_divisor,
+          enabled: values.enabled
+        }
+      });
+
       setMessage({ tone: "success", text: `已创建 ${name}。` });
       setCreating(false);
     } catch (e) {
@@ -363,6 +395,11 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
       if (error) throw error;
 
       setProviders((prev) => prev.filter((row) => row.id !== deleting.id));
+
+      await insertAuditLog("provider.delete", {
+        target: deleting.id,
+        metadata: { provider_id: deleting.id, name: deleting.name }
+      });
 
       setMessage({ tone: "success", text: `已删除 ${deleting.name}。` });
       setDeleting(null);

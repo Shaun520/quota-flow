@@ -1,4 +1,5 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
+import { insertAuditLog } from "@/lib/utils/audit";
 
 export type TeamStatus = "active" | "banned" | "exhausted" | "expired";
 export type TeamStatusFilter = "" | TeamStatus;
@@ -133,6 +134,12 @@ export async function updateTeamSettings(teamId: string, input: TeamSettingsInpu
     .update(payload)
     .eq("id", teamId);
   if (error) throw error;
+
+  await insertAuditLog("team.update", {
+    teamId,
+    target: teamId,
+    metadata: payload
+  });
 }
 
 export async function resetTeamQuota(teamId: string): Promise<void> {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
 import { listTeamOptions, type TeamOption } from "@/lib/api/teams";
+import { insertAuditLog } from "@/lib/utils/audit";
 
 export const PERMISSION_FEATURE_KEYS = [
   "tab.dispatch",
@@ -286,6 +287,17 @@ export function DesktopPermissionsPage() {
       }));
       const { error: insertError } = await supabase.from("desktop_permissions").insert(rows);
       if (insertError) throw insertError;
+
+      await insertAuditLog("desktop_permissions.update", {
+        teamId: scope.kind === "team" ? scope.id : null,
+        target: scope.kind === "team" ? scope.id : null,
+        metadata: {
+          targetType: scope.kind,
+          targetId: scope.id,
+          disabledKeys: PERMISSION_FEATURE_KEYS.filter((key) => !values[key]),
+          enabledKeys: PERMISSION_FEATURE_KEYS.filter((key) => values[key])
+        }
+      });
 
       setNotice(`已保存：${scope.label}`);
     } catch (e) {
