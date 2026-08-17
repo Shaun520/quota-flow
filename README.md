@@ -1,6 +1,54 @@
-# Quota-Flow
+<div align="center">
 
-> 视频生成免费额度统一调度平台 · 把豆包 / 即梦 / 通义万相 / 元宝混元 / 可灵 / 海螺 / mcp_mathmind-video 等多家厂商的每日免费额度聚合成一个可调度、可观测、可共享的池子。
+<h1><img src="apps/desktop/src/renderer/src/assets/brand/logo-mark.svg" width="56" align="center" alt="Quota-Flow logo"/> Quota-Flow</h1>
+
+### 一站式 AI 视频生成免费额度调度平台
+
+把豆包 / 即梦 / 通义万相 / 元宝混元 / 可灵 / 海螺 等多家厂商的每日免费额度，聚合成一个可调度、可观测、可共享的池子。
+
+<p>
+  <a href="https://github.com/Shaun520/quota-flow/releases">
+    <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="version"/>
+  </a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform"/>
+  <img src="https://img.shields.io/badge/node-%3E%3D%2020.0.0-green?style=flat-square" alt="node"/>
+  <img src="https://img.shields.io/badge/pnpm-9.7.0-orange?style=flat-square" alt="pnpm"/>
+  <a href="https://github.com/Shaun520/quota-flow/stargazers">
+    <img src="https://img.shields.io/github/stars/Shaun520/quota-flow?style=flat-square" alt="GitHub stars"/>
+  </a>
+</p>
+
+<p>
+  <a href="./README.md">简体中文</a>
+  |
+  <a href="./README.en.md">English</a>
+  |
+  <a href="https://github.com/Shaun520/quota-flow/releases">版本发布</a>
+  |
+  <a href="https://github.com/Shaun520/quota-flow/issues">问题反馈</a>
+</p>
+
+</div>
+
+---
+
+## 目录
+
+- [下载最新版](#下载最新版)
+- [核心特性](#核心特性)
+- [商业模式](#商业模式)
+- [技术架构](#技术架构)
+- [Monorepo 结构](#monorepo-结构)
+- [技术选型](#技术选型)
+- [厂商清单](#厂商清单)
+- [快速开始](#快速开始)
+  - [自部署](#自部署技术用户)
+  - [CLI 真跑示例](#cli-真跑示例)
+- [开发命令](#开发命令)
+- [开源策略](#开源策略)
+- [客户支持](#客户支持)
+- [合规边界](#合规边界)
+- [落地路径](#落地路径)
 
 ## 下载最新版
 
@@ -10,17 +58,17 @@
 
 ## 核心特性
 
-- **动态额度账本（多单位）**：按厂商原生单位记账（次数/灵感值/积分），支持"时长+分辨率+模型"的动态消耗；0 点自动滚动
-- **等效次数总览**：不同单位统一折算等效次数，用于 UI 总览 + 成员日额度上限
-- **消耗表 Admin 可配**：`provider_cost_tables` 由 admin 后台维护，豆包 5s/10s、即梦 720p/1080p 等消耗规则随时可改
-- **智能调度 + estimateCost 预检查**：按策略选家前先预估算消耗，跳过"剩余不够本次调用"的账号
-- **多账号池化**：同一家厂商绑多个账号，额度叠加，单账号失效自动切下一个
-- **账号级启用开关**：每个绑定账号可单独启用/停用（默认启用），停用账号被智能调度自动跳过，无需解绑
-- **团队共享额度池**：多人多账号额度叠加成一个池子（核心创新点）
-- **声明式 WebView 接入**：新厂商接入只需填页面 URL + DOM 选择器，平均 2 小时搞定一家；不用逆向风控签名算法（千问 bx-ua / clt-acs-sign 等）
-- **Cookie 自动维护**：WebView 统一执行引擎（提交与保活共享实例池）+ cookie 隔离会话 + 凌晨 3 点自动续命，用户平均 1-2 月重登一次
-- **桌面端优先**：Electron 本地工具，无超时无 CORS；个人账号本地解密，团队公共账号走 Edge Function 代调用（key 不出云端）
-- **官方托管 + 自部署**：95% 用户用官方托管，技术用户可完全自部署
+- **动态额度账本（多单位）**：按厂商原生单位记账（次数/灵感值/积分），支持“时长+分辨率+模型”的动态消耗；0 点自动滚动。
+- **等效次数总览**：不同单位统一折算等效次数，用于 UI 总览 + 成员日额度上限。
+- **消耗表 Admin 可配**：`provider_cost_tables` 由 admin 后台维护，豆包 5s/10s、即梦 720p/1080p 等消耗规则随时可改。
+- **智能调度 + estimateCost 预检查**：按策略选家前先预估算消耗，跳过“剩余不够本次调用”的账号。
+- **多账号池化**：同一家厂商绑多个账号，额度叠加，单账号失效自动切下一个。
+- **账号级启用开关**：每个绑定账号可单独启用/停用（默认启用），停用账号被智能调度自动跳过，无需解绑。
+- **团队共享额度池**：多人多账号额度叠加成一个池子（核心创新点）。
+- **声明式 WebView 接入**：新厂商接入只需填页面 URL + DOM 选择器，平均 2 小时搞定一家；不用逆向风控签名算法（千问 bx-ua / clt-acs-sign 等）。
+- **Cookie 自动维护**：WebView 统一执行引擎（提交与保活共享实例池）+ cookie 隔离会话 + 凌晨 3 点自动续命，用户平均 1-2 月重登一次。
+- **桌面端优先**：Electron 本地工具，无超时无 CORS；个人账号本地解密，团队公共账号走 Edge Function 代调用（key 不出云端）。
+- **官方托管 + 自部署**：95% 用户用官方托管，技术用户可完全自部署。
 
 ## 商业模式
 
@@ -60,31 +108,43 @@ Supabase（数据库 + Auth + Edge Functions）
     提交/保活共享实例池，凌晨 3 点静默访问厂商首页自动续命 cookie
 ```
 
-## Monorepo 结构（pnpm + Turbo）
+## Monorepo 结构
+
+> pnpm workspace + Turbo 2
 
 ```
 quota-flow/
 packages/
-  core/          ✅ 已实现  调度核心（路由、降级、账本逻辑、等效次数换算、消耗表缓存）
-  providers/     ✅ 已实现  厂商适配器（mathmind/qwen/yuanbao 已接入，其余待补）+ estimateCost
-  crypto/        🔲 骨架已建 · 待实现  AES 加密（团队 cookie 云端加密 + 桌面端本地解密）
-  db-supabase/   🔲 骨架已建 · 待实现  Supabase 客户端（RLS、Auth、团队权限）
-  shared-ui/     🔲 骨架已建 · 待实现  React 共享组件（桌面端 + 落地页复用）
-  cookie-manager/🔲 骨架已建 · 待实现  健康检查 + 自动续期（与 WebView 执行引擎共享实例池）
-  logger/        🔲 骨架已建 · 待实现  统一日志（桌面端 + CLI + Edge Functions）
-  auth/          🔲 骨架已建 · 待实现  Supabase Auth 封装（官方托管登录 / 自部署模式切换）
+  core/          调度核心（路由、降级、账本逻辑、等效次数换算、消耗表缓存）
+  providers/     厂商适配器（mathmind/qwen/yuanbao 已接入，其余待补）+ estimateCost
+  crypto/        AES 加密（团队 cookie 云端加密 + 桌面端本地解密）
+  db-supabase/   Supabase 客户端（RLS、Auth、团队权限）
+  shared-ui/     React 共享组件（桌面端 + 落地页复用）
+  cookie-manager/健康检查 + 自动续期（与 WebView 执行引擎共享实例池）
+  logger/        统一日志（桌面端 + CLI + Edge Functions）
+  auth/          Supabase Auth 封装（官方托管登录 / 自部署模式切换）
 apps/
-  web/           🔲 骨架已建 · 待实现  落地页（Next.js + React + Vercel）
-  admin/         🔲 骨架已建 · 待实现  后台管理（开源，Next.js + React + Vercel）
-  desktop/       🔲 骨架已建 · 待实现  Electron + React（唯一产品入口，WebView 统一引擎）
-  cli/           ✅ 已实现  命令行（check-quota / generate / refresh）
-  skill/         🔲 骨架已建 · 待实现  SKILL.md（可选 Skill 附件）
-  migrations/    🆕 新建  Supabase SQL 迁移脚本（约定见 migrations/README.md）
+  web/           落地页（Next.js + React + Vercel）
+  admin/         后台管理（开源，Next.js + React + Vercel）
+  desktop/       Electron + React（唯一产品入口，WebView 统一引擎）
+  cli/           命令行（check-quota / generate / refresh）
+  skill/         SKILL.md（可选 Skill 附件）
+  migrations/    Supabase SQL 迁移脚本（约定见 migrations/README.md）
 ```
+
+| 模块 | 状态 |
+|---|---|
+| `packages/core` | 已实现 |
+| `packages/providers` | 部分实现 |
+| `apps/cli` | 已实现 |
+| `apps/desktop` | 开发中 |
+| `apps/web` | 骨架已建 |
+| `apps/admin` | 骨架已建 |
+| 其余 packages | 骨架已建 |
 
 ## 技术选型
 
-- **后端服务**：MVP 阶段不独立部署；团队代调用走 Supabase Edge Functions；本地桌面端如需供 Skill 调用走 Node 内置 http 轻量接口
+- **后端服务**：MVP 阶段不独立部署；团队代调用走 Supabase Edge Functions；本地桌面端如需供 Skill 调用走 Node 内置 http 轻量接口。
 - **数据库**：Supabase Postgres
 - **加密**：Node 内置 crypto，主密钥从系统 keychain 读
 - **前端**：React + TypeScript + Tailwind CSS
@@ -109,7 +169,7 @@ apps/
 
 国内主流厂商的免费额度绑登录态，不绑 apikey。**mcp_mathmind 是唯一走真 API 的厂商，其余 6 家全部走 WebView 统一执行引擎**（cookie 注入 + 自动提交，参考 REQUIREMENTS.md §5.12）。对于千问这类含风控签名的厂商，WebView 前端 JS 自带签名算法，无需逆向。
 
-所有厂商消耗不是固定"1 次"——豆包 5s/10s、即梦 720p/1080p、可灵 5s/10s 的扣减都不一样，由 `provider_cost_tables` 表驱动，最后折算统一的"等效次数"用于 UI 总览 + 成员日额度上限。
+所有厂商消耗不是固定“1 次”——豆包 5s/10s、即梦 720p/1080p、可灵 5s/10s 的扣减都不一样，由 `provider_cost_tables` 表驱动，最后折算统一的“等效次数”用于 UI 总览 + 成员日额度上限。
 
 ## 快速开始
 
@@ -118,7 +178,7 @@ apps/
 前置：注册 Supabase 空项目（启用 Auth + Postgres）。
 
 ```bash
-git clone https://github.com/yourname/quota-flow.git
+git clone https://github.com/Shaun520/quota-flow.git
 cd quota-flow
 
 # 1. 安装 + 构建（pnpm monorepo）
@@ -134,18 +194,14 @@ cp .env.example .env
 # 方式 B：桌面端首次启动会提示自动执行
 
 # 4. 启动桌面端
-
 cd apps/desktop && pnpm dev  # 设置里的 Supabase 连接信息按需配置
 ```
 
-### CLI 真跑示例（已验证）
+### CLI 真跑示例
 
 ```bash
 # 查额度（当前已接入 mathmind / qwenwan / yuanbao 三家）
-$ pnpm --filter @quota-flow/cli dev check-quota
- mathmind  0/10    active
- qwenwan   0/0     offline
- yuanbao   0/5     degraded
+pnpm --filter @quota-flow/cli dev check-quota
 
 # 指定厂商跑一次生成（需要在 data/yuanbao-auth.json 配置 cookie + conversationId）
 pnpm --filter @quota-flow/cli dev generate --mode text2video \
@@ -159,7 +215,7 @@ pnpm --filter @quota-flow/cli dev generate --mode text2video \
 pnpm --filter @quota-flow/cli dev refresh
 ```
 
-## 开发命令（pnpm monorepo + Turbo）
+## 开发命令
 
 ```bash
 pnpm install                           # 安装所有 workspace 依赖（首选；别混用 npm）
@@ -172,7 +228,7 @@ pnpm --filter @quota-flow/core dev           # core 包监视模式
 pnpm --filter @quota-flow/providers dev      # providers 包监视模式
 pnpm --filter @quota-flow/cli dev --help     # CLI 帮助
 
-# 桌面端（Electron，待实现 apps/desktop）
+# 桌面端（Electron）
 pnpm --filter @quota-flow/desktop dev   # 开发模式
 pnpm release                            # 构建并打包桌面端安装包
 ```
@@ -196,10 +252,10 @@ pnpm release                            # 构建并打包桌面端安装包
 
 ## 合规边界
 
-- 用户用自己 cookie 调厂商是用户自己的事，运营者不直接参与调用
-- 不转售、不抽佣、不对外暴露
-- 定位锁死"个人/小团队自用"
-- 用 cookie 调厂商内部 API 违反各家 ToS，自用低风险，公开商用高风险
+- 用户用自己 cookie 调厂商是用户自己的事，运营者不直接参与调用。
+- 不转售、不抽佣、不对外暴露。
+- 定位锁死“个人/小团队自用”。
+- 用 cookie 调厂商内部 API 违反各家 ToS，自用低风险，公开商用高风险。
 
 ## 落地路径
 
