@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getAuthService } from '../auth/service'
 import { ensureFreshSession } from '../auth/session'
 import { errMsg } from '../utils/error'
@@ -24,6 +24,7 @@ export interface CommunityVideosResult {
 
 const COMMUNITY_VIDEO_FIELDS =
   'id,title,cover_url,video_url,duration_sec,category,tags,prompt,provider_hint,enabled,sort_order,created_at'
+const FOCUS_RELOAD_THROTTLE_MS = 30 * 1000
 
 function mapCommunityVideo(row: Record<string, unknown>): CommunityVideo {
   return {
@@ -44,6 +45,8 @@ export function useCommunityVideos(userId?: string): CommunityVideosResult {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const inFlightKeyRef = useRef<string | null>(null)
+  const lastLoadedAtRef = useRef(0)
 
   const reload = useCallback(() => {
     setReloadKey((k) => k + 1)
@@ -54,9 +57,13 @@ export function useCommunityVideos(userId?: string): CommunityVideosResult {
       setItems([])
       return
     }
+    if (inFlightKeyRef.current === userId) return
+    inFlightKeyRef.current = userId
+    lastLoadedAtRef.current = Date.now()
     const auth = getAuthService()
     if (!auth) {
       setError('视频灵感库服务未配置')
+      inFlightKeyRef.current = null
       return
     }
     setLoading(true)
@@ -81,6 +88,7 @@ export function useCommunityVideos(userId?: string): CommunityVideosResult {
       setError(errMsg(e))
     } finally {
       setLoading(false)
+      inFlightKeyRef.current = null
     }
   }, [userId])
 
@@ -111,6 +119,7 @@ export function useCommunityVideos(userId?: string): CommunityVideosResult {
 
   useEffect(() => {
     const onFocus = (): void => {
+      if (Date.now() - lastLoadedAtRef.current < FOCUS_RELOAD_THROTTLE_MS) return
       void load()
     }
     window.addEventListener('focus', onFocus)

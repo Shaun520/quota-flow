@@ -418,6 +418,8 @@ export interface AddProviderKeyInput {
   healthStatus?: string
 }
 
+const PROVIDER_KEY_LIST_LIMIT = 1000
+
 export class ProviderService {
   constructor(private readonly client: SupabaseClient) {}
 
@@ -446,6 +448,7 @@ export class ProviderService {
       .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('owner_user_id', userId)
       .order('created_at', { ascending: false })
+      .limit(PROVIDER_KEY_LIST_LIMIT)
     if (error) throw error
     return (data ?? []) as unknown as ProviderKeySummary[]
   }
@@ -456,6 +459,7 @@ export class ProviderService {
       .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('team_id', teamId)
       .order('created_at', { ascending: false })
+      .limit(PROVIDER_KEY_LIST_LIMIT)
     if (error) throw error
     return (data ?? []) as unknown as ProviderKeySummary[]
   }
@@ -467,6 +471,7 @@ export class ProviderService {
       .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('owner_user_id', userId)
       .order('created_at', { ascending: false })
+      .limit(PROVIDER_KEY_LIST_LIMIT)
     if (error) throw error
     return (data ?? []) as unknown as ProviderKeySecret[]
   }
@@ -477,6 +482,7 @@ export class ProviderService {
       .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
       .eq('team_id', teamId)
       .order('created_at', { ascending: false })
+      .limit(PROVIDER_KEY_LIST_LIMIT)
     if (error) throw error
     return (data ?? []) as unknown as ProviderKeySecret[]
   }

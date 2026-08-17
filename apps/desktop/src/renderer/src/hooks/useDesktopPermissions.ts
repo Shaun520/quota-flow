@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getAuthService } from '../auth/service'
 import { ensureFreshSession } from '../auth/session'
 import { errMsg } from '../utils/error'
@@ -41,6 +41,7 @@ export interface DesktopPermissionsResult {
 const DEFAULT_FEATURES = Object.fromEntries(
   DESKTOP_FEATURE_KEYS.map((key) => [key, true])
 ) as DesktopFeatureFlags
+const FOCUS_RELOAD_THROTTLE_MS = 30 * 1000
 
 interface PermissionRow {
   target_type: 'global' | 'team'
@@ -64,6 +65,8 @@ export function useDesktopPermissions(userId?: string, teamId?: string | null): 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const inFlightKeyRef = useRef<string | null>(null)
+  const lastLoadedAtRef = useRef(0)
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
 
@@ -72,9 +75,14 @@ export function useDesktopPermissions(userId?: string, teamId?: string | null): 
       setFeatures({ ...DEFAULT_FEATURES })
       return
     }
+    const requestKey = `${userId}|${teamId ?? ''}`
+    if (inFlightKeyRef.current === requestKey) return
+    inFlightKeyRef.current = requestKey
+    lastLoadedAtRef.current = Date.now()
     const auth = getAuthService()
     if (!auth) {
       setError('权限配置服务未配置')
+      inFlightKeyRef.current = null
       return
     }
     setLoading(true)
@@ -109,6 +117,7 @@ export function useDesktopPermissions(userId?: string, teamId?: string | null): 
       setError(errMsg(e))
     } finally {
       setLoading(false)
+      inFlightKeyRef.current = null
     }
   }, [userId, teamId])
 
@@ -135,6 +144,7 @@ export function useDesktopPermissions(userId?: string, teamId?: string | null): 
 
   useEffect(() => {
     const onFocus = (): void => {
+      if (Date.now() - lastLoadedAtRef.current < FOCUS_RELOAD_THROTTLE_MS) return
       void load()
     }
     window.addEventListener('focus', onFocus)
