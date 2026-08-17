@@ -40,7 +40,7 @@
 ```
 Vercel（两个独立项目）
   web/     落地页：定价/文档/下载/注册/赞助
-  admin/   后台管理（开源，运营者用，含消耗表编辑器）
+  admin/   后台管理（开源，运营者用，含额度扣减规则）
                 |
                 v
 Supabase（数据库 + Auth + Edge Functions）
@@ -186,7 +186,7 @@ pnpm release                            # 构建并打包桌面端安装包
 | apps/desktop | 是 |
 | apps/cli | 是 |
 | apps/skill | 是 |
-| apps/admin | 是（含消耗表可视化编辑器） |
+| apps/admin | 是（含额度扣减规则编辑器） |
 
 ## 客户支持
 
@@ -205,5 +205,5 @@ pnpm release                            # 构建并打包桌面端安装包
 
 1. **MVP 核心**：Monorepo + core + mathmind + 豆包 + 即梦 + 消耗表 + 桌面端基础
 2. **多厂商 + cookie**：接通义/元宝/可灵/海螺 + cookie 管理器 + 7 家消耗表补齐
-3. **团队 + 落地页**：团队额度池 + 成员管理 + admin 消耗表编辑器
+3. **团队 + 落地页**：团队额度池 + 成员管理 + admin 额度扣减规则
 4. **打磨**：自动更新 + 代码签名 + 消耗表自动偏差告警 + i18n
