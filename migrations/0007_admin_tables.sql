@@ -347,7 +347,7 @@ ON CONFLICT (provider_id, mode, duration_min, duration_max, resolution, model) D
 
 COMMENT ON TABLE profiles IS '用户扩展信息，is_admin 控制后台登录授权';
 COMMENT ON TABLE subscriptions IS '订阅记录，MVP 阶段由 admin 手动开通';
-COMMENT ON TABLE provider_cost_tables IS '各厂商生成参数对应的扣减规则，admin 消耗表编辑器数据源';
+COMMENT ON TABLE provider_cost_tables IS '各厂商生成参数对应的扣减规则，admin 额度扣减规则数据源';
 COMMENT ON TABLE member_usage IS '成员当日等效消费统计';
 COMMENT ON TABLE announcements IS '后台公告通知';
 COMMENT ON TABLE audit_logs IS '管理员关键操作审计日志';
