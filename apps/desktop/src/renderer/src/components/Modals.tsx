@@ -3,7 +3,8 @@ import type { ReactNode } from 'react'
 import { IconChevron, IconClose, ProviderIconMark } from './icons'
 import { BrandMark } from './Brand'
 import Select from './Select'
-import { getProviderService } from '../auth/service'
+import { getAuthService, getProviderService } from '../auth/service'
+import { ensureFreshSession } from '../auth/session'
 import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
 import type { TeamContext } from '@quota-flow/db-supabase'
@@ -414,17 +415,58 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
 }
 
 export function FeedbackModal({ onClose }: { onClose: () => void }) {
+  const [type, setType] = useState('使用问题')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [contact, setContact] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit() {
+    if (!title.trim()) return
+    setError(null)
+    setSubmitting(true)
+    try {
+      const guard = await ensureFreshSession()
+      if (!guard.ok) {
+        setError('登录已过期，请重新登录')
+        return
+      }
+      const auth = getAuthService()
+      if (!auth) {
+        setError('反馈服务未配置')
+        return
+      }
+      const { error: submitError } = await auth.getClient().rpc('submit_feedback', {
+        p_type: type,
+        p_title: title.trim(),
+        p_description: description.trim() || null,
+        p_contact: contact.trim() || null
+      })
+      if (submitError) throw submitError
+      onClose()
+    } catch (e) {
+      setError(errMsg(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <Modal
       title="问题反馈"
       onClose={onClose}
       footer={
         <>
-          <button className="btn-sm" onClick={onClose}>
+          <button className="btn-sm" onClick={onClose} disabled={submitting}>
             取消
           </button>
-          <button className="btn-sm primary" disabled>
-            提交反馈
+          <button
+            className="btn-sm primary"
+            onClick={() => void handleSubmit()}
+            disabled={submitting || !title.trim()}
+          >
+            {submitting ? '提交中…' : '提交反馈'}
           </button>
         </>
       }
@@ -433,8 +475,8 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         <div className="form-group">
           <label>问题类型</label>
           <Select
-            value="使用问题"
-            onChange={() => {}}
+            value={type}
+            onChange={setType}
             options={[
               { value: '使用问题', label: '使用问题' },
               { value: '额度异常', label: '额度异常' },
@@ -446,21 +488,32 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="form-group">
           <label>标题</label>
-          <input type="text" placeholder="一句话描述问题" />
+          <input
+            type="text"
+            placeholder="一句话描述问题"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
         </div>
         <div className="form-group">
           <label>详细描述</label>
-          <textarea rows={4} placeholder="补充操作步骤、预期结果和实际表现" />
-        </div>
-        <div className="form-group">
-          <label>图片</label>
-          <input type="file" accept="image/*" multiple />
-          <div className="feedback-upload-hint">支持 png、jpg、jpeg、webp，可多选</div>
+          <textarea
+            rows={4}
+            placeholder="补充操作步骤、预期结果和实际表现"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
         </div>
         <div className="form-group">
           <label>联系方式</label>
-          <input type="text" placeholder="邮箱或微信，方便跟进" />
+          <input
+            type="text"
+            placeholder="邮箱或微信，方便跟进"
+            value={contact}
+            onChange={(e) => setContact(e.target.value)}
+          />
         </div>
+        {error ? <div className="auth-msg auth-msg-error">{error}</div> : null}
       </div>
     </Modal>
   )
