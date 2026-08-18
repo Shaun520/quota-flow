@@ -163,6 +163,7 @@ function MainApp({
   const [renewText, setRenewText] = useState('自动续命：—')
   const [updatePromptVisible, setUpdatePromptVisible] = useState(false)
   const [regenerateDraft, setRegenerateDraft] = useState<RegenerateDraft | null>(null)
+  const [materialImages, setMaterialImages] = useState<Array<{ path: string; url: string }>>([])
 
   const scopeLabel = useMemo(() => {
     if (viewScope === 'team') return '团队模式'
@@ -196,6 +197,12 @@ function MainApp({
 
   const handleCommunityReference = useCallback((draft: RegenerateDraft): void => {
     setRegenerateDraft(draft)
+    setTab('dispatch')
+    location.hash = 'tab=dispatch'
+  }, [])
+
+  const handleUseMaterial = useCallback((path: string, url: string): void => {
+    setMaterialImages([{ path, url }])
     setTab('dispatch')
     location.hash = 'tab=dispatch'
   }, [])
@@ -490,6 +497,8 @@ function MainApp({
               jobs={jobs}
               features={permissions.features}
               regenerateDraft={regenerateDraft}
+              materialImages={materialImages}
+              onMaterialImagesConsumed={() => setMaterialImages([])}
               onRegenerateConsumed={() => setRegenerateDraft(null)}
             />
           </div>
@@ -507,6 +516,7 @@ function MainApp({
               features={permissions.features}
               userId={user.id}
               onReferenceGenerate={handleCommunityReference}
+              onUseMaterial={handleUseMaterial}
               onNotify={showToast}
             />
           </div>

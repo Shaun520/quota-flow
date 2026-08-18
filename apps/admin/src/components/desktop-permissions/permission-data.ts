@@ -91,6 +91,12 @@ export const PERMISSION_MODULES: PermissionModule[] = [
             description: "创作中心视频灵感库：优秀视频与参考提示词"
           }
         ]
+      },
+      {
+        key: "creation.material_library",
+        label: "素材库",
+        description: "本地素材库模块总开关",
+        features: []
       }
     ]
   }

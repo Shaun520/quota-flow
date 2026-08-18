@@ -24,7 +24,8 @@ export const DESKTOP_FEATURE_KEYS = [
   'creation.prompt_expander',
   'creation.storyboard',
   'creation.video_library',
-  'creation.community'
+  'creation.community',
+  'creation.material_library'
 ] as const
 
 export type DesktopFeatureKey = (typeof DESKTOP_FEATURE_KEYS)[number]

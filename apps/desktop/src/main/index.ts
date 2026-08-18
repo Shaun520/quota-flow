@@ -18,6 +18,7 @@ import type { UpdaterStatus } from './updater'
 import { getWatermarkStatus, processWatermarkJob } from './watermark-remover/job'
 import type { WatermarkJobInput } from './watermark-remover/job'
 import type { WatermarkProgress } from './watermark-remover/engine'
+import { getMaterialStore } from './materials/store'
 
 /** 活跃生成任务注册表：jobId → 取消/已提交状态（用于「终止生成」与「关闭确认」） */
 interface ActiveRunState {
@@ -64,6 +65,20 @@ function startMediaServer(): Promise<number> {
     mediaPortPromise = new Promise((resolve, reject) => {
       const videosDir = join(app.getPath('userData'), 'videos')
       const imagesDir = join(app.getPath('userData'), 'images')
+      const materialsDir = join(app.getPath('userData'), 'materials')
+      const imageContentType = (ext: string): string =>
+        ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+      const serveImage = (res: import('node:http').ServerResponse, name: string, dir: string): void => {
+        const file = join(dir, name)
+        if (!existsSync(file)) {
+          res.writeHead(404)
+          res.end()
+          return
+        }
+        const ext = (name.split('.').pop() || 'jpg').toLowerCase()
+        res.writeHead(200, { 'Content-Type': imageContentType(ext), 'Cache-Control': 'no-store' })
+        createReadStream(file).pipe(res)
+      }
       const server = createServer((req, res) => {
         const path = (req.url || '').split('?')[0]
         if (path.startsWith('/images/')) {
@@ -73,17 +88,44 @@ function startMediaServer(): Promise<number> {
             res.end()
             return
           }
-          const file = join(imagesDir, name)
+          serveImage(res, name, imagesDir)
+          return
+        }
+        if (path.startsWith('/materials/')) {
+          const name = path.slice('/materials/'.length)
+          if (!/^[0-9a-fA-F-]+\.(png|jpe?g|gif|webp|mp4)$/i.test(name)) {
+            res.writeHead(400)
+            res.end()
+            return
+          }
+          const file = join(materialsDir, name)
           if (!existsSync(file)) {
             res.writeHead(404)
             res.end()
             return
           }
-          const ext = (name.split('.').pop() || 'jpg').toLowerCase()
-          const type =
-            ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
-          res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' })
-          createReadStream(file).pipe(res)
+          const ext = (name.split('.').pop() || '').toLowerCase()
+          if (ext === 'mp4') {
+            const size = statSync(file).size
+            res.setHeader('Content-Type', 'video/mp4')
+            res.setHeader('Accept-Ranges', 'bytes')
+            const range = req.headers.range
+            if (range) {
+              const m = /bytes=(\d*)-(\d*)/.exec(range)
+              const start = m && m[1] ? parseInt(m[1], 10) : 0
+              const end = m && m[2] ? parseInt(m[2], 10) : size - 1
+              res.writeHead(206, {
+                'Content-Range': `bytes ${start}-${end}/${size}`,
+                'Content-Length': end - start + 1
+              })
+              createReadStream(file, { start, end }).pipe(res)
+            } else {
+              res.writeHead(200, { 'Content-Length': size })
+              createReadStream(file).pipe(res)
+            }
+          } else {
+            serveImage(res, name, materialsDir)
+          }
           return
         }
         const name = path.replace(/^\//, '')
@@ -252,6 +294,25 @@ app.whenReady().then(() => {
     if (!existsSync(resolved)) return { ok: false, error: '视频文件不存在' }
     shell.showItemInFolder(resolved)
     return { ok: true }
+  })
+
+  ipcMain.handle('materials:list', async () => getMaterialStore().list())
+  ipcMain.handle('materials:import', async (_e, paths: unknown) => {
+    if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string')) {
+      throw new Error('invalid material paths')
+    }
+    return getMaterialStore().importPaths(paths as string[])
+  })
+  ipcMain.handle('materials:remove', async (_e, id: unknown) => {
+    if (typeof id !== 'string' || !id) throw new Error('invalid material id')
+    return getMaterialStore().remove(id)
+  })
+  ipcMain.handle('materials:get-url', async (_e, fileName: unknown) => {
+    if (typeof fileName !== 'string' || !/^[0-9a-fA-F-]+\.(png|jpe?g|gif|webp|mp4)$/.test(fileName)) {
+      throw new Error('invalid material name')
+    }
+    const port = await startMediaServer()
+    return `http://127.0.0.1:${port}/materials/${fileName}`
   })
 
   ipcMain.handle('ping', () => 'pong')

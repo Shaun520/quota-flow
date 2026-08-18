@@ -21,7 +21,8 @@ export type FeatureKey =
   | "creation.prompt_expander"
   | "creation.storyboard"
   | "creation.video_library"
-  | "creation.community";
+  | "creation.community"
+  | "creation.material_library";
 
 export interface PermissionFeature {
   key: FeatureKey;

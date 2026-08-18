@@ -112,6 +112,19 @@ export interface UpdaterStatus {
   error?: string
 }
 
+export type MaterialType = 'image' | 'video'
+
+export interface MaterialRecord {
+  id: string
+  type: MaterialType
+  name: string
+  fileName: string
+  ext: string
+  size: number
+  createdAt: number
+  path: string
+}
+
 export interface GenerateRequest {
   supabaseUrl: string
   supabaseAnonKey: string
@@ -194,6 +207,12 @@ export interface DesktopApi {
   }
   files: {
     getPath: (file: File) => string
+  }
+  materials: {
+    list: () => Promise<MaterialRecord[]>
+    import: (paths: string[]) => Promise<MaterialRecord[]>
+    remove: (id: string) => Promise<{ ok: boolean; error?: string }>
+    getUrl: (fileName: string) => Promise<string>
   }
   media: {
     getUrl: (name: string) => Promise<string>
@@ -308,6 +327,12 @@ const api: DesktopApi = {
   },
   files: {
     getPath: (file) => webUtils.getPathForFile(file)
+  },
+  materials: {
+    list: () => ipcRenderer.invoke('materials:list') as Promise<MaterialRecord[]>,
+    import: (paths) => ipcRenderer.invoke('materials:import', paths) as Promise<MaterialRecord[]>,
+    remove: (id) => ipcRenderer.invoke('materials:remove', id) as Promise<{ ok: boolean; error?: string }>,
+    getUrl: (fileName) => ipcRenderer.invoke('materials:get-url', fileName) as Promise<string>
   },
   media: {
     getUrl: (name) => ipcRenderer.invoke('media:get-url', name) as Promise<string>,
