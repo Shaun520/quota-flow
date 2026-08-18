@@ -930,6 +930,33 @@ export async function visitAndCapture(
   })
 }
 
+/**
+ * 解码智谱 API Key payload。
+ * 兼容两种格式：
+ * - 新版：{ v: 1; apiKey: string; consoleJwt?: string | null } JSON 字符串
+ * - 旧版：纯 API Key 字符串（非 `{` 开头）
+ */
+export function decodeZhipuPayload(decrypted: string): { apiKey: string; consoleJwt?: string | null } {
+  const trimmed = decrypted.trim()
+  if (!trimmed.startsWith('{')) {
+    // 旧版纯 API Key 格式
+    return { apiKey: trimmed }
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { v?: number; apiKey?: string; consoleJwt?: string | null }
+    const apiKey = parsed.apiKey?.trim() ?? ''
+    let consoleJwt = parsed.consoleJwt ?? null
+    // decodeURIComponent 兼容被 URL 编码存储的脏值
+    if (typeof consoleJwt === 'string' && consoleJwt) {
+      try { consoleJwt = decodeURIComponent(consoleJwt) } catch {}
+    }
+    return { apiKey, consoleJwt }
+  } catch {
+    // JSON 解析失败，当作纯 API Key
+    return { apiKey: trimmed }
+  }
+}
+
 let registered = false
 
 export function initProviders(): void {

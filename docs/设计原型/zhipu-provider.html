@@ -1,0 +1,356 @@
+<!--
+  Quota-Flow 桌面端 · 厂商管理原型稿（智谱 bigmodel 新厂商）
+  方向：不做 UI 大改，仅"新增"一个标准 apikey 厂商「智谱（bigmodel）」
+        配额由接口自动获取（不配额度单位 / 默认日额度 / 等效除数）。
+        既有「智谱清言（网页登录）」保持原样不动。
+  结构：厂商行分层级 —— 智谱（bigmodel）行 → 展开列出 key 账号（去重）→ 每个 key 再下拉看模型与额度
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>厂商管理 · 新增智谱 bigmodel（原型稿）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-base: #ede8dd;
+    --bg-card: #f5f1e8;
+    --bg-elevated: #faf7f0;
+    --bg-hover: #e5dfd3;
+    --fg-primary: #1a1a1a;
+    --fg-secondary: #5c5648;
+    --fg-muted: #9a9486;
+    --accent: #e07a3e;
+    --accent-hover: #c96a32;
+    --accent-bg: rgba(224, 122, 62, 0.08);
+    --border: #d4cec2;
+    --border-light: #e2ddd1;
+    --success: #5a8f6e;
+    --warning: #c9a227;
+    --error: #c44d4d;
+    --shadow-sm: 0 1px 3px rgba(26,26,26,0.05);
+    --shadow-md: 0 4px 12px rgba(26,26,26,0.07);
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --font-display: "Playfair Display", "Noto Sans SC", serif;
+    --font-body: "Inter", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-body);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg-primary);
+    background: #d8d2c4;
+    -webkit-font-smoothing: antialiased;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .frame { max-width: 1180px; margin: 0 auto; background: var(--bg-base); border-radius: var(--radius-lg); border: 1px solid var(--border); box-shadow: var(--shadow-md); overflow: hidden; }
+  .title-bar { display: flex; align-items: center; justify-content: space-between; height: 40px; padding: 0 16px; background: var(--bg-card); border-bottom: 1px solid var(--border-light); }
+  .title-bar .brand { display: flex; align-items: center; gap: 6px; font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+  .title-bar .brand-icon { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 9px; color: #fff; }
+  .title-bar .frame-tag { font-size: 11px; color: var(--fg-muted); }
+  .top-nav { display: flex; gap: 4px; padding: 0 16px; background: var(--bg-card); border-bottom: 1px solid var(--border-light); }
+  .nav-tab { padding: 8px 12px; font-size: 12px; color: var(--fg-muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .nav-tab.active { color: var(--fg-primary); border-bottom-color: var(--accent); font-weight: 600; }
+  .content { padding: 18px 20px 24px; }
+  .page-header { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  .page-header h1 { font-size: 20px; font-family: var(--font-display); font-weight: 600; }
+  .page-header .divider { width: 34px; height: 3px; background: var(--accent); border-radius: 2px; margin-top: 4px; }
+  .page-header .sub { font-size: 12px; color: var(--fg-muted); margin-top: 8px; }
+  .filter-bar { display: flex; gap: 8px; align-items: center; }
+  .filter-bar input, .filter-bar select { height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--fg-primary); font-family: var(--font-body); font-size: 12px; }
+  .btn-sm { height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--fg-secondary); font-family: var(--font-body); font-size: 11px; cursor: pointer; }
+  .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-sm.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn-sm.primary:hover { background: var(--accent-hover); }
+  .btn-sm.danger { color: var(--error); }
+
+  .provider-table-wrap { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); overflow: hidden; }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  .provider-table thead th { text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--fg-secondary); text-transform: uppercase; letter-spacing: .4px; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
+  .provider-table td { padding: 10px 12px; border-bottom: 1px solid var(--border-light); vertical-align: middle; }
+  .provider-table tbody tr:not(.account-sublist) { cursor: pointer; }
+  .provider-table tbody tr:not(.account-sublist):hover { background: var(--bg-hover); }
+  .col-name { font-weight: 600; }
+  .expand-btn { width: 22px; height: 22px; border: none; background: transparent; color: var(--fg-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); transition: transform .15s ease; vertical-align: middle; }
+  .expand-btn:hover { background: var(--bg-hover); color: var(--fg-primary); }
+  .expand-btn.expanded { transform: rotate(90deg); }
+  .badge-flag { padding: 0 6px; border-radius: 3px; font-size: 9px; font-weight: 600; }
+  .badge-flag.default { background: var(--accent-bg); color: var(--accent); }
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+  .badge-success { background: rgba(90,143,110,.12); color: var(--success); }
+  .badge-pending { background: rgba(201,162,39,.12); color: var(--warning); }
+  .tag-new { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; color: var(--accent); background: var(--accent-bg); margin-left: 6px; }
+
+  .account-sublist td { background: var(--bg-elevated); padding: 4px 12px 12px; }
+  .account-subtable { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--bg-card); }
+  .account-subtable thead th { text-align: left; padding: 7px 12px; font-size: 10px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .4px; background: var(--bg-elevated); border-bottom: 1px solid var(--border-light); }
+  .account-subtable td { padding: 9px 12px; border-bottom: 1px solid var(--border-light); background: var(--bg-card); }
+  .account-subtable tr:last-child td { border-bottom: none; }
+  .account-name-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .account-meta { font-size: 10px; color: var(--fg-muted); margin-top: 2px; }
+
+  /* key 账号可展开明细 */
+  .acc-row { cursor: pointer; }
+  .acc-row .acc-chev { transition: transform .15s ease; color: var(--fg-muted); display: inline-flex; }
+  .acc-row.open .acc-chev { transform: rotate(90deg); color: var(--accent); }
+  .acc-detail { display: none; }
+  .acc-detail td { background: var(--bg-card); padding: 2px 12px 14px; }
+  .acc-detail-card { border-left: 2px solid var(--accent); background: var(--bg-elevated); padding: 12px 14px; border-radius: 0 var(--radius-md) var(--radius-md) 0; }
+  .detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .d-item { display: flex; flex-direction: column; gap: 4px; }
+  .d-label { font-size: 10px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .4px; }
+  .d-model { display: flex; flex-wrap: wrap; gap: 4px; }
+  .model-tag { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 4px; background: var(--accent-bg); color: var(--fg-secondary); font-size: 10px; font-weight: 500; }
+  .model-tag.free { color: var(--success); background: rgba(90,143,110,.12); }
+  .d-value { font-weight: 600; }
+
+  .hint { font-size: 11px; color: var(--fg-muted); margin-top: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .hint b { color: var(--fg-secondary); font-weight: 600; }
+
+  /* 绑定弹窗 */
+  .modal-mask { position: fixed; inset: 0; background: rgba(26,26,26,.4); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .modal { width: 460px; max-width: 92vw; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px solid var(--border); box-shadow: var(--shadow-md); padding: 20px; }
+  .modal h3 { font-size: 15px; font-family: var(--font-display); }
+  .modal .m-sub { font-size: 11px; color: var(--fg-muted); margin: 4px 0 14px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11px; font-weight: 600; color: var(--fg-secondary); }
+  .field input { height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); color: var(--fg-primary); font-family: var(--font-body); font-size: 12px; }
+  .field .f-hint { font-size: 10px; color: var(--fg-muted); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .btn-ghost { height: 30px; padding: 0 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--fg-secondary); cursor: pointer; font-family: var(--font-body); font-size: 12px; }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="title-bar">
+      <span class="brand"><span class="brand-icon">Q</span> Quota-Flow</span>
+      <span class="frame-tag">原型稿 · 厂商管理 · 新增智谱 bigmodel</span>
+    </div>
+    <div class="top-nav">
+      <span class="nav-tab">调度生成</span>
+      <span class="nav-tab active">厂商管理</span>
+      <span class="nav-tab">生成历史</span>
+      <span class="nav-tab">团队</span>
+    </div>
+
+    <div class="content">
+      <div class="page-header">
+        <div>
+          <h1>厂商管理</h1>
+          <div class="divider"></div>
+          <div class="sub">绑定账号 · 查看额度 · 管理厂商</div>
+        </div>
+        <div class="filter-bar">
+          <input type="text" placeholder="搜索厂商...">
+          <select>
+            <option>全部状态</option>
+            <option>正常</option>
+            <option>异常</option>
+            <option>离线</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="provider-table-wrap">
+        <div class="table-scroll">
+          <table class="provider-table">
+            <thead>
+              <tr>
+                <th style="width:30px;"></th>
+                <th>厂商</th>
+                <th>额度单位</th>
+                <th>今日剩余</th>
+                <th>key 账号数</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- 新增：智谱（bigmodel） —— 标准 apikey 厂商，配额接口自动获取 -->
+              <tr onclick="toggleExpand(this)">
+                <td><button class="expand-btn expanded" onclick="event.stopPropagation();toggleExpand(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                <td class="col-name">
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span class="brand-icon" style="width:20px;height:20px;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">智</span>
+                    智谱（bigmodel）<span class="tag-new">API Key</span>
+                  </span>
+                </td>
+                <td>次<span style="font-size:10px;color:var(--fg-muted);">（接口自动）</span></td>
+                <td>92 / 110</td>
+                <td class="col-name" style="font-size:11px;color:var(--fg-muted);font-weight:400;">2 个</td>
+                <td><span class="badge badge-success"><span style="width:6px;height:6px;border-radius:50%;background:var(--success);display:inline-block;"></span>正常</span></td>
+                <td><button class="btn-sm primary" onclick="openModal()">绑定 API Key</button></td>
+              </tr>
+              <tr class="account-sublist">
+                <td colspan="7">
+                  <table class="account-subtable">
+                    <thead>
+                      <tr>
+                        <th style="width:52%;">key 账号（去重）</th>
+                        <th>状态</th>
+                        <th style="width:230px;">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr class="acc-row" onclick="toggleAcc(this)">
+                        <td>
+                          <div class="account-name-line">
+                            <span class="acc-chev"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
+                            <strong>智谱 API Key ***4e9p</strong>
+                            <span class="badge-flag default">默认</span>
+                          </div>
+                          <div class="account-meta">bigmodel 开放平台 · 同账号自动去重 · 点击展开看模型与额度</div>
+                        </td>
+                        <td><span class="badge badge-success">正常</span></td>
+                        <td>
+                          <button class="btn-sm">测试</button>
+                          <button class="btn-sm">设为默认</button>
+                          <button class="btn-sm danger">解绑</button>
+                        </td>
+                      </tr>
+                      <tr class="acc-detail">
+                        <td colspan="3">
+                          <div class="acc-detail-card">
+                            <div class="detail-grid">
+                              <div class="d-item">
+                                <span class="d-label">视频生成模型</span>
+                                <div class="d-model">
+                                  <span class="model-tag free">cogvideox-flash</span>
+                                  <span class="model-tag">文生 / 图生 · 6s</span>
+                                </div>
+                              </div>
+                              <div class="d-item">
+                                <span class="d-label">免费额度</span>
+                                <span class="d-value">32 / 50 次 · 每日</span>
+                                <span style="color:var(--fg-muted);font-size:10px;">接口自动获取 · 免费赠送 · 实测不扣 token</span>
+                              </div>
+                              <div class="d-item">
+                                <span class="d-label">计费</span>
+                                <span class="d-value" style="color:var(--success);">0 元 / 次</span>
+                                <span style="color:var(--fg-muted);font-size:10px;">免费模型 · 高峰可能限流（HTTP 429）</span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+
+                      <tr class="acc-row" onclick="toggleAcc(this)">
+                        <td>
+                          <div class="account-name-line">
+                            <span class="acc-chev"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></span>
+                            <strong>智谱 API Key ***a1b2</strong>
+                          </div>
+                          <div class="account-meta">bigmodel 开放平台 · 同账号自动去重</div>
+                        </td>
+                        <td><span class="badge badge-success">正常</span></td>
+                        <td>
+                          <button class="btn-sm">测试</button>
+                          <button class="btn-sm">设为默认</button>
+                          <button class="btn-sm danger">解绑</button>
+                        </td>
+                      </tr>
+                      <tr class="acc-detail">
+                        <td colspan="3">
+                          <div class="acc-detail-card">
+                            <div class="detail-grid">
+                              <div class="d-item">
+                                <span class="d-label">视频生成模型</span>
+                                <div class="d-model">
+                                  <span class="model-tag free">cogvideox-flash</span>
+                                  <span class="model-tag">文生 / 图生 · 6s</span>
+                                </div>
+                              </div>
+                              <div class="d-item">
+                                <span class="d-label">免费额度</span>
+                                <span class="d-value">50 / 50 次 · 每日</span>
+                                <span style="color:var(--fg-muted);font-size:10px;">接口自动获取</span>
+                              </div>
+                              <div class="d-item">
+                                <span class="d-label">计费</span>
+                                <span class="d-value" style="color:var(--success);">0 元 / 次</span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </td>
+              </tr>
+
+              <!-- 既有：智谱清言（网页登录）—— 保持原样不动 -->
+              <tr>
+                <td><button class="expand-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                <td class="col-name">智谱清言（网页登录）</td>
+                <td>次</td>
+                <td>10 / 10</td>
+                <td class="col-name" style="font-size:11px;color:var(--fg-muted);font-weight:400;">1 个</td>
+                <td><span class="badge badge-pending">绑定中</span></td>
+                <td><button class="btn-sm primary">绑定账号</button></td>
+              </tr>
+
+              <tr>
+                <td><button class="expand-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></td>
+                <td class="col-name">豆包</td>
+                <td>点</td>
+                <td>7 / 10</td>
+                <td class="col-name" style="font-size:11px;color:var(--fg-muted);font-weight:400;">2 个</td>
+                <td><span class="badge badge-success">正常</span></td>
+                <td><button class="btn-sm primary">绑定账号</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="hint">
+        <b>方向</b> ① Admin「provider」模块新增智谱（bigmodel）厂商，apikey 登录；apikey 不配「额度单位 / 默认日额度 / 等效除数」，额度由接口自动获取；② 桌面端新增一行「智谱（bigmodel）」，输入 apikey 即可；③ 创建的 key 账号独立成行、自动去重；④ 点 key 账号下拉可见该账号可用模型与具体额度。
+      </div>
+    </div>
+  </div>
+
+  <!-- 绑定 API Key 弹窗：仅需输入 apikey，无需配置额度字段 -->
+  <div class="modal-mask" id="modalMask" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <h3>绑定智谱（bigmodel）API Key</h3>
+      <div class="m-sub">粘贴 bigmodel.cn 开放平台的 API Key，配额由接口自动获取</div>
+      <div class="field">
+        <label>API Key</label>
+        <input type="password" placeholder="粘贴 zhipu api key..." autocomplete="off">
+        <span class="f-hint">同一账号的 key 会自动去重，不会重复添加</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="closeModal()">取消</button>
+        <button class="btn-sm primary">绑定并检测</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+function toggleExpand(btnEl) {
+  const tr = btnEl.closest('tr')
+  const sub = tr.nextElementSibling
+  if (!sub || !sub.classList.contains('account-sublist')) return
+  const hidden = sub.style.display === 'none'
+  sub.style.display = hidden ? '' : 'none'
+  const btn = tr.querySelector('.expand-btn')
+  if (btn) btn.classList.toggle('expanded', hidden)
+}
+function toggleAcc(row) {
+  const open = row.classList.toggle('open')
+  const detail = row.nextElementSibling
+  if (detail && detail.classList.contains('acc-detail')) detail.style.display = open ? '' : 'none'
+}
+function openModal(){ document.getElementById('modalMask').style.display = 'flex' }
+function closeModal(){ document.getElementById('modalMask').style.display = 'none' }
+</script>
+</body>
+</html>
