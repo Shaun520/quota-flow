@@ -83,6 +83,9 @@ interface DashboardProps {
   jobs: JobsResult
   features: DesktopFeatureFlags
   regenerateDraft?: RegenerateDraft | null
+  /** 素材库「用作参考」注入的图片：添加为图像参考并切到图生/多参考模式 */
+  materialImages?: Array<{ path: string; url: string }>
+  onMaterialImagesConsumed?: () => void
   onRegenerateConsumed?: () => void
 }
 
@@ -135,6 +138,8 @@ export default function Dashboard({
   jobs,
   features,
   regenerateDraft,
+  materialImages,
+  onMaterialImagesConsumed,
   onRegenerateConsumed
 }: DashboardProps) {
   const { aggs: provAggs } = providers
@@ -209,6 +214,17 @@ export default function Dashboard({
       cancelled = true
     }
   }, [regenerateDraft, features, onRegenerateConsumed])
+
+  // 素材库「用作参考」：把图片追加为图像参考，并切到当前厂商可用的图生/多参考模式
+  useEffect(() => {
+    if (!materialImages || materialImages.length === 0) return
+    setSavedImagePaths((prev) => [...prev, ...materialImages.map((m) => m.path)])
+    setImages((prev) => [...prev, ...materialImages.map((m) => m.url)])
+    const validModes = visibleModeOptions(provider, model, features)
+    const imageMode = validModes.find((m) => ['multi_ref', 'img', 'first_last', 'first_frame'].includes(m.value))
+    if (imageMode && imageMode.value !== mode) setMode(imageMode.value)
+    onMaterialImagesConsumed?.()
+  }, [materialImages, provider, model, features, mode, onMaterialImagesConsumed])
 
   const activeBoundAggs = useMemo(
     () => provAggs.filter((a) => a.enabled && a.boundCount > 0),

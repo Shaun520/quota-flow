@@ -11,6 +11,10 @@ data/jobs.jsonl
 .turbo
 *.tsbuildinfo
 
+# pnpm 本地缓存（沙箱内重定向）/ 本地 store
+.pnpm-cache/
+.pnpm-store/
+
 # 本地编辑器配置与拷贝的全局 skill
 .trae/
 skills/

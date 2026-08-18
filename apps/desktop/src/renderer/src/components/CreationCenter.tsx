@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
 import { useCommunityVideos, type CommunityVideo } from '../hooks/useCommunityVideos'
+import MaterialLibrary from './MaterialLibrary'
 import type { RegenerateDraft } from './Dashboard'
 import { IconClose, IconGrid, IconPlay, IconSparkles } from './icons'
 
@@ -66,10 +67,11 @@ interface CreationCenterProps {
   features: DesktopFeatureFlags
   userId?: string
   onReferenceGenerate?: (draft: RegenerateDraft) => void
+  onUseMaterial?: (path: string, url: string) => void
   onNotify?: (message: string) => void
 }
 
-export default function CreationCenter({ features, userId, onReferenceGenerate, onNotify }: CreationCenterProps) {
+export default function CreationCenter({ features, userId, onReferenceGenerate, onUseMaterial, onNotify }: CreationCenterProps) {
   const communityVideos = useCommunityVideos(userId)
   const videos = communityVideos.items
   const [category, setCategory] = useState<string>('全部')
@@ -235,6 +237,12 @@ export default function CreationCenter({ features, userId, onReferenceGenerate, 
           </div>
         </section>
       ) : null}
+
+      {features['creation.material_library'] === false ? (
+        <div className="creation-disabled">素材库未开启</div>
+      ) : (
+        <MaterialLibrary onUseMaterial={onUseMaterial} onNotify={onNotify} />
+      )}
 
       {features['creation.video_library'] === false ? null : features['creation.community'] !== false ? (
         <section className="community-section" aria-label="视频灵感库">
