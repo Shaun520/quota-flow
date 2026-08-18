@@ -24,17 +24,8 @@
     "tsup": "^8.3.0",
     "@types/node": "^20.14.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "better-sqlite3",
-      "vite",
-      "esbuild",
-      "sharp"
-    ]
-  },
   "// DEV_DEPS_NOTE": {
-    "electron": "Electron 28+ LTS（安装在 apps/desktop/package.json，不在根 devDependencies），配合 .npmrc 的 only-built-dependencies 预拉取二进制；升级时同步改 apps/desktop 的 electron 版本",
+    "electron": "Electron 28+ LTS（安装在 apps/desktop/package.json，不在根 devDependencies），配合 pnpm-workspace.yaml 的 onlyBuiltDependencies 预拉取二进制；升级时同步改 apps/desktop 的 electron 版本",
     "tsup": "所有 packages/* 通过 tsup 同时输出 CJS + ESM + DTS；exports 字段显式声明 types/import/require；禁止单格式输出",
     "workspace": "packages/（共享库）与 apps/（应用）两层 workspace，引用一律用 workspace:*；不要手写相对路径"
   },

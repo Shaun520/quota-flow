@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
-import { CHROME_UA, initProviders } from './providers'
+import { initProviders } from './providers'
 import { initCookieRenew } from './cookie-renew'
 import {
   checkForUpdatesNow,
@@ -36,8 +36,6 @@ import { createSupabaseClient, JobService, ProviderService, todayKey } from '@qu
 // 禁用 GPU 硬件加速：Windows 上 Chromium 合成器在频繁重绘（如快速点击 tab 切换页面）时
 // 偶发丢帧/显示旧缓冲，导致整窗"时不时闪一下"。切到软件合成可根治。
 // 必须在 app ready 之前调用。
-app.userAgentFallback = CHROME_UA
-app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 app.disableHardwareAcceleration()
 
 // 本地媒体预览服务：127.0.0.1 随机端口

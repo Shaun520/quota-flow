@@ -3,16 +3,11 @@ import { app, BrowserWindow, ipcMain, safeStorage, session } from 'electron'
 import type { Cookie } from 'electron'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  collectDolaSystemBrowserLogin,
-  DOLA_AUTH_STATE_EXPRESSION,
-  toDolaAuthState
-} from './system-browser-login'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** 统一 User-Agent：登录 / 校验 / 生成三处必须一致，避免豆包服务端按设备指纹失效会话 */
-export const CHROME_UA =
+const CHROME_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
 
 export type ProviderId =
@@ -197,15 +192,6 @@ function hasSessionCookie(providerId: string, cookies: ProviderCookie[]): boolea
   return cookies.some((c) => generic.test(c.name) || (tencent ? tencent.test(c.name) : false))
 }
 
-/** Dola 的访客态也会带 sessionid/sid_tt，只有账号级 flow_cur_user_sec_id 才能做登录判定。 */
-function hasDolaAuthenticatedCookies(cookies: ProviderCookie[]): boolean {
-  return cookies.some((cookie) => {
-    if (cookie.name.trim().toLowerCase() !== 'flow_cur_user_sec_id') return false
-    const value = cookie.value.trim()
-    return value.length > 0 && value !== '0' && value !== 'null' && value.toLowerCase() !== 'undefined'
-  })
-}
-
 async function collectPartitionCookies(providerId: string, keyId?: string): Promise<ProviderCookie[]> {
   const ses = session.fromPartition(partitionFor(providerId, keyId))
   const all = await ses.cookies.get({})
@@ -294,20 +280,10 @@ const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   qwenwan: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
   // 实测值：pt2gguin = o<QQ号>（.ptlogin2.qq.com），hy_user = 元宝账号 UUID（.tencent.com）
   yuanbao: ['pt2gguin', 'hy_user'],
-  // Dola 同属字节系，且访客态也会带 sessionid/sid_tt；只用账号级 flow_cur_user_sec_id 做指纹。
-  dola: ['flow_cur_user_sec_id'],
+  // Dola 同属字节系；避免使用 msToken / s_v_web_id 等会话级易变值做账号指纹。
+  dola: ['flow_cur_user_sec_id', 'sessionid', 'sid_tt'],
   kling: ['userId', 'user_id', 'kk_u'],
   hailuo: ['user_id', 'uid', 'userId']
-}
-
-function cookieAccountFingerprint(providerId: string, cookies: ProviderCookie[]): string | null {
-  const keys = FINGERPRINT_COOKIE_KEYS[providerId as ProviderId]
-  if (!keys) return null
-  for (const key of keys) {
-    const match = cookies.find((c) => c.name.toLowerCase() === key.toLowerCase())
-    if (match && match.value.trim()) return fingerprintFor(providerId, match.value.trim())
-  }
-  return null
 }
 
 function normalizeAccountId(raw: string): string {
@@ -372,7 +348,16 @@ async function extractAccountFingerprint(
 ): Promise<string | null> {
   const extractor = ACCOUNT_FINGERPRINT_EXTRACTORS[providerId as ProviderId]
 
-  const tryCookieFallback = (): string | null => cookieAccountFingerprint(providerId, cookies)
+  const tryCookieFallback = (): string | null => {
+    const keys = FINGERPRINT_COOKIE_KEYS[providerId as ProviderId]
+    if (keys && cookies.length > 0) {
+      for (const key of keys) {
+        const match = cookies.find((c) => c.name.toLowerCase() === key.toLowerCase())
+        if (match && match.value.trim()) return match.value.trim()
+      }
+    }
+    return null
+  }
 
   const tryDom = async (): Promise<string | null> => {
     if (!extractor) return null
@@ -481,24 +466,6 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
     })
     // 候选 B：登录窗口 webContents 统一 UA
     win.webContents.setUserAgent(CHROME_UA)
-    // Google/SSO 弹窗需要与登录窗口共享 partition，不能落到默认 session。
-    win.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
-      if (nextUrl.startsWith('http://') || nextUrl.startsWith('https://')) {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            width: 960,
-            height: 720,
-            webPreferences: {
-              partition,
-              contextIsolation: true,
-              nodeIntegration: false
-            }
-          }
-        }
-      }
-      return { action: 'deny' }
-    })
     loginWindows.set(winKey, win)
 
     let finished = false
@@ -562,41 +529,24 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
               let currentUrl = ''
               for (let i = 0; i < 20; i++) {
                 try {
-                  if (providerId === 'dola') {
-                    const authState = toDolaAuthState(
-                      await win.webContents.executeJavaScript(DOLA_AUTH_STATE_EXPRESSION, true)
-                    )
-                    currentUrl = authState.url || ''
-                    onMainSite = isProviderMainSite(providerId, currentUrl)
-                    cookies = await collectPartitionCookies(providerId, keyId)
-                    if (
-                      onMainSite &&
-                      authState.userId > 0 &&
-                      hasDolaAuthenticatedCookies(cookies)
-                    ) {
-                      loggedIn = true
-                      break
-                    }
-                  } else {
-                    const state = (await win.webContents.executeJavaScript(
-                      `(() => {
-                        const norm = (s) => (s || '').trim();
-                        const btns = [...document.querySelectorAll('button, [role="button"]')]
-                          .filter((b) => b.offsetParent !== null)
-                          .map((b) => norm(b.textContent));
-                        // 登录墙特征（大号按钮），而非导航栏常驻的「登录」按钮
-                        const hasLoginWall = btns.some((t) => /^(扫码登录|立即登录|手机号登录|短信登录)$/.test(t));
-                        const hasAvatar = !!document.querySelector('[class*="avatar" i], [class*="userinfo" i], [class*="user-info" i]');
-                        return { hasLoginWall, hasAvatar, url: location.href };
-                      })()`,
-                      true
-                    )) as { hasLoginWall?: boolean; hasAvatar?: boolean; url?: string }
-                    currentUrl = state.url || ''
-                    onMainSite = isProviderMainSite(providerId, currentUrl)
-                    if (state && !state.hasLoginWall && (state.hasAvatar || onMainSite)) {
-                      loggedIn = true
-                      break
-                    }
+                  const state = (await win.webContents.executeJavaScript(
+                    `(() => {
+                      const norm = (s) => (s || '').trim();
+                      const btns = [...document.querySelectorAll('button, [role="button"]')]
+                        .filter((b) => b.offsetParent !== null)
+                        .map((b) => norm(b.textContent));
+                      // 登录墙特征（大号按钮），而非导航栏常驻的「登录」按钮
+                      const hasLoginWall = btns.some((t) => /^(扫码登录|立即登录|手机号登录|短信登录)$/.test(t));
+                      const hasAvatar = !!document.querySelector('[class*="avatar" i], [class*="userinfo" i], [class*="user-info" i]');
+                      return { hasLoginWall, hasAvatar, url: location.href };
+                    })()`,
+                    true
+                  )) as { hasLoginWall?: boolean; hasAvatar?: boolean; url?: string }
+                  currentUrl = state.url || ''
+                  onMainSite = isProviderMainSite(providerId, currentUrl)
+                  if (state && !state.hasLoginWall && (state.hasAvatar || onMainSite)) {
+                    loggedIn = true
+                    break
                   }
                 } catch {}
                 await sleep(1000)
@@ -630,10 +580,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                 done({ ok: false, error: '未检测到登录 Cookie，请确认已登录后重试' })
                 return
               }
-              const hasSession =
-                providerId === 'dola'
-                  ? hasDolaAuthenticatedCookies(cookies)
-                  : hasSessionCookie(providerId, cookies)
+              const hasSession = hasSessionCookie(providerId, cookies)
               if (!hasSession) {
                 done({ ok: false, error: '未检测到会话 Cookie（可能登录未完成），请重试' })
                 return
@@ -704,36 +651,6 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
       done({ ok: false, error: `加载登录页失败：${String(e)}` })
     })
   })
-}
-
-/** 仅用于 Dola：启动系统 Chrome/Edge，登录完成后自动抓取 Cookie 与站点 Storage。 */
-async function loginDolaWithSystemBrowser(keyId?: string): Promise<ProviderLoginResult> {
-  try {
-    const data = await collectDolaSystemBrowserLogin(
-      (cookies, authState) =>
-        hasDolaAuthenticatedCookies(cookies) && authState.userId > 0
-    )
-    if (keyId) {
-      try {
-        const ses = session.fromPartition(partitionFor('dola', keyId))
-        await ses.clearStorageData({ storages: ['cookies'] })
-        await injectCookies('dola', data.cookies, keyId)
-      } catch (e) {
-        return { ok: false, error: `Cookie 注入失败：${e instanceof Error ? e.message : String(e)}` }
-      }
-    }
-
-    const maxExp = data.cookies.reduce((max, cookie) => Math.max(max, cookie.expires), 0)
-    return {
-      ok: true,
-      encrypted: encryptCookies(data.cookies, data.storages),
-      cookieCount: data.cookies.length,
-      expiresAt: maxExp > 0 ? maxExp : null,
-      accountFingerprint: cookieAccountFingerprint('dola', data.cookies)
-    }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
 }
 
 /**
@@ -1022,18 +939,6 @@ export function initProviders(): void {
   ipcMain.handle('provider:login', async (_e, providerId: string, keyId?: string) => {
     return openLoginWindow(providerId, typeof keyId === 'string' ? keyId : undefined)
   })
-
-  ipcMain.handle(
-    'provider:login-with-system-browser',
-    async (_e, providerId: string, keyId?: string) => {
-      if (providerId !== 'dola') {
-        return { ok: false, error: '系统浏览器登录当前仅支持 Dola' }
-      }
-      return loginDolaWithSystemBrowser(
-        typeof keyId === 'string' && keyId ? keyId : undefined
-      )
-    }
-  )
 
   ipcMain.handle('provider:encrypt', (_e, providerId: string, plain: string) => {
     if (typeof plain !== 'string') return { encrypted: '' }
