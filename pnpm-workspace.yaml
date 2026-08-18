@@ -1,3 +1,10 @@
-﻿packages:
+packages:
   - 'packages/*'
   - 'apps/*'
+
+onlyBuiltDependencies:
+  - electron
+  - better-sqlite3
+  - vite
+  - esbuild
+  - sharp

@@ -9,7 +9,6 @@ import { encryptCookies, providerSite, visitAndCapture } from './providers'
 const RENEW_HOUR = 3 // 每日续命时段（凌晨低活跃）
 const RENEW_AHEAD_MS = 24 * 60 * 60 * 1000 // 距过期 24h 内的账号提前续命
 const TICK_MS = 60 * 1000 // 调度检查周期
-const SUMMARY_CHECK_MS = 30 * 60 * 1000 // 无密钥账号摘要的刷新周期
 const MAX_CONSECUTIVE_FAILS = 3 // 同账号连续失败熔断，次日才恢复
 const ACCOUNT_GAP_MS = 1000 // 多账号间错峰
 
@@ -60,7 +59,6 @@ let running = false
 let lastRunAt: number | null = null
 let lastResult: CookieRenewState['lastResult'] = null
 let lastDailyKey = ''
-let lastSummaryCheckAt = 0
 const failCount = new Map<string, number>()
 let timer: NodeJS.Timeout | null = null
 let started = false
@@ -90,8 +88,6 @@ async function tick(): Promise<void> {
   const now = new Date()
   const dailyKey = now.toISOString().slice(0, 10)
   const dailyDue = now.getHours() === RENEW_HOUR && lastDailyKey !== dailyKey
-  const summaryDue = dailyDue || now.getTime() - lastSummaryCheckAt >= SUMMARY_CHECK_MS
-  if (!summaryDue) return
 
   let providerSvc: ProviderService | null = null
   try {
@@ -105,22 +101,17 @@ async function tick(): Promise<void> {
     })
     providerSvc = new ProviderService(client)
 
-    // 调度判断先用无密钥摘要，只有真正需要续命的账号才按 keyId 单取凭证。
-    const keys = await providerSvc.listProviderKeys(config.userId)
-    lastSummaryCheckAt = now.getTime()
-    const candidates = keys.filter((key) => {
-      if (key.auth_type === 'apikey') return false // 无 cookie 会话
-      if (key.enabled === false) return false
-      if ((failCount.get(key.id) ?? 0) >= MAX_CONSECUTIVE_FAILS) return false // 熔断
-      if (key.health_status === 'expired') return false
-      const expiresAt = key.cookie_expires_at ? new Date(key.cookie_expires_at).getTime() : null
+    const keys = await providerSvc.listProviderKeysWithSecrets(config.userId)
+    const candidates = keys.filter((k) => {
+      if (k.auth_type === 'apikey') return false // 无 cookie 会话
+      if (k.enabled === false) return false
+      if ((failCount.get(k.id) ?? 0) >= MAX_CONSECUTIVE_FAILS) return false // 熔断
+      if (k.health_status === 'expired') return false
+      const expiresAt = k.cookie_expires_at ? new Date(k.cookie_expires_at).getTime() : null
       const soonDue = expiresAt !== null && expiresAt - now.getTime() < RENEW_AHEAD_MS
       return dailyDue || soonDue
     })
-    if (candidates.length === 0) {
-      if (dailyDue) lastDailyKey = dailyKey
-      return
-    }
+    if (candidates.length === 0) return
 
     running = true
     lastRunAt = now.getTime()
@@ -134,13 +125,7 @@ async function tick(): Promise<void> {
         continue
       }
       try {
-        const secret = await providerSvc.getProviderKeySecret(config.userId, key.id)
-        if (!secret) {
-          failCount.set(key.id, (failCount.get(key.id) ?? 0) + 1)
-          failed += 1
-          continue
-        }
-        const res = await visitAndCapture(key.provider_id, key.id, secret.encrypted_key, site.healthUrl)
+        const res = await visitAndCapture(key.provider_id, key.id, key.encrypted_key, site.healthUrl)
         if (res.ok && res.status === 'healthy' && res.cookies && res.cookies.length > 0) {
           await providerSvc.refreshProviderKey(config.userId, key.id, {
             encryptedKey: encryptCookies(res.cookies, res.storages ?? []),

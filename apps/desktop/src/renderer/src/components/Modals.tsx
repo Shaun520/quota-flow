@@ -8,7 +8,6 @@ import { ensureFreshSession } from '../auth/session'
 import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
 import type { TeamContext } from '@quota-flow/db-supabase'
-import type { ProviderLoginResult } from '../../../preload'
 import desktopPackage from '../../../../package.json'
 
 export interface UpdaterStatusView {
@@ -647,7 +646,6 @@ export function AddProviderModal({
     defaultScope === 'team' && !!team ? 'team' : 'personal'
   )
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
-  const [loginMode, setLoginMode] = useState<'system' | 'window'>('window')
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -682,7 +680,6 @@ export function AddProviderModal({
     setExistingKeys((prev) => (prev.length === 0 ? prev : []))
     setRefreshTarget((prev) => (prev === 'new' ? prev : 'new'))
     setLoginTempId((prev) => (prev === null ? prev : null))
-    setLoginMode((prev) => (prev === 'window' ? prev : 'window'))
   }, [providers, providerId])
 
   const selected = providers.find((p) => p.providerId === providerId)
@@ -698,7 +695,6 @@ export function AddProviderModal({
     setExistingKeys([])
     setRefreshTarget('new')
     setLoginTempId(null)
-    setLoginMode('window')
   }
 
   const saveEncrypted = async (
@@ -840,112 +836,119 @@ export function AddProviderModal({
     }
   }
 
-  const commitLoginResult = async (
-    res: ProviderLoginResult,
-    activeTempId: string | null = loginTempId
-  ): Promise<void> => {
+  const handleLoginClick = async () => {
     if (!selected) return
-    if (!res.ok) {
-      if (res.canceled) {
-        setStatus('idle')
-        if (res.error) setError(res.error)
-      } else {
-        setStatus('login-fail')
-        setError(res.error ?? '登录失败，请重试')
-      }
+    if (isApiKey) {
+      await saveApiKey()
       return
     }
-    const encrypted = res.encrypted
-    if (!encrypted) {
-      setStatus('login-fail')
-      setError('未获取到有效的 Cookie')
-      return
-    }
-
-    const providerId = selected.providerId
-    const expiresAt = res.expiresAt ?? null
-    setCookieCount(res.cookieCount ?? 0)
-    setPendingLogin({
-      encrypted,
-      expiresAt,
-      fingerprint: res.accountFingerprint ?? null,
-      cookieCount: res.cookieCount ?? 0
-    })
-
-    const svc = getProviderService()
-    let existing: Array<{ id: string; accountName: string; accountFingerprint: string | null }> = []
-    if (svc) {
-      try {
-        const keys = accountScope === 'team' && team
-          ? await svc.listTeamProviderKeys(team.id)
-          : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
-        existing = keys
-          .filter((k) => k.provider_id === providerId)
-          .filter((k) => accountScope !== 'team' || k.owner_user_id === userId)
-          .map((k) => ({
-            id: k.id,
-            accountName: k.account_name ?? '未命名账号',
-            accountFingerprint: k.account_fingerprint ?? null
-          }))
-      } catch {}
-    }
-
-    const refreshExisting = async (
-      target: { id: string; accountName: string; accountFingerprint?: string | null },
-      fingerprint?: string | null
-    ): Promise<boolean> => {
-      if (!svc) return false
-      try {
-        await svc.refreshProviderKey(userId, target.id, {
-          encryptedKey: encrypted,
-          expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-          healthStatus: 'healthy',
-          accountFingerprint: fingerprint ?? null
-        })
-        const tempId = activeTempId ?? loginTempId
-        if (tempId) {
-          try {
-            await window.api.providers.migratePartition(providerId, tempId, target.id)
-          } catch {}
-        }
-        setPendingLogin(null)
-        setNotice(`已刷新账号「${target.accountName}」的登录态（保留原账号记录）`)
-        return true
-      } catch {
-        return false
+    setStatus('logging')
+    // 生成临时 keyId：让登录窗口在 persist:qf-p:<provider>:<tempId> 分区进行
+    // 新建账号时 tempId 会作为 DB 记录 id，使「登录分区 = 生成分区」（候选 C）
+    const tempId = crypto.randomUUID()
+    setLoginTempId(tempId)
+    const res = await window.api.providers.login(selected.providerId, tempId)
+    if (res.ok && res.encrypted) {
+      const encrypted = res.encrypted
+      const expiresAt = res.expiresAt ?? null
+      setCookieCount(res.cookieCount ?? 0)
+      setPendingLogin({
+        encrypted,
+        expiresAt,
+        fingerprint: res.accountFingerprint ?? null,
+        cookieCount: res.cookieCount ?? 0
+      })
+      const svc = getProviderService()
+      let existing: Array<{ id: string; accountName: string; accountFingerprint: string | null }> = []
+      if (svc) {
+        try {
+          const keys = accountScope === 'team' && team
+            ? await svc.listTeamProviderKeys(team.id)
+            : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
+          existing = keys
+            .filter((k) => k.provider_id === selected.providerId)
+            .filter((k) => accountScope !== 'team' || k.owner_user_id === userId)
+            .map((k) => ({
+              id: k.id,
+              accountName: k.account_name ?? '未命名账号',
+              accountFingerprint: k.account_fingerprint ?? null
+            }))
+        } catch {}
       }
-    }
 
-    // 指纹去重优先：匹配到已有账号 → 直接刷新；无重复 → 暂存待「完成」保存。
-    if (res.accountFingerprint && svc) {
-      try {
-        const scopeKeys = accountScope === 'team' && team
-          ? await svc.listTeamProviderKeys(team.id)
-          : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
-        const dup =
-          scopeKeys.find(
-            (k) => k.provider_id === providerId && k.account_fingerprint === res.accountFingerprint
-          ) ?? null
-        if (dup) {
-          if (accountScope === 'team' && team && dup.owner_user_id !== userId) {
-            setError('该账号已由其他成员绑定，请由绑定成员刷新')
-            setStatus('login-fail')
-            return
+      const refreshExisting = async (
+        target: { id: string; accountName: string; accountFingerprint?: string | null },
+        fingerprint?: string | null
+      ): Promise<boolean> => {
+        if (!svc) return false
+        try {
+          await svc.refreshProviderKey(userId, target.id, {
+            encryptedKey: encrypted,
+            expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+            healthStatus: 'healthy',
+            accountFingerprint: fingerprint ?? null
+          })
+          if (loginTempId) {
+            try {
+              await window.api.providers.migratePartition(selected.providerId, loginTempId, target.id)
+            } catch {}
           }
-          if (
-            await refreshExisting(
-              { id: dup.id, accountName: dup.account_name ?? '未命名账号' },
-              res.accountFingerprint
-            )
-          ) {
+          setPendingLogin(null)
+          setNotice(`已刷新账号「${target.accountName}」的登录态（保留原账号记录）`)
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      // 指纹去重优先：匹配到已有账号 → 直接刷新（不弹选择）；
+      // 指纹能识别且无重复 → 暂存待「完成」时保存；仅当已有旧账号没有指纹时自动刷新，避免重复绑定旧数据。
+      if (res.accountFingerprint && svc) {
+        try {
+          const scopeKeys = accountScope === 'team' && team
+            ? await svc.listTeamProviderKeys(team.id)
+            : (await svc.listProviderKeys(userId)).filter((k) => !k.team_id)
+          const dup =
+            scopeKeys.find(
+              (k) => k.provider_id === selected.providerId && k.account_fingerprint === res.accountFingerprint
+            ) ?? null
+          if (dup) {
+            if (accountScope === 'team' && team && dup.owner_user_id !== userId) {
+              setError('该账号已由其他成员绑定，请由绑定成员刷新')
+              setStatus('login-fail')
+              return
+            }
+            if (
+              await refreshExisting(
+                { id: dup.id, accountName: dup.account_name ?? '未命名账号' },
+                res.accountFingerprint
+              )
+            ) {
+              setStatus('login-ok')
+              return
+            }
+          }
+        } catch {}
+        const hasLegacyExisting =
+          shouldAutoResolveExistingProvider(selected.providerId) &&
+          existing.some((k) => !k.accountFingerprint)
+        if (hasLegacyExisting && existing.length > 0) {
+          if (await refreshExisting(existing[0], res.accountFingerprint)) {
             setStatus('login-ok')
             return
           }
+          setError('刷新已有账号失败，请重试')
+          setStatus('login-fail')
+          return
         }
-      } catch {}
-      const hasLegacyExisting =
-        shouldAutoResolveExistingProvider(providerId) && existing.some((k) => !k.accountFingerprint)
-      if (hasLegacyExisting && existing.length > 0) {
+        // 无重复：等用户点「完成」保存，此时已确认账号备注
+        setStatus('login-ok')
+        return
+      }
+
+      // 千问/元宝指纹缺失时，不再弹「新增/刷新」选择：
+      // 已有账号直接刷新，避免同一账号重复绑定。
+      if (shouldAutoResolveExistingProvider(selected.providerId) && existing.length > 0) {
         if (await refreshExisting(existing[0], res.accountFingerprint)) {
           setStatus('login-ok')
           return
@@ -954,47 +957,23 @@ export function AddProviderModal({
         setStatus('login-fail')
         return
       }
-      setStatus('login-ok')
-      return
-    }
 
-    // 指纹缺失时，对 Dola 这类账号直接刷新，避免同一账号重复绑定。
-    if (shouldAutoResolveExistingProvider(providerId) && existing.length > 0) {
-      if (await refreshExisting(existing[0], res.accountFingerprint)) {
+      // 指纹为空且已有账号：无法自动识别 → 让用户选择（新增 / 刷新某个已有账号）
+      if (existing.length > 0) {
+        setExistingKeys(existing)
+        setRefreshTarget('new')
+        setStatus('pick-account')
+      } else {
+        // 首次绑定：等用户点「完成」保存（登录后仍可补充账号备注）
         setStatus('login-ok')
-        return
       }
-      setError('刷新已有账号失败，请重试')
-      setStatus('login-fail')
-      return
-    }
-
-    if (existing.length > 0) {
-      setExistingKeys(existing)
-      setRefreshTarget('new')
-      setStatus('pick-account')
+    } else if (res.canceled) {
+      setStatus('idle')
+      if (res.error) setError(res.error)
     } else {
-      setStatus('login-ok')
+      setStatus('login-fail')
+      setError(res.error ?? '登录失败，请重试')
     }
-  }
-
-  const handleLoginClick = async (mode: 'system' | 'window' = 'window') => {
-    if (!selected) return
-    if (isApiKey) {
-      await saveApiKey()
-      return
-    }
-    setLoginMode(mode)
-    setStatus('logging')
-    // 生成临时 keyId：让登录窗口在 persist:qf-p:<provider>:<tempId> 分区进行
-    // 新建账号时 tempId 会作为 DB 记录 id，使「登录分区 = 生成分区」（候选 C）
-    const tempId = crypto.randomUUID()
-    setLoginTempId(tempId)
-    const res =
-      mode === 'system' && selected.providerId === 'dola'
-        ? await window.api.providers.loginWithSystemBrowser(selected.providerId, tempId)
-        : await window.api.providers.login(selected.providerId, tempId)
-    await commitLoginResult(res, tempId)
   }
 
   /** 「完成」时统一保存：登录成功只暂存 pendingLogin，名字确认后才落库 */
@@ -1129,37 +1108,17 @@ export function AddProviderModal({
             {status === 'idle' && (
               <>
                 <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--fg-secondary)' }}>
-                  {selected?.providerId === 'dola'
-                    ? '使用本机 Chrome/Edge 登录 dola.com，避免 Google 登录被内置浏览器拦截。'
-                    : `点击按钮将打开 ${selected?.name ?? '厂商'} 登录窗口。请在窗口中完成登录，登录成功后点击「已完成登录」。`}
+                  点击按钮将打开 {selected?.name ?? '厂商'} 登录窗口。请在窗口中完成登录，登录成功后点击「已完成登录」。
                 </p>
-                {selected?.providerId === 'dola' && (
-                  <>
-                    <button className="btn-sm primary" onClick={() => void handleLoginClick('system')}>
-                      使用 Chrome/Edge 登录 →
-                    </button>
-                    <button
-                      className="btn-sm"
-                      onClick={() => void handleLoginClick('window')}
-                      style={{ marginLeft: 8 }}
-                    >
-                      内置窗口登录
-                    </button>
-                  </>
-                )}
-                {selected?.providerId !== 'dola' && (
-                  <button className="btn-sm primary" onClick={() => void handleLoginClick('window')}>
-                    前往 {selected?.name ?? '厂商'} 登录 →
-                  </button>
-                )}
+                <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
+                  前往 {selected?.name ?? '厂商'} 登录 →
+                </button>
               </>
             )}
             {status === 'logging' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--fg-muted)' }}>
                 <span className="spinner" style={{ width: 14, height: 14, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                {selected?.providerId === 'dola' && loginMode === 'system'
-                  ? '已打开 Chrome/Edge，请在浏览器中完成 Dola 登录…'
-                  : '正在获取登录状态，请在登录窗口完成登录…'}
+                正在获取登录状态，请在登录窗口完成登录…
               </div>
             )}
             {status === 'login-fail' && (
@@ -1167,14 +1126,7 @@ export function AddProviderModal({
                 <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--error)' }}>
                   登录未获取到 Cookie，请重试。
                 </p>
-                <button
-                  className="btn-sm primary"
-                  onClick={() =>
-                    void handleLoginClick(
-                      selected?.providerId === 'dola' && loginMode === 'system' ? 'system' : 'window'
-                    )
-                  }
-                >
+                <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
                   重新登录
                 </button>
               </div>

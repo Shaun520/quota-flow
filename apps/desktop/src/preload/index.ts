@@ -152,12 +152,6 @@ export interface DesktopApi {
      * @param keyId 可选：账号 key id。传入后登录分区与生成分区共用（persist:qf-p:<provider>:<keyId>），避免跨分区迁移会话
      */
     login: (providerId: string, keyId?: string) => Promise<ProviderLoginResult>
-    /**
-     * 使用本机 Chrome/Edge 完成 Dola 登录，登录后自动抓取 Cookie 与站点 Storage
-     * @param providerId 厂商 id（当前仅支持 dola）
-     * @param keyId 可选：账号级 partition，登录后同步注入该分区
-     */
-    loginWithSystemBrowser: (providerId: string, keyId?: string) => Promise<ProviderLoginResult>
     encrypt: (providerId: string, plain: string) => Promise<{ encrypted: string; fingerprint?: string | null }>
     /**
      * 健康检查
@@ -264,8 +258,6 @@ const api: DesktopApi = {
   providers: {
     login: (providerId, keyId) =>
       ipcRenderer.invoke('provider:login', providerId, keyId) as Promise<ProviderLoginResult>,
-    loginWithSystemBrowser: (providerId, keyId) =>
-      ipcRenderer.invoke('provider:login-with-system-browser', providerId, keyId) as Promise<ProviderLoginResult>,
     encrypt: (providerId, plain) =>
       ipcRenderer.invoke('provider:encrypt', providerId, plain) as Promise<{ encrypted: string; fingerprint?: string | null }>,
     healthCheck: (providerId, encrypted, keyId) =>

@@ -18,7 +18,6 @@
     "@types/node": "^20.14.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
@@ -32,7 +31,6 @@
     "@quota-flow/auth": "workspace:^",
     "@quota-flow/db-supabase": "workspace:^",
     "electron-updater": "^6.6.2",
-    "ffmpeg-static": "^5.3.0",
-    "ws": "^8.21.3"
+    "ffmpeg-static": "^5.3.0"
   }
 }
