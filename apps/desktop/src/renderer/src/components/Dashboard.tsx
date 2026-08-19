@@ -20,7 +20,7 @@ import { useAuth } from '../hooks/useAuth'
 import type { ProvidersResult } from '../hooks/useProviders'
 import type { JobsResult } from '../hooks/useJobs'
 import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
-import { getAuthService, getSupabaseConfig } from '../auth/service'
+import { getAuthService, getProviderService, getSupabaseConfig } from '../auth/service'
 import { ensureFreshSession } from '../auth/session'
 import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
@@ -208,7 +208,12 @@ export default function Dashboard({
 
   // Admin 厂商级生成能力：命中 provider_caps 时该厂商模式/模型以配置为准，缺省回退硬编码默认
   const caps = providerCaps[provider]
-  const modelList = (p: string): string[] => providerCaps[p]?.models ?? MODELS[p] ?? MODELS.doubao
+  // 火山方舟：调度台模型列表以「账号绑定时实际抓到的免费模型」为准（优先），未抓到才回退 provider_caps / spec 固定目录
+  const [volcModels, setVolcModels] = useState<string[] | null>(null)
+  const modelList = (p: string): string[] => {
+    if (p === 'volcengine' && volcModels && volcModels.length > 0) return volcModels
+    return providerCaps[p]?.models ?? MODELS[p] ?? MODELS.doubao
+  }
 
   // 历史详情「重新生成」：把历史参数回填到调度台表单，图片走已保存副本路径
   useEffect(() => {
@@ -269,6 +274,36 @@ export default function Dashboard({
     () => provAggs.filter((a) => a.enabled && a.boundCount > 0),
     [provAggs]
   )
+
+  // 火山方舟：调度台模型下拉 = 各已启用账号「绑定时所抓」全部免费模型的并集（动态，非固定文件/库定义）
+  useEffect(() => {
+    const svc = getProviderService()
+    if (!svc || !user) return
+    const agg = provAggs.find((a) => a.providerId === 'volcengine' && a.enabled)
+    if (!agg || agg.bindings.length === 0) {
+      if (volcModels === null) setVolcModels([])
+      return
+    }
+    const enabled = agg.bindings.filter((b) => b.enabled)
+    if (enabled.length === 0) return
+    let cancelled = false
+    void (async () => {
+      const union = new Set<string>()
+      for (const b of enabled) {
+        try {
+          const secret = await svc.getProviderKeySecret(user.id, b.keyId)
+          if (!secret) continue
+          const res = await window.api.providers.apiModels('volcengine', secret.encrypted_key)
+          if (res.ok && res.models) res.models.forEach((m) => m && m.model && union.add(m.model))
+        } catch {
+          // 单个账号抓取失败不影响整体目录
+        }
+      }
+      if (!cancelled) setVolcModels(Array.from(union))
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, provAggs, volcModels === null])
   const providerDurations = useMemo(() => {
     return new Map(provAggs.map((a) => [a.providerId, a.durations]))
   }, [provAggs])

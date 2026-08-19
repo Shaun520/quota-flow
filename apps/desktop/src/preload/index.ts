@@ -105,6 +105,8 @@ export interface QuotaUpdatedPayload {
   ledger: QuotaLedgerRow
   /** API 型厂商（智谱）生成成功后触发：据此重新拉取该账号真实额度 */
   zhipuRefreshKeyId?: string
+  /** 火山方舟生成成功后触发：据此静默同步该账号免费模型的真实剩余额度 */
+  volcRefreshKeyId?: string
 }
 
 /** 智谱平台资源包余额（fetch-quota 返回） */
@@ -125,6 +127,18 @@ export interface ApiModelInfo {
   durations: number[]
   size: string | null
   modes: Array<{ value: string; label: string }>
+  /** 是否已开通该模型（火山方舟未开通模型提示开通；默认 true） */
+  activated?: boolean
+  /** 【每账号】免费 token 额度（火山方舟免费视频模型）：剩余/总数；未抓到为 undefined */
+  freeQuota?: { remaining?: number; total?: number }
+}
+
+/** 火山方舟绑定时控制台抓到的免费视频模型（含每账号 token 额度），随加密负载持久化 */
+export interface VolcengineCapturedModel {
+  id: string
+  name?: string
+  price?: string
+  freeQuota?: { remaining?: number; total?: number }
 }
 
 /** 智谱控制台会话状态（依据 consoleJwt 的 JWT exp 判定），供自动续期调度参考 */
@@ -226,8 +240,9 @@ export interface DesktopApi {
     fetchQuota: (providerId: string, encrypted: string) => Promise<{ ok: boolean; quota?: ZhipuQuotaResult; error?: string }>
     /**
      * 查询 API 型厂商模型目录（「查看模型」弹窗）
+     * @param encrypted 可选：该账号加密负载（火山方舟用它读取每账号免费 token 额度）
      */
-    apiModels: (providerId: string) => Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>
+    apiModels: (providerId: string, encrypted?: string) => Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>
     /**
      * 捕获智谱控制台登录会话（consoleJwt），用于真实额度查询
      * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
@@ -246,6 +261,41 @@ export interface DesktopApi {
       encrypted?: string
       expMs?: number | null
       remainingMs?: number | null
+      reason?: string
+      error?: string
+    }>
+    /**
+     * 捕获火山方舟控制台登录会话（consoleJwt）与账号标识（accountId），用于真实额度查询与账号级去重
+     * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
+     */
+    captureVolcengineSession: (keyId?: string) => Promise<{ ok: boolean; consoleJwt?: string; accountId?: string; models?: VolcengineCapturedModel[]; source?: 'console' | 'fallback'; error?: string }>
+    /**
+     * 读取指定火山方舟账号的控制台会话状态（依据 consoleJwt 的 JWT exp 判定 alive / expiring / expired）
+     */
+    volcSessionStatus: (keyId: string, encrypted: string) => Promise<ZhipuSessionStatusResult>
+    /**
+     * 指定火山方舟账号控制台会话静默续期：隐藏窗口复用该账号分区登录态 cookie 重新捕获新 consoleJwt；
+     * 成功后返回重建后的新加密负载（encrypted），供调用方落库更新
+     */
+    volcRenewSession: (keyId: string, encrypted: string) => Promise<{
+      ok: boolean
+      encrypted?: string
+      expMs?: number | null
+      remainingMs?: number | null
+      reason?: string
+      error?: string
+    }>
+    /**
+     * 指定火山方舟账号额度同步：后台复用该账号分区登录态打开「开通管理」页，静默抓取最新免费模型
+     * 额度/开通状态；命中则返回重建后的新加密负载（encrypted）+ models，供调用方落库并刷新展示；
+     * 未抓到（登录态失效/页面未就绪）返回 {ok:true, preserved:true} 保留旧值。
+     */
+    volcSyncModels: (keyId: string, encrypted: string) => Promise<{
+      ok: boolean
+      encrypted?: string
+      models?: VolcengineCapturedModel[]
+      accountFingerprint?: string | null
+      preserved?: boolean
       reason?: string
       error?: string
     }>
@@ -354,8 +404,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke('provider:test-api-key', providerId, encrypted) as Promise<{ ok: boolean; error?: string }>,
     fetchQuota: (providerId, encrypted) =>
       ipcRenderer.invoke('provider:fetch-quota', providerId, encrypted) as Promise<{ ok: boolean; quota?: ZhipuQuotaResult; error?: string }>,
-    apiModels: (providerId) =>
-      ipcRenderer.invoke('provider:api-models', providerId) as Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>,
+    apiModels: (providerId, encrypted) =>
+      ipcRenderer.invoke('provider:api-models', providerId, encrypted) as Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>,
     captureZhipuSession: (keyId) =>
       ipcRenderer.invoke('provider:capture-zhipu-session', keyId) as Promise<{ ok: boolean; consoleJwt?: string; error?: string }>,
     zhipuSessionStatus: (keyId, encrypted) =>
@@ -366,6 +416,35 @@ const api: DesktopApi = {
         encrypted?: string
         expMs?: number | null
         remainingMs?: number | null
+        reason?: string
+        error?: string
+      }>,
+    captureVolcengineSession: (keyId) =>
+      ipcRenderer.invoke('provider:capture-volc-session', keyId) as Promise<{
+        ok: boolean
+        consoleJwt?: string
+        accountId?: string
+        models?: VolcengineCapturedModel[]
+        source?: 'console' | 'fallback'
+        error?: string
+      }>,
+    volcSessionStatus: (keyId, encrypted) =>
+      ipcRenderer.invoke('provider:volc-session-status', 'volcengine', keyId, encrypted) as Promise<ZhipuSessionStatusResult>,
+    volcRenewSession: (keyId, encrypted) =>
+      ipcRenderer.invoke('provider:volc-renew-session', 'volcengine', keyId, encrypted) as Promise<{
+        ok: boolean
+        encrypted?: string
+        expMs?: number | null
+        remainingMs?: number | null
+        reason?: string
+        error?: string
+      }>,
+    volcSyncModels: (keyId, encrypted) =>
+      ipcRenderer.invoke('provider:volc-sync-models', 'volcengine', keyId, encrypted) as Promise<{
+        ok: boolean
+        encrypted?: string
+        models?: VolcengineCapturedModel[]
+        preserved?: boolean
         reason?: string
         error?: string
       }>

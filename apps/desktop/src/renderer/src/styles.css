@@ -2877,38 +2877,194 @@ body {
   border-top: 1px solid var(--border-light);
 }
 
-/* 查看模型弹窗：顶部免费额度用量（付费模型共用） + 模型/用量/价格 */
-.models-free-quota {
-  display: inline-flex;
-  align-items: center;
-  margin-bottom: 12px;
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border-radius: var(--radius-md);
+/* 查看模型弹窗：顶部汇总卡 + 模型/用量/价格表 */
+.models-modal {
+  width: 620px;
+  max-width: 92vw;
 }
+.models-modal .modal-header h3 {
+  font-family: var(--font-display);
+  font-size: 1.12em;
+  font-weight: 600;
+}
+
+/* 顶部免费额度汇总 */
+.models-summary {
+  margin-bottom: 14px;
+}
+.models-summary-bar {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border-light);
+  overflow: hidden;
+}
+.models-summary-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.models-summary-text {
+  margin-top: 10px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.95em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.models-summary-value {
+  font-weight: 600;
+}
+.models-summary-unit {
+  color: var(--fg-muted);
+  font-size: 0.85em;
+  margin-left: 2px;
+}
+.models-summary-sep {
+  color: var(--fg-muted);
+  margin: 0 6px;
+}
+.models-summary-total {
+  color: var(--fg-muted);
+}
+
+/* 模型弹窗 —— 单行三列对齐 */
+.models-modal {
+  width: 620px;
+  max-width: 94vw;
+}
+
+/* 顶部汇总：细进度线 + 一行文字 */
+.models-summary {
+  margin: 4px 0 12px;
+}
+.models-summary-bar {
+  height: 3px;
+  background: var(--border-light);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.models-summary-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #34d399, #60a5fa);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.models-summary-text {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+  color: var(--fg-secondary);
+}
+.models-summary-label {
+  color: var(--fg-muted);
+  font-size: 0.82em;
+  margin-right: 4px;
+}
+.models-summary-value {
+  font-weight: 600;
+  color: var(--fg);
+}
+.models-summary-unit {
+  font-size: 0.82em;
+  color: var(--fg-muted);
+  margin-left: 2px;
+}
+.models-summary-sep {
+  color: var(--fg-muted);
+  margin: 0 2px;
+}
+.models-summary-total {
+  color: var(--fg-muted);
+}
+
+/* 表格：auto 宽度，单行对齐 */
 .models-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.92em;
-}
-.models-table th,
-.models-table td {
-  text-align: left;
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border-light);
+  font-size: 0.88em;
 }
 .models-table th {
+  text-align: left;
+  padding: 0 12px 8px;
   color: var(--fg-muted);
   font-weight: 600;
   font-size: 0.78em;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+.models-table th:nth-child(3) {
+  text-align: right;
+}
+.models-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.models-table tbody tr:last-child td {
+  border-bottom: none;
 }
 .models-table td:last-child {
   text-align: right;
+}
+
+/* 「查看模型」加载态：转圈 + 文案居中 */
+.models-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 150px;
+  color: var(--fg-muted);
+  font-size: 0.92em;
+}
+
+/* 单元格内部：单行，不用 flex，避免破坏表格布局 */
+.models-cell-model,
+.models-cell-quota {
+  vertical-align: middle;
+}
+.models-model-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.85em;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  line-height: 1.5;
+}
+
+/* 用量列：单行 */
+.models-quota-cell {
+  display: inline-block;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.models-quota-text {
+  color: var(--fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+.models-quota-text--dim {
+  color: var(--fg-muted);
 }
 
 .about-box {

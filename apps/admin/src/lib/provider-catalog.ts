@@ -40,5 +40,13 @@ export const PROVIDER_GENERATION_CATALOG: ProviderGenerationCatalog = {
   zhipu: {
     modes: ["text2video", "img2video", "multi_ref", "first_last"],
     models: ["cogvideox-flash", "cogvideox-2", "cogvideox-3", "Vidu Q1", "Vidu 2"]
+  },
+  volcengine: {
+    modes: ["text2video", "img2video"],
+    models: [
+      "doubao-seedance-1-0-pro-250528",
+      "doubao-seedance-1-5-pro-251215",
+      "doubao-seedance-1-0-pro-fast-251015"
+    ]
   }
 };

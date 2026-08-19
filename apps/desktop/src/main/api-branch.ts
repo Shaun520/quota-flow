@@ -12,9 +12,15 @@
 
 import type { GenerateInput } from './dispatch'
 import { decodeZhipuPayload } from './providers'
-import { fetchZhipuQuota, zhipuGenerateWithKey } from '@quota-flow/providers'
-import type { ZhipuGenerateOptions } from '@quota-flow/providers'
-import { ipcMain } from 'electron'
+import {
+  decodeVolcenginePayload,
+  fetchZhipuQuota,
+  zhipuGenerateWithKey,
+  volcengineFreeVideoModels,
+  volcengineGenerateWithKey
+} from '@quota-flow/providers'
+import type { VolcengineFreeVideoModel, ZhipuGenerateOptions } from '@quota-flow/providers'
+import { ipcMain, safeStorage } from 'electron'
 
 /** 解密后的 API 厂商凭证（各厂商子集可不同；这里统一宽松字段） */
 export interface ApiCredential {
@@ -53,8 +59,12 @@ export interface ApiGenerationBranch {
   supportedDurations(model?: string): number[]
   /** 真实剩余额度（按次资源包）；无法查询返回 null */
   remaining?(creds: ApiCredential, model: string): Promise<number | null>
-  /** 展示用模型目录（「查看模型」弹窗） */
-  catalog(): ApiModelInfo[]
+  /** 展示用模型目录（「查看模型」弹窗）；perModelFreeQuota 为每账号免费 token 额度叠加层（火山方舟） */
+  catalog(
+    perModelFreeQuota?: Record<string, { remaining?: number; total?: number }>,
+    /** 火山方舟：该账号绑定时实时抓到的免费视频模型（优先于固定目录） */
+    captured?: VolcengineFreeVideoModel[]
+  ): ApiModelInfo[]
   generate(input: GenerateInput, creds: ApiCredential, params: ApiGenerateParams): Promise<ApiGenerateOutcome>
 }
 
@@ -70,6 +80,10 @@ export interface ApiModelInfo {
   size: string | null
   /** 该模型支持生成模式 */
   modes: Array<{ value: string; label: string }>
+  /** 是否已开通该模型（火山方舟未开通模型提示开通；默认 true） */
+  activated?: boolean
+  /** 【每账号】免费 token 额度（火山方舟免费视频模型）：剩余/总数，未抓到为 undefined */
+  freeQuota?: { remaining?: number; total?: number }
 }
 
 const ZHIPU_MODEL_COST: Record<string, number> = {
@@ -191,7 +205,7 @@ export function makeZhipuBranch(): ApiGenerationBranch {
         return null
       }
     },
-    catalog() {
+    catalog(_perModelFreeQuota?: Record<string, { remaining?: number; total?: number }>) {
       return ZHIPU_CATALOG_ORDER.map((model) => ({
         model,
         priceLabel: ZHIPU_MODEL_PRICE[model],
@@ -262,7 +276,89 @@ export function makeZhipuBranch(): ApiGenerationBranch {
 
 /** 已注册的 API 生成分支（key = providerId） */
 export const API_BRANCHES: Record<string, ApiGenerationBranch> = {
-  zhipu: makeZhipuBranch()
+  zhipu: makeZhipuBranch(),
+  volcengine: makeVolcengineBranch()
+}
+
+/** 火山方舟免费视频模型默认时长（未收录固定时长走通用档） */
+const VOLC_ENGINE_MODEL_DURATIONS = [5, 10]
+/** 火山免费视频模型统一支持文生 + 图生（Seedance 均有免费推理额度） */
+const VOLC_ENGINE_MODEL_MODES: Array<{ value: string; label: string }> = [
+  { value: 'text2video', label: '文生视频' },
+  { value: 'img2video', label: '图生视频' }
+]
+
+function makeVolcengineBranch(): ApiGenerationBranch {
+  const freeModels = volcengineFreeVideoModels()
+  return {
+    id: 'volcengine',
+    displayName: '火山方舟',
+    unitName: '次',
+    parseCredentials(decrypted) {
+      try {
+        const { apiKey, consoleJwt } = decodeVolcenginePayload(decrypted)
+        if (!apiKey) return null
+        return { apiKey, consoleJwt: consoleJwt ?? null }
+      } catch {
+        return null
+      }
+    },
+    cost() {
+      // 本轮火山方舟接入的均为免费视频模型，cost=0
+      return 0
+    },
+    supportedDurations() {
+      return VOLC_ENGINE_MODEL_DURATIONS
+    },
+    async remaining() {
+      // 免费 token 额度按账号、且无公开 API 可读；实时额度走本地账本，此处返回 null 表示未知。
+      return null
+    },
+    catalog(perModelFreeQuota, captured?: VolcengineFreeVideoModel[]) {
+      // 优先使用该账号绑定时实时抓到的免费模型目录；未抓到则回退内置固定目录
+      const base = Array.isArray(captured) && captured.length > 0 ? captured : freeModels
+      // 内置目录按 id 的默认免费额度，作为兜底：账号负载里存的旧模型缺 freeQuota 时，仍能展示具体 token 量
+      const defaultQuota = new Map(freeModels.map((m) => [m.id, m.freeQuota]))
+      return base.map((m) => ({
+        model: m.id,
+        priceLabel: m.price,
+        cost: 0,
+        durations: VOLC_ENGINE_MODEL_DURATIONS,
+        size: null,
+        modes: VOLC_ENGINE_MODEL_MODES,
+        activated: m.activated,
+        freeQuota: perModelFreeQuota?.[m.id] ?? m.freeQuota ?? defaultQuota.get(m.id)
+      }))
+    },
+    async generate(input, creds, params) {
+      if (params.mode !== 'text2video' && params.mode !== 'img2video') {
+        return { ok: false, error: '火山方舟当前仅支持文生视频 / 图生视频' }
+      }
+      const images = (params.images ?? []).filter((u) => /^https?:\/\//i.test(u))
+      // 图生视频需公网图片 URL（已由调度台上传 Supabase 取 https 地址）
+      const r = await volcengineGenerateWithKey(
+        creds.apiKey,
+        {
+          mode: params.mode,
+          model: params.model,
+          prompt: params.prompt,
+          images,
+          durationSec: params.durationSec,
+          audio: (input.audio === 'off' ? 'off' : 'on') as 'on' | 'off',
+          ratio: input.ratio,
+          resolution: input.resolution
+        },
+        params.onProgress
+      )
+      return {
+        ok: r.ok,
+        videoUrl: r.videoUrl,
+        coverImageUrl: r.coverImageUrl,
+        traceId: r.traceId,
+        error: r.error
+      }
+    }
+  }
 }
 
 let apiIpcRegistered = false
@@ -272,9 +368,25 @@ export function registerApiIpc(): void {
   if (apiIpcRegistered) return
   apiIpcRegistered = true
 
-  ipcMain.handle('provider:api-models', async (_e, providerId: string) => {
+  ipcMain.handle('provider:api-models', async (_e, providerId: string, encrypted?: string) => {
     const branch = API_BRANCHES[providerId]
     if (!branch) return { ok: false, error: '不支持的 API 厂商' }
-    return { ok: true, models: branch.catalog() }
+    // 火山方舟：解密该账号负载里的每模型免费 token 额度 + 实时抓到的模型目录，叠加到目录上展示
+    let perModelFreeQuota: Record<string, { remaining?: number; total?: number }> | undefined
+    let captured: VolcengineFreeVideoModel[] | undefined
+    if (providerId === 'volcengine' && typeof encrypted === 'string' && encrypted) {
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+        const { models } = decodeVolcenginePayload(plain)
+        captured = models
+        if (Array.isArray(models)) {
+          perModelFreeQuota = {}
+          for (const m of models) {
+            if (m?.id && m.freeQuota) perModelFreeQuota[m.id] = m.freeQuota
+          }
+        }
+      } catch {}
+    }
+    return { ok: true, models: branch.catalog(perModelFreeQuota, captured) }
   })
 }

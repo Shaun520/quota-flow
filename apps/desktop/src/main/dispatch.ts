@@ -50,6 +50,8 @@ export interface QuotaUpdatedPayload {
   ledger: QuotaLedgerRow
   /** API 型厂商（智谱）生成成功后触发：渲染层据此重新拉取该账号真实额度 */
   zhipuRefreshKeyId?: string
+  /** 火山方舟生成成功后触发：渲染层据此静默同步该账号免费模型真实剩余额度 */
+  volcRefreshKeyId?: string
 }
 
 const UA =
@@ -760,8 +762,8 @@ async function runApiBranch(
     data: { resultUrl, cost, localPath, accountId: cand.id }
   })
 
-  // 智谱本地账本不做原子扣减（真实额度在平台资源包），仅记录 costAmount 展示；
-  // 生成完成后下发 zhipuRefreshKeyId，渲染层据此重新拉取该账号真实余额。
+  // API 型厂商本地账本不做原子扣减（真实额度在平台）；生成完成后下发热点字段，
+  // 渲染层据此重新拉取/同步该账号真实额度：智谱走 fetch-quota，火山走开通管理页静默同步。
   onQuotaUpdated?.({
     userId: input.userId,
     ledger: {
@@ -778,7 +780,7 @@ async function runApiBranch(
       reserved: 0,
       refreshed_at: new Date().toISOString()
     },
-    zhipuRefreshKeyId: cand.id
+    ...(providerId === 'volcengine' ? { volcRefreshKeyId: cand.id } : { zhipuRefreshKeyId: cand.id })
   })
   return { ok: true, jobId: job.id }
 }

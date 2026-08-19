@@ -4,6 +4,11 @@ import { BaseProvider } from "@quota-flow/core";
 import { YuanbaoProvider } from "./yuanbao";
 import { QwenWanProvider } from "./qwen";
 
+// 导出 API 型厂商的凭据处理函数（decode/test/fetch-quota 等），供桌面端主进程直接复用。
+// 注意：保持在源码层再导出（不要只存在于已构建的 dist），否则 rebuild 会把这些导出打穿。
+export * from "./zhipu";
+export * from "./volcengine";
+
 export interface ProviderFactoryOptions {
 }
 
