@@ -1,9 +1,20 @@
 import { createHash } from 'crypto'
-import { app, BrowserWindow, ipcMain, safeStorage, session } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage, session, shell } from 'electron'
 import type { Cookie } from 'electron'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fetchZhipuQuota, testZhipuApiKey } from '@quota-flow/providers'
+import {
+  fetchZhipuQuota,
+  testZhipuApiKey,
+  fetchVolcengineQuota,
+  testVolcengineApiKey,
+  volcengineAccountFingerprint,
+  decodeVolcenginePayload,
+  jwtExpiryMs,
+  captureVolcengineFreeVideoModels,
+  VOLCENGINE_FREE_NAME_TO_ID
+} from '@quota-flow/providers'
+import type { VolcengineFreeVideoModel } from '@quota-flow/providers'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -105,6 +116,7 @@ function zhipuConsolePartitionFor(keyId?: string): string {
 }
 function partitionFor(providerId: string, keyId?: string): string {
   if (providerId === 'zhipu') return zhipuConsolePartitionFor(keyId)
+  if (providerId === 'volcengine') return volcConsolePartitionFor(keyId)
   const base = 'persist:qf-p:' + providerId
   return keyId ? `${base}:${keyId}` : base
 }
@@ -672,12 +684,15 @@ async function openProviderSite(
   keyId: string,
   encryptedKey?: string
 ): Promise<{ ok: boolean; error?: string }> {
-  // 智谱（bigmodel）：打开该账号控制台，使用按账号隔离的分区（persist:qf-zhipu-console:<keyId>）免重复登录且不串号
+  // 智谱（bigmodel）/ 火山方舟（volcengine）：打开该账号控制台，使用按账号隔离的分区免重复登录且不串号
   let url: string | undefined
   let partition: string
   let injectableEncrypted: string | undefined
   if (providerId === 'zhipu') {
     url = ZHIPU_CONSOLE_URL
+    partition = partitionFor(providerId, keyId)
+  } else if (providerId === 'volcengine') {
+    url = VOLC_CONSOLE_URL
     partition = partitionFor(providerId, keyId)
   } else {
     const site = providerSite(providerId)
@@ -1011,6 +1026,33 @@ function zhipuConsoleSession(keyId?: string): Electron.Session {
   return session.fromPartition(zhipuConsolePartitionFor(keyId))
 }
 
+// 火山方舟控制台会话捕获：与智谱同套路（打开控制台、注入拦截器捕获 Bearer JWT），
+// 但分区、URL、注入全局名各自独立，避免与智谱会话互串。
+// 火山控制台请求带 AK/SK 签名头与会话 cookie，主进程无法重放；先在捕获窗口页内注入 hook 取回令牌，
+// 后续额度探测（方案 §6）在捕获分区页内同源执行。
+const VOLC_CONSOLE_URL = 'https://console.volcengine.com/ark/region:cn-beijing/apikey'
+// 火山「开通管理→视觉模型」页：免费视频模型额度/开通状态所在页（额度同步抓取用；tab=ComputerVision 为视觉模型分类）
+const VOLC_OPEN_MANAGEMENT_URL =
+  'https://console.volcengine.com/ark/region:cn-beijing/openManagement?tab=ComputerVision'
+const VOLC_CONSOLE_PARTITION = 'persist:qf-volc-console'
+/** 火山控制台分区按账号隔离：persist:qf-volc-console[:keyId]，避免多账号串会话 */
+function volcConsolePartitionFor(keyId?: string): string {
+  return keyId ? `${VOLC_CONSOLE_PARTITION}:${keyId}` : VOLC_CONSOLE_PARTITION
+}
+function volcEngineConsoleSession(keyId?: string): Electron.Session {
+  return session.fromPartition(volcConsolePartitionFor(keyId))
+}
+/** 火山同步诊断日志（userData/volc-sync.log）：排查静默抓取为何未命中控制台免费模型 */
+function logVolcSync(line: string): void {
+  try {
+    appendFileSync(join(app.getPath('userData'), 'volc-sync.log'), `[${new Date().toISOString()}] ${line}\n`)
+  } catch {
+    // ignore
+  }
+}
+/** 静默续期窗口最多等待时长（毫秒） */
+const VOLC_QUIET_RENEW_TIMEOUT_MS = 25000
+
 /** 静默续期窗口最多等待时长（毫秒）；超时仍未捕获到新 JWT，视为控制台登录态已失效 */
 const ZHIPU_QUIET_RENEW_TIMEOUT_MS = 25000
 
@@ -1272,6 +1314,766 @@ export async function captureZhipuConsoleSession(opts?: {
   })
 }
 
+/**
+ * 火山方舟控制台会话捕获 / 静默续期（与智谱 captureZhipuConsoleSession 同套路，独立分区/URL/全局名）。
+ * @param opts.quiet true: 隐藏窗口静默重捕获（续期用，保留登录态 cookie）；缺省: 首次绑定交互式捕获。
+ */
+export async function captureVolcEngineConsoleSession(opts?: {
+  quiet?: boolean
+  keyId?: string
+  oldConsoleJwt?: string | null
+  /** 会话窗口初始加载的 URL；缺省为 API Key 管理页。传开通管理页可静默抓取最新免费额度（sync） */
+  targetUrl?: string
+  /** true 表示「额度同步」模式：静默轮询时同时读取 __VF_MODELS__ 并返回最新 models；缺省为仅绑定/续期的会话捕获 */
+  syncModels?: boolean
+}): Promise<{ ok: boolean; consoleJwt?: string; accountId?: string; models?: VolcengineFreeVideoModel[]; source?: 'console' | 'fallback'; error?: string }> {
+  const quiet = !!opts?.quiet
+  const syncModels = !!opts?.syncModels
+  const optKeyId = opts?.keyId
+  const winKey = `${quiet ? 'volc-console-quiet' : 'volc-console'}:${optKeyId ?? 'shared'}`
+  const oldConsoleJwt = opts?.oldConsoleJwt
+  const existing = loginWindows.get(winKey)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return { ok: false, error: quiet ? '会话续期进行中' : '火山方舟控制台窗口已打开' }
+  }
+
+  // 首次绑定需清空登录态存储避免残留；静默续期必须保留 cookie
+  if (!quiet) {
+    try {
+      await volcEngineConsoleSession(optKeyId).clearStorageData()
+    } catch {}
+  }
+  const ses = volcEngineConsoleSession(optKeyId)
+
+  const win = new BrowserWindow({
+    width: 1120,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    show: !quiet,
+    paintWhenInitiallyHidden: true,
+    autoHideMenuBar: true,
+    title: quiet ? '火山方舟控制台 - Quota-Flow' : 'Quota-Flow · 火山方舟控制台',
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      partition: volcConsolePartitionFor(optKeyId),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  ses.setUserAgent(CHROME_UA)
+  win.webContents.setUserAgent(CHROME_UA)
+  // 拦截非 http(s) 协议跳转（如 bytedance:// 深链），避免触发 Windows 系统级「获取打开此链接的应用」弹窗。
+  // 火山控制台第三方登录（抖音/头条/穿山甲等）才会走这类深链，绑定流程推荐使用手机号/账号登录，完全走 http(s)。
+  const BLOCKED_PROTO_RE = /^(?!https?:)[a-z][a-z0-9+.-]*:/i
+  win.webContents.on('will-navigate', (ev, url) => {
+    if (BLOCKED_PROTO_RE.test(url)) {
+      ev.preventDefault()
+      void win.webContents
+        .executeJavaScript(
+          `(function(){try{window.__VF_BLOCKED=window.__VF_BLOCKED||[];window.__VF_BLOCKED.push(${JSON.stringify(url)});}catch(_){}})()`
+        )
+        .catch(() => {})
+    }
+  })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (BLOCKED_PROTO_RE.test(url)) return { action: 'deny' }
+    return { action: 'allow' }
+  })
+  loginWindows.set(winKey, win)
+  void win.loadURL(opts?.targetUrl || VOLC_CONSOLE_URL).catch(() => {})
+
+  const INJECT = `(() => {
+    if (window.__QUOTA_FLOW_VOLC__) return;
+    window.__QUOTA_FLOW_VOLC__ = true;
+    window.__VF_CAPTURED__ = window.__VF_CAPTURED__ || null;
+    window.__VF_ACCOUNT__ = window.__VF_ACCOUNT__ || null;
+    // 账号标识写入 + 落 localStorage：volc 控制台从「开通管理」切到「API Key 管理」是整页跳转(非 SPA)，
+    // 页面全局 __VF_ACCOUNT__ 会被清空；持久化到同源 localStorage(按分区隔离)后，任何一次整页加载都能恢复。
+    const persistAccount = (id) => {
+      try { window.__VF_ACCOUNT__ = id; window.localStorage.setItem('qf:volc:account', String(id)); } catch (_) {}
+    };
+    try { const _a = window.localStorage.getItem('qf:volc:account'); if (_a && !window.__VF_ACCOUNT__) window.__VF_ACCOUNT__ = _a; } catch (_) {}
+    window.__VF_SUBMIT__ = false;
+    const JWT_RE = /(eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,})/;
+    const store = (v) => {
+      if (typeof v === 'string' && v) {
+        const m = v.match(JWT_RE);
+        if (m) { window.__VF_CAPTURED__ = window.__VF_CAPTURED__ || m[0]; }
+      }
+    };
+    // 额度接口探测（方案 §6）：记录火山相关的 fetch/XHR 请求，便于运行期实抓额度接口
+    const isProbeUrl = (u) => u && /ark|openmanagement|quota|resource|package|project|apikey|account|user/i.test(u);
+    const probeLog = (method, u) => {
+      try { if (isProbeUrl(u)) console.log('[volc-console] ' + method + ' ' + String(u).slice(0, 300)); } catch (_) {}
+    };
+    // 账号标识探测（去重）：从控制台接口响应体里找稳定账号 id（uid/account_id/user_id 等），
+    // 同一火山账号的多个 API Key 共享同一账户，据此做账号级指纹去重。抓不到则回退 API Key 哈希。
+    const ACCOUNT_KEY_RE = /["']?(?:uid|userId|user_id|accountId|account_id|loginname|login_name|customer_id)["']?\\s*[:=]\\s*["']?(\\d{6,20})/i;
+    // 火山方舟账户 id 最可靠的真实载体是开通管理页资源的存储桶名：ark-auto-{accountId}-cn-beijing-default。
+    // （如 ListModelChargeItems 响应 FeaturedImage.BucketName = "ark-auto-2100466578-cn-..."）
+    // 这比 whitelist 里偶发的 JSON 字段（含 bot 预设模板静态 AccountId）更专属于「当前登录账号」，用于去重更稳。
+    const BUCKET_ACCOUNT_RE = /ark-(?:auto-)?(\\d{6,20})-cn-/i;
+    const extractAccount = (text) => {
+      if (typeof text !== 'string' || !text || window.__VF_ACCOUNT__) return;
+      // 优先 whitelist 字段；无则用存储桶名兜底（专属性区分账号）
+      const m = text.match(ACCOUNT_KEY_RE) || text.match(BUCKET_ACCOUNT_RE);
+      if (m && m[1]) persistAccount(m[1]);
+    };
+    // 开通管理页模型接口：网上承载「freeQuota / quota / activated / modelId」的响应体
+    // 直接解析出模型列表并入 window.__VF_MODELS_RAW__，避免依赖分页 DOM（wan 在第二页）。
+    window.__VF_MODELS_RAW__ = window.__VF_MODELS_RAW__ || [];
+    window.__VF_SAVED_RAW__ = window.__VF_SAVED_RAW__ || null;
+    const isModelJson = (text) => {
+      if (typeof text !== 'string' || text.length < 40) return false;
+      // 优先按「真实模型 id 内容」命中：模型列表/额度接口的响应体必然包含具体模型标识
+      // （wan2-1-14b、doubao-seedance-1-0-pro 等）。这比按 quota 字段名更可靠——火山接口
+      // 字段命名多变，但模型 id / 名称字符串是稳定的。
+      if (/wan2\s*-?\s*1\s*-?\s*14b|wan2-1-14b/i.test(text)) return true;
+      if (/doubao-seedance\s*-?\s*1-0-pro|doubao-seedance-1-0-pro/i.test(text)) return true;
+      if (/doubao-seedance/i.test(text) && /quota|token|额度|剩|免费/i.test(text)) return true;
+      if (/wan\s*-\s*1-14b|wan-1-14b/i.test(text)) return true;
+      // 兜底：仍是额度+模型名双条件
+      return (/freeQuota|free_quota|quota|token|额度/.test(text)) &&
+             (/wan|seedance|doubao|deepseek|模型|Model/i.test(text));
+    };
+    // 接口级模型额度捕获（正解）：直接解析火山开通管理页的 ListModelTokenLimit / ListModelRateLimit
+    // 响应体，拿到每个模型的真实免费额度与开通状态，彻底摆脱分页 DOM。响应可能分多次（翻页）返回，
+    // 这里按模型名累积合并，用窗口变量暴露给主进程回传。
+    window.__VF_TOKEN_LIMITS__ = window.__VF_TOKEN_LIMITS__ || {}; // modelName -> { tokenLimit, currentUsage }
+    window.__VF_HAS_RATE__ = window.__VF_HAS_RATE__ || false;      // 是否抓到模型全量列表
+    const ingestInterface = (url, text) => {
+      try {
+        if (typeof text !== 'string' || text.length < 30) return;
+        const j = JSON.parse(text);
+        const action = j && j.ResponseMetadata && j.ResponseMetadata.Action;
+        const res = j && j.Result;
+        if (action === 'ListModelTokenLimit' && res && Array.isArray(res.ModelTokenLimits)) {
+          for (const it of res.ModelTokenLimits) {
+            if (!it || typeof it.FoundationModelName !== 'string') continue;
+            const n = it.FoundationModelName.trim();
+            const tok = Number(it.TokenLimit) || 0;
+            window.__VF_TOKEN_LIMITS__[n] = { tokenLimit: tok, currentUsage: Number(it.CurrentUsage) || 0 };
+          }
+        } else if (action === 'ListModelRateLimit' && res && Array.isArray(res.Items)) {
+          window.__VF_HAS_RATE__ = true;
+        } else if (action === 'ListModelChargeItems') {
+          // 账号标识权威源：开通管理页模型列表的 FeaturedImage.BucketName 形如 ark-auto-{accountId}-cn-beijing-default，
+          // 这是「当前登录账号」的专有 id，比 bot 预设模板的静态 AccountId 可靠，拿来回填账号级指纹去重键。
+          const bm = (text).match(/ark-(?:auto-)?(\\d{6,20})-cn-/i);
+          if (bm && bm[1]) persistAccount(bm[1]);
+        }
+      } catch (_) {}
+    };
+    const tryParseModels = (url, text) => {
+      try {
+        const isModel = isModelJson(text);
+        if (!isModel) return;
+        const decis = /wan2\s*-?\s*1\s*-?\s*14b|doubao-seedance|wan-1-14b/i.test(text);
+        if (decis || !window.__VF_MODEL_BODY__ || text.length > window.__VF_MODEL_BODY__.length) {
+          const capped = text.length > 20000 ? text.slice(0, 20000) : text;
+          window.__VF_MODEL_BODY__ = capped;
+        }
+        const rec = { t: Date.now(), url: String(url || '').slice(0, 300), body: text.slice(0, 8000) };
+        window.__VF_MODELS_RAW__.push(rec);
+        if (window.__VF_MODELS_RAW__.length > 60) window.__VF_MODELS_RAW__.shift();
+        if (!window.__VF_SAVED_RAW__ || text.length > window.__VF_SAVED_RAW__.length) window.__VF_SAVED_RAW__ = text;
+      } catch (_) {}
+    };
+    const feedModels = (url, text) => { try { if (typeof text === 'string') tryParseModels(url, text); } catch (_) {} };
+    // 1) hook fetch
+    const origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = function (...args) {
+        try {
+          const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+          probeLog('fetch', url);
+          const init = args[1] || {};
+          const h = init.headers;
+          const getAuth = () => {
+            try {
+              if (h instanceof Headers) return h.get('authorization');
+              if (Array.isArray(h)) { const f = h.find((kv) => (kv[0] || '').toLowerCase() === 'authorization'); return f ? f[1] : undefined; }
+              if (h && typeof h === 'object') return h['authorization'] || h['Authorization'];
+            } catch (_) {}
+            return undefined;
+          };
+          const a = getAuth();
+          if (a) { store(String(a).replace(/^Bearer\\s+/i, '')); }
+        } catch (_) {}
+        const p = origFetch.apply(this, args);
+        try {
+          p.then((resp) => {
+            try { resp.clone().text().then((txt) => { extractAccount(txt); feedModels(url, txt); ingestInterface(url, txt); }); } catch (_) {}
+          }).catch(() => {});
+        } catch (_) {}
+        return p;
+      };
+    }
+    // 2) hook XMLHttpRequest（axios 底层）
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (m, u, ...rest) {
+      try { window.__VF_XHR__ = { method: m, url: u }; } catch (_) {}
+      return origOpen.apply(this, [m, u, ...rest]);
+    };
+    const origSet = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+      try { if (String(k).toLowerCase() === 'authorization') store(String(v).replace(/^Bearer\\s+/i, '')); } catch (_) {}
+      return origSet.apply(this, arguments);
+    };
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (...rest) {
+      try {
+        if (window.__VF_XHR__) {
+          const probeUrl = String(window.__VF_XHR__.url || '');
+          probeLog(window.__VF_XHR__.method, probeUrl);
+        }
+        if (typeof this.responseText !== 'undefined' && window.__VF_XHR__) {
+          const self = this;
+          const xUrl = String(window.__VF_XHR__.url || '');
+          try { this.addEventListener('load', function () { try { const t = self.responseText || ''; extractAccount(t); feedModels(xUrl, t); ingestInterface(xUrl, t); } catch (_) {} }); } catch (_) {}
+        }
+      } catch (_) {}
+      return origSend.apply(this, rest);
+    };
+    // 3) 兜底：定时扫描本地存储
+    const scanStorage = () => {
+      for (const name of ['localStorage', 'sessionStorage']) {
+        try {
+          const s = window[name];
+          if (!s) continue;
+          for (let i = 0; i < s.length; i++) {
+            const k = s.key(i);
+            if (!k) continue;
+            const v = s.getItem(k);
+            if (v && typeof v === 'string') { store(v); extractAccount(v); }
+          }
+        } catch (_) {}
+      }
+      // 账号标识还常以 query 形式出现在登录/管理页 URL（如 ?accountId=2100000825）
+      try { extractAccount(location.href); } catch (_) {}
+    };
+    window.__VF_SCAN__ = setInterval(scanStorage, 1500);
+    scanStorage();
+    // 3.5) 「绑定即抓模型」：扫描「开通管理→视觉模型」页 DOM，识别带免费推理额度文案的模型。
+    //      门禁是「有免费额度 + 开通状态」而非模型名前缀：页面同屏还混有图像（Seedream）与 3D
+    //      （Seed3D/Hyper3D/Hitem3D）模型且它们也有免费额度，故抓取层只负责如实上报「卡片名 + 额度 +
+    //      是否已开通」，是否属于「视频生成模型」由 providers 权威层按视频家族过滤（不依赖前缀）。
+    window.__VF_MODELS__ = window.__VF_MODELS__ || [];
+    // 「开通管理→视觉模型」卡片文本 =「模型名 + 未开通/已开通 + 厂商 + 免费推理额度 剩x / 共y token + 开通/退订」。
+    // 免费额度文本格式实测为「剩 x / 共 y token」（含剩/共前缀）；没有任何 free token 的模型（如 2.x 系列）不收录。
+    const volcQuotaRe = /(?:剩|剩余)\\s*([\\d,]+)\\s*\\/\\s*共?\\s*([\\d,]+)\\s*(?:token|Token|Tokens)?/i;
+    const volcStatusRe = /已开通|未开通|尚未开通|待开通|去开通/i;
+    const volcHasFreeRe = /免费推理额度|免费额度|剩\\s*[\\d,]+\\s*\\/\\s*共/i;
+    const scrapeFreeModels = () => {
+      try {
+        if (window.__VF_MODELS__.length >= 40) return; // 上限防抖（含图像/3D，宽收集后由类型层过滤）
+        const els = document.querySelectorAll('body *');
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i];
+          const own = (el.textContent || '').replace(/\s+/g, ' ').trim();
+          // 护栏：去掉整段聚合容器（含多张卡片的整页/整块列表节点，own 文本很长）——它不是单张卡片，
+          //       进行下去会把其它卡片的免费额度文本当作本模型的额度，导致无免费额度的模型被误判成有。与模型名/版本无关。
+          if (own.length > 200) continue;
+          // 仅当该元素自带「开通状态」时视其为卡片信息承载层（避免对整页祖先重复处理）
+          const stM = own.match(volcStatusRe);
+          if (!stM) continue;
+          // 以卡片自身的状态文案判定是否已开通：未开通/尚未开通/待开通/去开通 → false；其余（已开通）→ true。
+          // 不能在祖先层探测不到「未开通」时留 undefined，否则合并层会沿用内置默认值，新开通模型永远停在「待开通」。
+          const isPendingStatus = /未开通|尚未开通|待开通|去开通/.test(stM[0] || '');
+          const name = own.slice(0, stM.index).trim().split(/\\s+/)[0] || '';
+          if (!name) continue;
+          // 该模型名是否为深描的别扭前段（多个合成词被拆出的残片，如只剩厂商名）——以非模型词作护栏，遇中文/纯厂商名时跳过
+          if (/[\\u4e00-\\u9fa5]/.test(name)) continue;
+          if (window.__VF_MODELS__.some((m) => m.name === name)) continue;
+          // 沿祖先向上寻找该模型的“卡片”：就近取首个同时含额度/开通状态信息的容器
+          let container = el;
+          let quota = null, notActivated = false, hasFree = false;
+          for (let depth = 0; container && depth < 8; container = container.parentElement, depth++) {
+            const t = (container.textContent || '').replace(/\\s+/g, ' ').trim();
+            const q = t.match(volcQuotaRe);
+            const na = /未开通|尚未开通|待开通|去开通/i.test(t);
+            if (q) quota = q;
+            if (volcHasFreeRe.test(t)) hasFree = true;
+            if (na) notActivated = true;
+            if (q || na) break; // 就近取实时信息层（继续向上会泛化到整页）
+          }
+          // 门禁：有免费推理额度才收录（无 free token 的模型如 2.x 系列不混入）
+          if (!quota || !hasFree) continue;
+          window.__VF_MODELS__.push({
+            name,
+            remaining: Number(quota[1].replace(/,/g, '')),
+            total: Number(quota[2].replace(/,/g, '')),
+            activated: isPendingStatus ? false : true
+          });
+        }
+      } catch (_) {}
+    };
+    window.__VF_SCAN2__ = setInterval(scrapeFreeModels, 2000);
+    scrapeFreeModels();
+    // 改版后开通管理页为「表格」布局（列：模型名/提供方、状态、免费推理额度、在线推理定价…）。
+    // 表格逐屏虚拟渲染，Wan/Seedance-1.0 等有额度模型常在列表深处：新增面向表格行的抓取，
+    // 采用「逐屏渐进滚动 + 每屏解析 [role=row]」：滚动到一屏就收录该屏有免费额度的行，再继续下一屏，
+    // 不直接跳到底（跳底会漏掉中间所有已刻录屏），保证 wan/lite/seedance1.0 全部收录。
+    const scrapeTableRows = () => {
+      try {
+        if (window.__VF_MODELS__.length >= 40) return;
+        const rows = document.querySelectorAll('[role=row], table tr');
+        for (let i = 0; i < rows.length; i++) {
+          const el = rows[i];
+          const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+          // 表头行（无模型名且多为中文列名），跳过
+          if (!t || t.length > 400 || /^模型名|^提供方|^状态$/.test(t)) continue;
+          const q = t.match(volcQuotaRe);
+          // 门禁：行内必须带「剩 x /共 y token」免费推理额度才收录（2.x 无免费额度的行不混入）
+          if (!q) continue;
+          // 取自提供方(中文)前的连续模型名 token：行首第一个无中文的连续串即模型名。
+          // 表格行常把模型名连写重复多次（如 Doubao-Seedance-1.5-pro …×3 且无空格），取最小重复周期去重。
+          const nm = t.match(/^[A-Za-z][A-Za-z0-9._-]*/);
+          let name = nm ? nm[0] : '';
+          if (name) {
+            const dup = name.match(/^(.+?)\\1+$/);
+            if (dup && dup[1].length > 1) name = dup[1];
+          }
+          if (!name || /[\\u4e00-\\u9fa5]/.test(name)) continue;
+          // 开通状态：行文本含「未开通/待开通/去开通」→ 未开通；否则视为已开通
+          const notActivated = /未开通|尚未开通|待开通|去开通/i.test(t);
+          if (window.__VF_MODELS__.some((m) => m.name === name)) continue;
+          window.__VF_MODELS__.push({
+            name,
+            remaining: Number(q[1].replace(/,/g, '')),
+            total: Number(q[2].replace(/,/g, '')),
+            activated: notActivated ? false : true
+          });
+        }
+      } catch (_) {}
+    };
+    let vfScreenIdx = 0;
+    // 额度同步模式：逐屏渐进滚动所有可滚动容器，一屏一屏往下，滚动一屏就解析该屏表格行。
+    // 每次滚一屏而非直接到底，避免跳底导致中间屏幕的模型行未渲染而漏收。
+    if (${syncModels ? 'true' : 'false'}) {
+      // 接口级额度同步：开通管理页视觉模型表是 Arco 分页（每页 10 条），wan 等免费模型在第二/末页。
+      // 真正额度在 ListModelTokenLimit 接口（分页返回），翻到哪页才请求哪页。故这里自动点「下一页」，
+      // 触发后续页面的额度接口请求，由 ingestInterface 累积到 window.__VF_TOKEN_LIMITS__。
+      // 点击按钮本身可能触发滑动/滚动，这里每轮点一次下一页（或用滚动作为兜底），点到无法前进即停。
+      window.__VF_AUTOSCROLL__ = setInterval(function () {
+        try {
+          // 1) Arco 分页「下一页」：定位分页容器 → 记录当前页码与 next 按钮；多事件派发高仿真点击触发翻页。
+          var nextBtn = null;
+          var pages = document.querySelectorAll('[class*="arco-pagination"],[class*="pagination"]');
+          for (var pi = 0; pi < pages.length && !nextBtn; pi++) {
+            var pitms = pages[pi].querySelectorAll('[class*="pagination-item"],[class*="pagination-list"] li');
+            for (var pj = 0; pj < pitms.length; pj++) {
+              var pel = pitms[pj];
+              var pc = String(pel.className || '');
+              var ptx = (pel.getAttribute('title') || '') + ' ' + (pel.getAttribute('aria-label') || '') + ' ' + (pel.textContent || '').replace(/\\s+/g, '');
+              // 当前页：class 含 current 或 active（兼容 -current / -active 两种命名），文本解析成页码
+              if (/pagination-item-(current|active)/.test(pc)) {
+                var pm = /(\\d+)/.exec((pel.textContent || '').trim());
+                if (pm && pm[1] !== String(window.__VF_PAGE__ || '')) window.__VF_PAGE__ = parseInt(pm[1], 10);
+              }
+              // next：class 含 next，或 title/aria/文本命中「下一页」
+              if (/next/i.test(pc) || /下一页|下一頁|next/i.test(ptx)) nextBtn = pel;
+            }
+          }
+          var hasMore = !!nextBtn && !/disabled|disabled/i.test(String(nextBtn.className || ''));
+          window.__VF_HASMORE__ = hasMore;
+          // 探针：在页面记录 next 按钮识别与翻页尝试，供主进程日志诊断（重复信息不刷屏）
+          var trace = window.__VF_PAGEDEBUG__ || [];
+          var nxInfo = nextBtn ? String(nextBtn.className || '').slice(0, 80) : 'none';
+          if (trace.length < 8 && (window.__VF_NX_LAST__ || '') !== nxInfo) {
+            trace.push('next[' + nxInfo + '] more=' + hasMore + ' pg=' + (window.__VF_PAGE__ || 0));
+            window.__VF_PAGEDEBUG__ = trace;
+            window.__VF_NX_LAST__ = nxInfo;
+          }
+          // 限速翻页：少隔 2.8s 才翻一次，避免连翻导致中间页额度接口被 abort（wan 在第二页，须等上页接口返回）
+          var npg = Date.now();
+          if (hasMore && (window.__VF_LASTPAGE_AT__ || 0) < npg - 2800) {
+            try {
+              nextBtn.scrollIntoView({ block: 'center' });
+              var tgt = nextBtn;
+              var inner = nextBtn.querySelector('[class*="icon"],a,button,span,[class*="next"]');
+              if (inner) tgt = inner;
+              ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'touchend'].forEach(function (ev) {
+                tgt.dispatchEvent(new (window.MouseEvent || window.Event)(ev, { bubbles: true, cancelable: true, view: window, detail: 1 }));
+              });
+              if (tgt.click) tgt.click();
+              window.__VF_LASTPAGE_AT__ = npg;
+              window.__VF_CLICKNEXT__ = true;
+            } catch (_) {}
+          }
+          // 2) 兜底：仍滚动可滚动容器（兼容虚拟列表/非分页视图）
+          const scrollers = Array.from(document.querySelectorAll('*')).filter(function (el) {
+            return el.scrollHeight > el.clientHeight + 20;
+          });
+          for (const s of scrollers) {
+            const step = Math.max(s.clientHeight * 0.9, 120);
+            s.scrollTop = Math.min(s.scrollHeight, (s.scrollTop || 0) + step);
+            vfScreenIdx++;
+          }
+          window.__VF_SCREEN__ = vfScreenIdx;
+          // 3) 每轮都重新抓 DOM 行/卡片（兜底），以及同步一次接口状态变量
+          scrapeTableRows();
+          scrapeFreeModels();
+          window.__VF_INTERFACE_COUNT__ =
+            Object.keys(window.__VF_TOKEN_LIMITS__).length + (window.__VF_HAS_RATE__ ? 1 : 0);
+        } catch (_) {}
+      }, 900);
+    }
+    // 4) 可拖拽注入条（仅交互式首次绑定显示）
+    if (${quiet ? 'false' : 'true'}) {
+      const bar = document.createElement('div');
+      bar.id = 'qf-volc-bar';
+      bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:440px;';
+      bar.innerHTML =
+        '<div id="qf-volc-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
+        '<span id="qf-volc-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
+        '<span>Quota-Flow · 火山方舟控制台</span>' +
+        '</div>' +
+        '<div style="color:#c9cdd4;font-size:12px;">请使用「手机号登录/账号登录」，进入「API Key 管理」复制 Key 后点击下方按钮即可（第三方登录已拦截，需在外部浏览器完成）</div>' +
+        '<button id="qf-volc-done" style="margin-top:2px;border:none;border-radius:6px;background:#22c55e;color:#fff;font:600 12.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:7px 12px;cursor:pointer;align-self:flex-start;">已获取 key 返回</button>';
+      document.body.appendChild(bar);
+      bar.querySelector('#qf-volc-done').addEventListener('click', () => { window.__VF_SUBMIT__ = true; window.__VF_STATE__ = window.__VF_CAPTURED__ ? 'ok' : 'empty'; });
+      let dragging = false, offX = 0, offY = 0;
+      const grip = document.getElementById('qf-volc-grip');
+      const header = document.getElementById('qf-volc-header');
+      const barEl = document.getElementById('qf-volc-bar');
+      const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
+      if (grip) grip.addEventListener('mousedown', startDrag);
+      if (header) header.addEventListener('mousedown', startDrag);
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX));
+        const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY));
+        barEl.style.left = x + 'px'; barEl.style.top = y + 'px';
+      });
+      document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
+    }
+  })()`
+
+  const inject = (): void => {
+    void win.webContents.executeJavaScript(INJECT).catch(() => {})
+  }
+  win.webContents.on('did-finish-load', () => {
+    setTimeout(inject, 500)
+  })
+
+  return new Promise<{
+    ok: boolean
+    consoleJwt?: string
+    accountId?: string
+    models?: VolcengineFreeVideoModel[]
+    source?: 'console' | 'fallback'
+    error?: string
+  }>((resolve) => {
+    let finished = false
+    let renewTimeout: NodeJS.Timeout | null = null
+    // 额度同步：记开始时间 + 累积「最新一次抓到」的结果。开通管理页为虚拟列表，首屏只渲染顶部卡片（pro），
+    // 若首命中就返回，底部的 wan/lite 卡还没被自动滚动渲染出来 → 永远漏卡。故先累积、稳定后再返回。
+    const winStart = Date.now()
+    let syncLatest:
+      | { consoleJwt?: string; accountId?: string | null; models: VolcengineFreeVideoModel[]; signature: string }
+      | null = null
+    let syncStableCount = 0
+    const done = (result: {
+      ok: boolean
+      consoleJwt?: string
+      accountId?: string
+      models?: VolcengineFreeVideoModel[]
+      source?: 'console' | 'fallback'
+      error?: string
+    }): void => {
+      if (finished) return
+      finished = true
+      clearInterval(pollTimer)
+      if (renewTimeout) clearTimeout(renewTimeout)
+      if (!win.isDestroyed()) win.destroy()
+      loginWindows.delete(winKey)
+      resolve(result)
+    }
+    win.on('closed', () => {
+      clearInterval(pollTimer)
+      if (renewTimeout) clearTimeout(renewTimeout)
+      try {
+        void win.webContents
+          .executeJavaScript('clearInterval(window.__VF_SCAN__);clearInterval(window.__VF_SCAN2__)')
+          .catch(() => {})
+      } catch {}
+      if (loginWindows.get(winKey) === win) loginWindows.delete(winKey)
+      if (!finished) {
+        finished = true
+        resolve({ ok: false, error: '窗口已关闭' })
+      }
+    })
+
+    if (quiet) {
+      renewTimeout = setTimeout(() => {
+        if (syncModels) {
+          // 额度同步超时：说明未抓到开通管理页额度（登录态失效/页面未渲染/CSP 阻断）。以「成功但无新数据」返回，
+          // 由调用方保留旧 models，避免误把额度清空；仅在非同步场景把超时视为失败（续期需明确失败以便重试）。
+          if (!win.isDestroyed()) {
+            void win.webContents
+              .executeJavaScript(
+                `JSON.stringify({url: location.href, body:(document.body&&document.body.innerText||'').slice(0,600), login:/登录|扫码|二维码|手机号|密码/.test((document.body&&document.body.innerText||'')), vf:(window.__VF_MODELS__||[]).length, submit:!!window.__VF_SUBMIT__})`
+              )
+              .then((s) => logVolcSync(`SYNC_TIMEOUT page=${s}`))
+              .catch((e) => logVolcSync(`SYNC_TIMEOUT peek_err=${e}`))
+          }
+          done({ ok: true, source: 'fallback' })
+        } else {
+          done({ ok: false, error: '静默续期超时：控制台登录态可能已失效，请在厂商页手动刷新账号' })
+        }
+      }, VOLC_QUIET_RENEW_TIMEOUT_MS)
+    }
+
+    const pollTimer = setInterval(() => {
+      if (win.isDestroyed()) return
+      if (quiet) {
+        // 额度同步模式（静默）：无需注入条点击，等开通管理页抓到免费额度卡片后，累积最新 models，
+          // 直到抓取结果连续稳定（自动滚动已滚到底部、末端 wan/lite 卡也收录）或达到最大等待即可返回。
+        if (syncModels) {
+          // 页内心跳快照：无论是否抓到卡片，每轮都回吐一次页面状态，用于定位「为何 __VF_MODELS__ 为空」
+          //（登录墙？开通管理页未渲染？CSP 阻断注入？）。在线则记录，不阻塞主探测流程。
+          void win.webContents
+            .executeJavaScript(
+              `JSON.stringify({url: location.href, t:(document.body&&document.body.innerText||'').replace(/\\s+/g,' ').slice(0,400), login:/登录|扫码|二维码|手机号|密码/.test((document.body&&document.body.innerText||'')), vf:(window.__VF_MODELS__||[]).length, vfIds:(window.__VF_MODELS__||[]).map(m=>m.name).join(','), injected:!!window.__QUOTA_FLOW_VOLC__, submit:!!window.__VF_SUBMIT__, scroller:(function(){var n=0,b=0;try{var all=document.querySelectorAll('*');for(var i=0;i<all.length;i++){var e=all[i];if(e.scrollHeight>e.clientHeight+20){n++;if(e.scrollHeight>e.clientHeight*2)b++;}};return n+'/'+b;}catch(_){return 'err';}})(), cards:document.querySelectorAll('[class*=card],[class*=Card],[class*=item]').length,
+sample:(function(){
+  var out=[];
+  try{
+    var els=document.querySelectorAll('*');
+    for(var i=0;i<els.length&&out.length<3;i++){
+      var e=els[i];
+      var tt=(e.textContent||'').replace(/\\s+/g,' ').trim();
+      if(tt.length<260&&tt.length>4&&/token|tok|已开通|未开通|开通|剩余|剩|免费/.test(tt)){
+        // 近似卡片：文本短且含额度/开通关键词
+        out.push(tt.slice(0,160));
+      }
+    }
+  }catch(_){}
+  return out;
+})(), rows:(function(){
+  // 可视化模型（wan / doubao-seedance）在表格深处，逐屏滚动后应整行呈现（含状态列）。
+  // 这里专门输出含 wan/seedance 模型名的行全文（截取），以核对开通状态与额度字段格式。
+  var out=[];
+  try{
+    var cells=document.querySelectorAll('table tr, [role=row], [class*=Row]');
+    for(var i=0;i<cells.length;i++){
+      var c=cells[i];
+      var ct=(c.textContent||'').replace(/\s+/g,' ').trim();
+      if(ct.length<=6||!/[Ww]an|seedance|Seedance|doubao-seedance/.test(ct))continue;
+      if(out.length>=6)break;
+      out.push(ct.slice(0,220));
+    }
+  }catch(_){}
+  return out;
+})(), pag:(function(){
+  // 视觉模型表格为分页结构，wan 在第二页。抓分页控件（文本/容器/按钮）还原「下一页」等结构以便翻页。
+  var out=[];
+  try{
+    var t=document.body&&document.body.innerText||'';
+    // 形如「1 / 10 页」「共 2 页」「第 1 页」的总页数文本
+    var m=t.match(/[共第]?\\s*\\d+\\s*\\/\\s*\\d+\\s*[页共]?/g);
+    if(m){out.push('text:'+String(m).slice(0,80));}
+    var m2=t.match(/共\\s*\\d+\\s*页/g);
+    if(m2){out.push('共页:'+m2.slice(0,3).join(','));}
+  }catch(_){}
+  try{
+    // 页面唯一存在的分页容器：火山常用 antd pagination 或自研 li 结构
+    var conts=document.querySelectorAll('[class*=pagination],[class*=Pagination],[class*=page-list],[class*=PageList],[class*=pager] ,ul');
+    var seen=0;
+    for(var i=0;i<conts.length&&seen<2;i++){
+      var ct=(conts[i].textContent||'').replace(/\\s+/g,' ').trim();
+      var cl=String(conts[i].className||'').slice(0,80);
+      if(/[\\d/共页><]/.test(ct)&&ct.length<80){out.push('cont:'+cl+'|'+ct); seen++;}
+    }
+    var btns=document.querySelectorAll('a,button,[role=button]');
+    for(var i=0;i<btns.length;i++){
+      var b=btns[i];
+      var tx=(b.textContent||'').replace(/\\s+/g,' ').trim();
+      var al=(b.getAttribute&&b.getAttribute('aria-label'))||'';
+      var cl=String(b.className||'').slice(0,60);
+      if(/下一页|下一頁|next|>>|^>$/.test(tx)||/next|下一页/i.test(al)||/next|pagination/i.test(cl)){
+        var dis=b.hasAttribute&&b.hasAttribute('disabled')?'[dis]':'';
+        out.push('btn:'+cl+'|'+(al||tx).slice(0,24)+dis);
+        if(out.length>=8)break;
+      }
+    }
+  }catch(_){}
+  return out;
+})(), frames:(function(){
+  var out=[];
+  try{
+    var fs=document.querySelectorAll('iframe,frame');
+    for(var i=0;i<fs.length;i++){
+      var f=fs[i];
+      var fr={src:String(f.src||f.getAttribute('src')||'').slice(0,140)};
+      try{
+        var d=f.contentDocument;
+        fr.t=(d&&d.body&&d.body.innerText||'').replace(/\s+/g,' ').trim().slice(0,200);
+      }catch(_){fr.err='blocked';}
+      out.push(fr);
+    }
+  }catch(_){}
+  return out;
+})()})`
+            )
+            .then((s) => logVolcSync(`SYNC_HB ${Date.now() - winStart}ms page=${s}`))
+            .catch((e) => logVolcSync(`SYNC_HB_err ${e}`))
+          void win.webContents
+            .executeJavaScript('window.__VF_MODELS__ && (window.__VF_MODELS__.length > 0 || Object.keys(window.__VF_TOKEN_LIMITS__).length > 0 || window.__VF_HAS_RATE__) ? [window.__VF_CAPTURED__, window.__VF_ACCOUNT__ || null, window.__VF_MODELS__, window.__VF_SCREEN__ || 0, window.__VF_SAVED_RAW__ ? window.__VF_SAVED_RAW__.slice(0, 3000) : null, (window.__VF_MODELS_RAW__||[]).map(function(r){return r.url;}).filter(function(u,i,a){return a.indexOf(u)===i;}).slice(0,15), window.__VF_MODEL_BODY__ ? window.__VF_MODEL_BODY__.slice(0, 6000) : null, window.__VF_TOKEN_LIMITS__ || {}, window.__VF_HAS_RATE__ || false, window.__VF_PAGE__ || 0, window.__VF_HASMORE__ ? true : false, (window.__VF_PAGEDEBUG__ || []).join(";")] : null')
+            .then((val: unknown) => {
+              if (!val) return
+              const [jwt, accountId, rawModels, screenIdx, rawBody, rawUrls, modelBody, tokenLimits, hasRate, curPage, hasMore, pageDebug] = val as [
+                string | null,
+                string | null,
+                Array<{ name: string; remaining?: number; total?: number; activated?: boolean }>,
+                number,
+                string | null,
+                string[] | null,
+                string | null,
+                Record<string, { tokenLimit: number; currentUsage: number }>,
+                boolean,
+                number,
+                boolean,
+                string
+              ]
+              // 接口原始响应抓取：优先用接口 JSON 解析模型额度的开通状态，DOM 卡片只是兜底。
+              if (Array.isArray(rawUrls) && rawUrls.length > 0) {
+                logVolcSync(`SYNC_RAWURLS ${rawUrls.join(' | ')}`)
+              }
+              if (typeof modelBody === 'string' && modelBody.length > 80 && modelBody !== rawBody) {
+                logVolcSync(`SYNC_MODELBODY ${modelBody.slice(0, 6000)}`)
+              }
+              if (typeof rawBody === 'string' && rawBody.length > 80) {
+                logVolcSync(`SYNC_RAW sample=${rawBody.slice(0, 2200)}`)
+              }
+              // 接口级模型：ListModelTokenLimit 的 TokenLimit 即每个已开通模型的免费总额度。
+              // 换算为与目录一致的单位（火山 TokenLimit 单位是 token），remaining = TokenLimit - currentUsage。
+              const tokenNames = Object.keys(tokenLimits || {})
+              if (tokenNames.length > 0) {
+                logVolcSync(
+                  `SYNC_TOKENS ${tokenNames
+                    .map((n) => `${n}:${tokenLimits[n].tokenLimit}/used${tokenLimits[n].currentUsage}`)
+                    .join(' | ')}`
+                )
+                // 把接口真实额度 upsert 进 rawModels（副本），供下方 capture 合并，保证已开通模型不被
+                // 目录 fallback 显示「待开通」。随后继续走 capture/稳定收敛，不做 return。
+                for (const name of tokenNames) {
+                  const tl = tokenLimits[name]
+                  const existing = rawModels.find((m) => m.name === name)
+                  if (existing) {
+                    existing.remaining = Math.max(0, tl.tokenLimit - tl.currentUsage)
+                    existing.total = tl.tokenLimit
+                    existing.activated = true
+                  } else {
+                    rawModels.push({
+                      name,
+                      remaining: Math.max(0, tl.tokenLimit - tl.currentUsage),
+                      total: tl.tokenLimit,
+                      activated: true
+                    })
+                  }
+                }
+              }
+              const captured = captureVolcengineFreeVideoModels(rawModels)
+              if (captured.source !== 'console') return
+              // 与上一轮抓到的结果比较，用于判断是否已稳定（虚拟列表滚到底、不再新增/变化卡片）
+              const sig = captured.models
+                .map((m) => `${m.id}:${m.freeQuota?.remaining ?? '__'}:${m.activated ? 'T' : 'F'}`)
+                .join(',')
+              if (syncLatest && syncLatest.signature === sig) {
+                syncStableCount++
+              } else {
+                syncStableCount = 1
+                syncLatest = { consoleJwt: undefined, accountId, models: captured.models, signature: sig }
+                if (typeof jwt === 'string' && jwt) syncLatest.consoleJwt = jwt
+              }
+              console.log(`[volc-sync] 额度抓取中 ${captured.models.map((m) => m.id).join(',')} stable=${syncStableCount} screen=${screenIdx}`)
+              // 收敛：确保已渐进滚动足够多屏（到底部模型已渲染）后再按「连续稳定」返回。
+              // 首屏就有 3D 免费模型，若不要求滚屏会过早返回、漏掉深处 wan/seedance1.0。
+              const scrolledEnough = typeof screenIdx === 'number' && screenIdx >= 4
+              const morePages = !!hasMore
+              // 收敛：已尽力翻页（无下一页可点）且结果稳定 3 轮；或翻页/累积超 18s 兜底返回。
+              // 不再仅凭 8s 强收（会让停在第一页的稳定签名提前返回、漏掉第二页的 wan）。
+              if (
+                (scrolledEnough && syncStableCount >= 3 && !morePages) ||
+                (scrolledEnough && Date.now() - winStart >= 18000)
+              ) {
+                logVolcSync(
+                  `SYNC_HIT models=${sig.slice(0, 400)} raw=${rawModels.length} stable=${syncStableCount} screen=${screenIdx} page=${curPage} more=${hasMore ? true : false} pgdb=${pageDebug || ''}`
+                )
+                done({
+                  ok: true,
+                  consoleJwt: syncLatest.consoleJwt,
+                  accountId: typeof syncLatest.accountId === 'string' ? syncLatest.accountId : undefined,
+                  models: syncLatest.models,
+                  source: 'console'
+                })
+              }
+            })
+            .catch(() => {})
+          return
+        }
+        void win.webContents
+          .executeJavaScript('window.__VF_CAPTURED__ || null')
+          .then((jwt: unknown) => {
+            if (typeof jwt !== 'string' || !jwt) return
+            if (oldConsoleJwt && jwt === oldConsoleJwt.trim()) return
+            done({ ok: true, consoleJwt: jwt })
+          })
+          .catch(() => {})
+        return
+      }
+      void win.webContents
+        .executeJavaScript('window.__VF_SUBMIT__ ? [window.__VF_STATE__, window.__VF_CAPTURED__, (window.__VF_ACCOUNT__ || (function(){try{return window.localStorage.getItem(\'qf:volc:account\')||null}catch(_){return null}})()), window.__VF_MODELS__ || [], (function(){try{return window.localStorage.getItem(\'qf:volc:account\')||null}catch(_){return \'e\'}})() ] : null')
+        .then((val: unknown) => {
+          if (!val) return
+          const [state, jwt, accountId, rawModels, lsVal] = val as [
+            string,
+            string | null,
+            string | null,
+            Array<{ name: string; remaining?: number; total?: number }>,
+            string | null
+          ]
+          // 绑定诊断：accountId 可能来自页面全局 __VF_ACCOUNT__，或整页跳转后从 localStorage 恢复读取；
+          // 两者都空才能判定绑定时确未抓到账号 id（否则是链路其它环节丢的）
+          logVolcSync(
+            `CAPTURE_SUBMIT state=${state} accountId=${accountId ? 'YES' : 'NO'} ls=${(typeof lsVal === 'string' && lsVal) ? 'YES' : 'NO'}`
+          )
+          // 火山方舟控制台走 cookie 会话，通常不产生进入 Authorization 头的三段式 JWT（consoleJwt）。
+          // 故「已获取 key 返回」时不再把缺 JWT 视为失败：绑定只需 API Key，consoleJwt 作为可选增强，
+          // 捕获到则带回（供未来额度接口探测），捕获不到也未空返回值正常继续。
+          // 只有当既无 JWT 也无账号 id（连账号上下文都没抓到）才提示未完成，避免把已抓到的
+          // accountId/models 因 state=empty（无 JWT 的正常态）误丢弃，导致绑定拿不到账号级去重键。
+          if (state !== 'ok' && !accountId) {
+            done({ ok: false, error: '请在登录火山方舟控制台并复制 API Key 后点击返回' })
+            return
+          }
+          // 「绑定即抓模型」：把控制台页面抓到的免费 Seedance 条目规范化，回退内置目录。
+          const captured = captureVolcengineFreeVideoModels(rawModels)
+          const label = captured.models.map((m) => m.id).join(',') || '无'
+          if (captured.source === 'console') {
+            console.log(`[volc-caps] 免费视频模型清单（控制台抓取）：${label}`)
+          } else {
+            console.log(`[volc-caps] 免费视频模型清单（内置目录回退）：${label}; 抓取原始条目=${rawModels.length}`)
+          }
+          logVolcSync(
+            `CAPTURE_RETURN state=ok accountId=${typeof accountId === 'string' && accountId ? 'YES' : 'NO'}`
+          )
+          done({
+            ok: true,
+            consoleJwt: typeof jwt === 'string' && jwt ? jwt : undefined,
+            accountId: typeof accountId === 'string' && accountId ? accountId : undefined,
+            models: captured.models,
+            source: captured.source
+          })
+        })
+        .catch(() => {})
+    }, 700)
+  })
+}
+
 let registered = false
 
 export function initProviders(): void {
@@ -1294,7 +2096,16 @@ export function initProviders(): void {
         fingerprint =
           providerId === 'zhipu'
             ? await zhipuAccountFingerprint(plain)
-            : fingerprintFor(providerId, plain.trim())
+            : providerId === 'volcengine'
+              ? await volcengineAccountFingerprint(plain)
+              : fingerprintFor(providerId, plain.trim())
+        // 火山方舟去重诊断：确认 accountId 是否进链路、指纹是「账号级」还是退化成「Key 哈希」
+        if (providerId === 'volcengine') {
+          const { accountId } = decodeVolcenginePayload(plain)
+          logVolcSync(
+            `ENC_VOLC accountId=${accountId ? 'YES' : 'NO'} fp_level=${fingerprint ? (accountId ? 'account' : 'key-hash') : 'none'}`
+          )
+        }
       }
       return { encrypted, fingerprint }
     } catch {
@@ -1306,26 +2117,28 @@ export function initProviders(): void {
     return healthCheck(providerId, encrypted, typeof keyId === 'string' ? keyId : undefined)
   })
 
-  // API Key 型厂商（智谱）「测试」按钮：解密出 API Key 后调开放平台只读接口校验有效性，不产生费用
-  ipcMain.handle('provider:test-api-key', async (_e, _providerId: string, encrypted: string) => {
+  // API Key 型厂商「测试」按钮：解密出 API Key 后调对应开放平台只读接口校验有效性，不产生费用
+  ipcMain.handle('provider:test-api-key', async (_e, providerId: string, encrypted: string) => {
     try {
       const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
       const { apiKey } = decodeZhipuPayload(plain)
       if (!apiKey) return { ok: false, error: '未解析到 API Key' }
-      return await testZhipuApiKey(apiKey)
+      return providerId === 'volcengine' ? await testVolcengineApiKey(apiKey) : await testZhipuApiKey(apiKey)
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : 'API Key 校验失败' }
     }
   })
 
-  // API Key 型厂商（智谱）真实额度查询：解密后取 apiKey + consoleJwt，调控制台 biz 接口拿资源包余额
-  ipcMain.handle('provider:fetch-quota', async (_e, _providerId: string, encrypted: string) => {
+  // API Key 型厂商真实额度查询：解密后取 apiKey + consoleJwt，调对应控制台接口拿资源包余额
+  ipcMain.handle('provider:fetch-quota', async (_e, providerId: string, encrypted: string) => {
     if (!encrypted) return { ok: false, error: '缺少密钥' }
     try {
       const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
       const { apiKey, consoleJwt } = decodeZhipuPayload(plain)
       if (!apiKey) return { ok: false, error: '未解析到 API Key' }
-      return await fetchZhipuQuota(apiKey, consoleJwt ?? undefined)
+      return providerId === 'volcengine'
+        ? await fetchVolcengineQuota(apiKey, consoleJwt ?? undefined)
+        : await fetchZhipuQuota(apiKey, consoleJwt ?? undefined)
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : '额度查询失败' }
     }
@@ -1336,7 +2149,113 @@ export function initProviders(): void {
     return captureZhipuConsoleSession({ keyId: typeof keyId === 'string' && keyId ? keyId : undefined })
   })
 
-  // 智谱控制台会话状态：按账号 keyId 解密后视 JWT 的 exp 判定 alive / expiring / expired，供自动续期调度参考
+  // 火山方舟控制台会话捕获：按账号 keyId 弹出对应分区控制台登录窗口并捕获访问令牌（consoleJwt）
+  ipcMain.handle('provider:capture-volc-session', async (_e, keyId?: string) => {
+    // 绑定窗口初始落在「开通管理 → 视觉模型」页：该页首屏即调 ListModelChargeItems，其响应
+    // FeaturedImage.BucketName 形如 ark-auto-{accountId}-cn-beijing-default，是「当前登录账号」专有 id，
+    // 注入脚本据此写入 __VF_ACCOUNT__。这样「绑定第二把同账号 API Key」时就能拿到账号级去重键，命中
+    // 「更新已有/新建」提示（对齐智谱 customerId 策略），而不是退化到按 API Key 哈希。
+    // 用户在该页左侧导航切到「API Key 管理」复制 Key 属 SPA 内路由，__VF_ACCOUNT__ 得以保留。
+    return captureVolcEngineConsoleSession({
+      keyId: typeof keyId === 'string' && keyId ? keyId : undefined,
+      targetUrl: VOLC_OPEN_MANAGEMENT_URL
+    })
+  })
+
+  // 火山方舟控制台会话状态：视 JWT 的 exp 判定 alive / expiring / expired
+  ipcMain.handle(
+    'provider:volc-session-status',
+    async (_e, _providerId: string, keyId: string, encrypted: string) => {
+      if (!encrypted) return { hasSession: false }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { consoleJwt } = decodeVolcenginePayload(plain)
+        if (!consoleJwt) return { hasSession: false }
+        const expMs = jwtExpiryMs(consoleJwt)
+        if (expMs === null) return { hasSession: true, status: 'alive', expMs: null, remainingMs: null }
+        const remainingMs = expMs - Date.now()
+        const status = remainingMs <= 0 ? 'expired' : remainingMs <= 10 * 60 * 1000 ? 'expiring' : 'alive'
+        return { hasSession: true, status, expMs, remainingMs }
+      } catch {
+        return { hasSession: false }
+      }
+    }
+  )
+
+  // 火山方舟控制台会话静默续期：隐藏窗口复用该账号分区登录态 cookie 重新捕获新 JWT，成功则重建加密负载
+  ipcMain.handle(
+    'provider:volc-renew-session',
+    async (_e, _providerId: string, keyId: string, encrypted: string) => {
+      if (!encrypted) return { ok: false, reason: 'no-secret', error: '缺少密钥' }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { apiKey, consoleJwt, accountId } = decodeVolcenginePayload(plain)
+        if (!apiKey) return { ok: false, reason: 'no-key', error: '未解析到 API Key' }
+        const res = await captureVolcEngineConsoleSession({
+          quiet: true,
+          keyId: typeof keyId === 'string' && keyId ? keyId : undefined,
+          oldConsoleJwt: consoleJwt ?? null
+        })
+        if (!res.ok || !res.consoleJwt) {
+          return { ok: false, reason: 'capture-failed', error: res.error ?? '静默续期失败' }
+        }
+        const newJwt = res.consoleJwt
+        // 保留已知 accountId；静默续期若有新捕获的账号 id 则一并更新（保证去重键稳定）
+        const newAccountId = res.accountId ?? accountId ?? null
+        const newPlain = JSON.stringify({ v: 1, apiKey, consoleJwt: newJwt, accountId: newAccountId })
+        const newEncrypted = safeStorage.encryptString(newPlain).toString('base64')
+        const expMs = jwtExpiryMs(newJwt)
+        const remainingMs = expMs === null ? null : expMs - Date.now()
+        return { ok: true, encrypted: newEncrypted, expMs, remainingMs }
+      } catch (e) {
+        return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '静默续期失败' }
+      }
+    }
+  )
+
+  // 火山方舟额度同步：后台打开「开通管理」页（复用该账号分区登录态），静默抓取最新免费模型额度/开通状态，
+  // 成功则重建加密负载（更新 models + 最新 consoleJwt/accountId）返回 newEncrypted，供渲染层落库并刷新展示。
+  ipcMain.handle(
+    'provider:volc-sync-models',
+    async (_e, _providerId: string, keyId: string, encrypted: string) => {
+      if (!encrypted) return { ok: false, reason: 'no-secret', error: '缺少密钥' }
+      logVolcSync(`SYNC_START key=${keyId}`)
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { apiKey, consoleJwt, accountId } = decodeVolcenginePayload(plain)
+        if (!apiKey) return { ok: false, reason: 'no-key', error: '未解析到 API Key' }
+        const res = await captureVolcEngineConsoleSession({
+          quiet: true,
+          syncModels: true,
+          keyId: typeof keyId === 'string' && keyId ? keyId : undefined,
+          oldConsoleJwt: consoleJwt ?? null,
+          targetUrl: VOLC_OPEN_MANAGEMENT_URL
+        })
+        // 成功且抓到了额度卡片 → 用最新 models + 最新 JWT 重建负载回库
+        if (res.ok && res.source === 'console' && Array.isArray(res.models) && res.models.length > 0) {
+          const newJwt = res.consoleJwt ?? consoleJwt ?? null
+          const newAccountId = res.accountId ?? accountId ?? null
+          const newPlain = JSON.stringify({ v: 1, apiKey, consoleJwt: newJwt, accountId: newAccountId, models: res.models })
+          const newEncrypted = safeStorage.encryptString(newPlain).toString('base64')
+          // 同步后回填账号级指纹（对齐智谱 customerId 策略）：一旦抓到该账号稳定 id，就重算指纹供渲染层落库，
+          // 让同账号多把 API Key 在库里共享同一 account_fingerprint，后续绑定即可命中「更新已有/新建」去重提示。
+          let newFingerprint: string | null = null
+          if (newAccountId) {
+            newFingerprint = await volcengineAccountFingerprint(newPlain)
+          }
+          console.log(`[volc-sync] 回写 models=${res.models.map((m) => m.id).join(',')} accountId=${newAccountId ?? 'NO'}`)
+          logVolcSync(`SYNC_BACKFILL key=${keyId} accountId=${newAccountId ? 'YES' : 'NO'} fp=${newFingerprint ? 'account' : (accountId ? 'account' : 'key-hash')}`)
+          logVolcSync(`SYNC_WRITEBACK key=${keyId} models=${res.models.map((m) => m.id).join(',')} accountId=${newAccountId ? 'YES' : 'NO'} fp=${newFingerprint ? 'account' : 'key-hash'}`)
+          return { ok: true, encrypted: newEncrypted, models: res.models, accountFingerprint: newFingerprint }
+        }
+        // 同步超时/未抓到（登录态失效或页面未就绪）：保留旧额度，不报错，交由调用方提示可稍后手动刷新
+        logVolcSync(`SYNC_PRESERVED key=${keyId} ok=${res.ok} source=${(res as { source?: string }).source ?? '?'}`)
+        return { ok: true, preserved: true }
+      } catch (e) {
+        return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '额度同步失败' }
+      }
+    }
+  )
   ipcMain.handle(
     'provider:zhipu-session-status',
     async (_e, _providerId: string, keyId: string, encrypted: string) => {

@@ -9,7 +9,8 @@ export const PROVIDER_LABEL: Record<string, string> = {
   dola: 'Dola',
   kling: '可灵',
   hailuo: '海螺',
-  zhipu: '智谱（bigmodel）'
+  zhipu: '智谱（bigmodel）',
+  volcengine: '火山方舟'
 }
 
 export const MODELS: Record<string, string[]> = {
@@ -21,7 +22,8 @@ export const MODELS: Record<string, string[]> = {
   dola: ['Dreamina Seedance 2.5', 'Dreamina Seedance 2.0 Fast', 'Dreamina Seedance 1.0'],
   kling: ['可灵-标准', '可灵-大师'],
   hailuo: ['海螺-标准'],
-  zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2']
+  zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2'],
+  volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v', 'doubao-seedance-1-0-lite-i2v']
 }
 
 /** 智谱模型展示价格（与主进程 api-branch 保持一致） */
@@ -47,6 +49,23 @@ export function zhipuModelDurations(model: string): number[] {
   return ZHIPU_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
 }
 
+/** 火山方舟（volcengine）免费视频模型：有免费推理额度，Model ID 为平台固定目录（与 docs 实测一致） */
+export const VOLC_MODEL_PRICE: Record<string, string> = {
+  'doubao-seedance-1-0-pro-250528': '免费',
+  'doubao-seedance-1-5-pro-251215': '免费',
+  'doubao-seedance-1-0-pro-fast-251015': '免费',
+  'doubao-seedance-1-0-lite-t2v': '免费',
+  'doubao-seedance-1-0-lite-i2v': '免费'
+}
+
+/** 火山方舟各模型固定生成时长（秒）；以相机生产链路为准，未收录模型走默认档 */
+export const VOLC_MODEL_DURATIONS: Record<string, number[]> = {}
+
+/** 火山方舟按模型取有效时长；未收录回退默认档 */
+export function volcModelDurations(model: string): number[] {
+  return VOLC_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
+}
+
 export interface DurationOption {
   value: number
   label: string
@@ -59,6 +78,13 @@ const DURATION_ORDER = [5, 10, 15] as const
 
 /** 千问视频生成模式按模型限定；本轮不再给 qwenwan 暴露文生/图生视频 */
 export function providerModeOptions(provider: string, model = ''): Array<{ value: string; label: string }> {
+  if (provider === 'volcengine') {
+    // 火山免费视频模型支持文生视频 + 图生视频（Seedance 均有免费额度）
+    return [
+      { value: 'text2video', label: '文生视频' },
+      { value: 'img2video', label: '图生视频' }
+    ]
+  }
   if (provider === 'zhipu') {
     switch (model) {
       case 'cogvideox-flash':
@@ -194,6 +220,13 @@ export function ratioOptions(provider: string): Array<{ value: string; label: st
 }
 
 export function uploadHint(provider: string, mode: string): string {
+  if (provider === 'volcengine') {
+    const map: Record<string, string> = {
+      img2video: '图生视频需上传 1 张首帧图片',
+      text2video: '文生视频无需上传素材'
+    }
+    return map[mode] ?? '文生视频无需上传素材'
+  }
   if (provider === 'zhipu') {
     const map: Record<string, string> = {
       img2video: '生视频需上传 1 张首帧图片',
@@ -225,6 +258,10 @@ export function computeCost(
   resolution: string
 ): CostResult {
   const d = DURATION_POINT[duration] ?? 0
+  if (provider === 'volcengine') {
+    const price = VOLC_MODEL_PRICE[model] ?? '免费'
+    return { text: price, who: model + ' · ' + duration + 's' }
+  }
   if (provider === 'zhipu') {
     const price = ZHIPU_MODEL_PRICE[model] ?? '免费'
     return { text: price, who: model + ' · ' + duration + 's' }

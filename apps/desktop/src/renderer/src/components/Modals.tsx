@@ -8,6 +8,7 @@ import { ensureFreshSession } from '../auth/session'
 import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
 import type { TeamContext } from '@quota-flow/db-supabase'
+import type { VolcengineCapturedModel } from '../../../preload'
 import desktopPackage from '../../../../package.json'
 
 export interface UpdaterStatusView {
@@ -662,6 +663,10 @@ export function AddProviderModal({
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
   // 智谱控制台会话令牌：用户经「获取 API Key」捕获后暂存，保存时并入加密 payload 作为账号级去重依据
   const [consoleJwt, setConsoleJwt] = useState<string | null>(null)
+  // 火山方舟账号标识：从控制台接口捕获，保存时并入 payload 作为账号级去重依据
+  const [volcAccountId, setVolcAccountId] = useState<string | null>(null)
+  // 火山方舟绑定时控制台抓到的免费视频模型（含每账号 token 额度），随加密负载持久化供「查看模型」展示
+  const [volcModels, setVolcModels] = useState<VolcengineCapturedModel[] | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -889,9 +894,13 @@ export function AddProviderModal({
     setStatus('logging')
     try {
       const trimmed = apiKey.trim()
-      // 智谱：如有已捕获的控制台会话，并入 `{v:1,apiKey,consoleJwt}` 结构化 payload，
-      // 供主进程解析出 customerId 生成「账号级」去重指纹（同账号不同 Key 去重）。
-      const raw = providerId === 'zhipu' && consoleJwt ? JSON.stringify({ v: 1, apiKey: trimmed, consoleJwt }) : trimmed
+      // 智谱 / 火山方舟：如有已捕获的控制台会话令牌(consoleJwt)或账号标识(volcAccountId)，并入结构化 payload，
+      // 供主进程生成「账号级」去重指纹（同账号不同 Key 去重）。
+      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine'
+      const raw =
+        isApiProvider && (consoleJwt || volcAccountId || (providerId === 'volcengine' && volcModels?.length))
+          ? JSON.stringify({ v: 1, apiKey: trimmed, consoleJwt, accountId: volcAccountId, models: providerId === 'volcengine' ? (volcModels ?? []) : undefined })
+          : trimmed
       const enc = await window.api.providers.encrypt(selected.providerId, raw)
       if (!enc.encrypted) {
         setStatus('idle')
@@ -935,20 +944,38 @@ export function AddProviderModal({
     }
   }
 
-  // 智谱「获取 API Key」：打开智谱控制台会话窗口以捕获 consoleJwt；用户在窗口内复制 API Key
+  // 智谱 / 火山方舟「获取 API Key」：打开对应控制台会话窗口以捕获 consoleJwt；用户在窗口内复制 API Key
   const openGetApiKey = async (): Promise<void> => {
     setError(null)
     setNotice(null)
     try {
-      // 智谱按账号绑定：先生成绑定 keyId（作为控制台分区与 DB 记录 id），确保登录态存入该账号自己的分区、多账号互不串号
+      // 按账号绑定：先生成绑定 keyId（作为控制台分区与 DB 记录 id），确保登录态存入该账号自己的分区、多账号互不串号
       let bindId = loginTempId
-      if (providerId === 'zhipu' && !bindId) {
+      if ((providerId === 'zhipu' || providerId === 'volcengine') && !bindId) {
         bindId = crypto.randomUUID()
         setLoginTempId(bindId)
       }
-      const res = await window.api.providers.captureZhipuSession(providerId === 'zhipu' ? bindId ?? undefined : undefined)
-      if (res.ok && res.consoleJwt) setConsoleJwt(res.consoleJwt)
-      if (!res.ok && res.error) setError(res.error)
+      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine'
+      // 火山方舟走独立的会话捕获入口（partition/注入与智谱隔离）
+      const volcRes = providerId === 'volcengine'
+        ? await window.api.providers.captureVolcengineSession(bindId ?? undefined)
+        : null
+      const finalRes: { ok: boolean; consoleJwt?: string; accountId?: string; models?: VolcengineCapturedModel[]; source?: 'console' | 'fallback'; error?: string } = volcRes
+        ?? (isApiProvider
+          ? await window.api.providers.captureZhipuSession(bindId ?? undefined)
+          : { ok: false, error: '该厂商不支持控制台会话捕获' })
+      if (finalRes.ok) {
+        if (finalRes.consoleJwt) setConsoleJwt(finalRes.consoleJwt)
+        if (finalRes.accountId) setVolcAccountId(finalRes.accountId)
+        // 「绑定即抓模型」：火山方舟在控制台页面抓到免费视频模型清单，提示用户并暂存随负载持久化
+        if (providerId === 'volcengine' && Array.isArray(finalRes.models) && finalRes.models.length > 0) {
+          const n = finalRes.models.length
+          setVolcModels(finalRes.models)
+          setNotice(finalRes.source === 'console' ? `已识别 ${n} 个免费视频模型（控制台抓取）` : `已识别 ${n} 个免费视频模型`)
+        }
+      } else if (finalRes.error) {
+        setError(finalRes.error)
+      }
     } catch (e) {
       setError(errMsg(e))
     }
@@ -1259,7 +1286,7 @@ export function AddProviderModal({
               <button className="btn-sm" onClick={() => void testApiKeyInput()} disabled={saving}>
                 测试 API Key
               </button>
-              {providerId === 'zhipu' && (
+              {(providerId === 'zhipu' || providerId === 'volcengine') && (
                 <button className="btn-sm primary" onClick={() => void openGetApiKey()} disabled={saving}>
                   获取 API Key
                 </button>

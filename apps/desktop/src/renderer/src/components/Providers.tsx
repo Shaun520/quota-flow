@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconChevron, IconInfo, IconRefresh, ProviderIconMark } from './icons'
+import { IconChevron, IconClose, IconInfo, IconRefresh, ProviderIconMark } from './icons'
 import { AddProviderModal } from './Modals'
 import Pagination from './Pagination'
 import { EmptyState } from './EmptyState'
@@ -11,6 +11,128 @@ import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import type { ApiModelInfo } from '../../../preload'
 
 const PAGE_SIZE = 10
+
+/** 顶部额度汇总条
+ * - volcengine：聚合免费模型的额度（保持火山方舟原有展示，单位 tokens）
+ * - zhipu（及其他）：展示账号级共用额度（付费模型共用），单位按厂商配置
+ */
+function ModelsQuotaSummary({
+  providerId,
+  models,
+  quota,
+  unit = 'tokens',
+}: {
+  providerId: string
+  models: ApiModelInfo[]
+  quota: { available: boolean; total: number; remaining: number } | null
+  unit?: string
+}) {
+  if (providerId === 'volcengine') {
+    // 火山方舟：聚合免费模型额度
+    const freeModels = models.filter((m) => m.cost === 0 && m.freeQuota?.total)
+    const total = freeModels.reduce((sum, m) => sum + (m.freeQuota?.total ?? 0), 0)
+    const remaining = freeModels.reduce((sum, m) => sum + (m.freeQuota?.remaining ?? 0), 0)
+    if (total <= 0) return null
+    const pct = Math.min(100, Math.max(0, (remaining / total) * 100))
+    return (
+      <div className="models-summary">
+        <div className="models-summary-bar">
+          <div className="models-summary-bar-fill" style={{ width: `${pct}%` }} />
+        </div>
+        <div className="models-summary-text">
+          <span className="models-summary-value">
+            {remaining.toLocaleString()} <span className="models-summary-unit">tokens</span>
+          </span>
+          <span className="models-summary-sep">/</span>
+          <span className="models-summary-total">{total.toLocaleString()}</span>
+        </div>
+      </div>
+    )
+  }
+  // 其他厂商（智谱等）：账号级共用额度
+  if (!quota || !quota.available) return null
+  const pct = Math.min(100, Math.max(0, (quota.remaining / Math.max(1, quota.total)) * 100))
+  return (
+    <div className="models-summary">
+      <div className="models-summary-bar">
+        <div className="models-summary-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="models-summary-text">
+        <span className="models-summary-label">共用额度</span>
+        <span className="models-summary-value">
+          {quota.remaining.toLocaleString()} <span className="models-summary-unit">{unit}</span>
+        </span>
+        <span className="models-summary-sep">/</span>
+        <span className="models-summary-total">{quota.total.toLocaleString()}</span>
+      </div>
+    </div>
+  )
+}
+
+/** 单行模型用量
+ * - volcengine：免费模型显示自身免费额度（含待开通徽章），单位 tokens
+ * - zhipu 等：免费模型显示自身免费额度；付费模型显示账号级共用额度，单位按厂商配置
+ */
+function ModelQuotaCell({
+  providerId,
+  model,
+  sharedQuota,
+  unit = 'tokens',
+}: {
+  providerId: string
+  model: ApiModelInfo
+  sharedQuota: { available: boolean; total: number; remaining: number } | null
+  unit?: string
+}) {
+  const isFree = model.cost === 0
+  const freeQuota = model.freeQuota
+
+  if (providerId === 'volcengine') {
+    // 火山方舟：免费模型 + 待开通徽章
+    const activated = model.activated !== false
+    if (!activated) {
+      const quotaText = freeQuota?.total
+        ? `${typeof freeQuota.remaining === 'number' ? freeQuota.remaining.toLocaleString() : '—'} / ${freeQuota.total.toLocaleString()} tokens`
+        : '—'
+      return (
+        <span className="models-quota-cell" title="未开通该模型，需在火山方舟控制台开通后才会下发免费额度">
+          <span className="badge badge-pending">待开通</span>
+          <span className="models-quota-text models-quota-text--dim">{quotaText}</span>
+        </span>
+      )
+    }
+    if (freeQuota?.total) {
+      return (
+        <span className="models-quota-text">
+          {typeof freeQuota.remaining === 'number' ? freeQuota.remaining.toLocaleString() : '—'} / {freeQuota.total.toLocaleString()} tokens
+        </span>
+      )
+    }
+    return <span className="models-quota-text models-quota-text--dim">— token</span>
+  }
+
+  // 其他厂商（智谱等）
+  if (isFree) {
+    // 免费模型：显示自身额度
+    if (freeQuota?.total) {
+      return (
+        <span className="models-quota-text">
+          {typeof freeQuota.remaining === 'number' ? freeQuota.remaining.toLocaleString() : '—'} / {freeQuota.total.toLocaleString()} {unit}
+        </span>
+      )
+    }
+    return <span className="models-quota-text models-quota-text--dim">—</span>
+  }
+  // 付费模型：共用账号级额度
+  if (sharedQuota?.available) {
+    return (
+      <span className="models-quota-text" title="付费模型共用该额度">
+        共用{sharedQuota.remaining.toLocaleString()} / {sharedQuota.total.toLocaleString()} {unit}
+      </span>
+    )
+  }
+  return <span className="models-quota-text models-quota-text--dim">—</span>
+}
 
 function statusBadge(p: ProviderAgg): { cls: string; label: string } {
   if (!p.enabled) return { cls: 'badge-muted', label: '已停用' }
@@ -31,7 +153,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, setKeyHealth } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -44,11 +166,15 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
   // 「查看模型」弹窗
   const [models, setModels] = useState<ApiModelInfo[] | null>(null)
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsLabel, setModelsLabel] = useState('')
+  const [modelsProviderId, setModelsProviderId] = useState<string>('')
   // 弹窗顶部免费额度用量（该账号真实资源包余额；付费模型共用）
   const [modelsQuota, setModelsQuota] = useState<{ available: boolean; total: number; remaining: number } | null>(null)
   const [modelsUnit, setModelsUnit] = useState('次')
   const wasRefreshing = useRef(false)
+  // 「查看模型」弹窗同步令牌：关闭/重开时忽略过期的异步结果，避免同步完成后弹窗被重新打开
+  const modelsTokenRef = useRef(0)
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok })
@@ -81,21 +207,56 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
     }
   }
 
-  // API Key 型厂商「查看模型」：拉取模型目录
+  // API Key 型厂商「查看模型」：拉取模型目录（火山方舟先静默同步最新免费模型额度/开通状态）
   const handleViewModels = async (providerId: string, keyId: string, accountName: string, unitName: string) => {
+    // 立即弹出弹窗并进入加载态，让火山方舟较慢的静默同步有可见反馈
+    const token = ++modelsTokenRef.current
+    setModels(null)
+    setModelsLabel(accountName)
+    setModelsProviderId(providerId)
+    setModelsQuota(zhipuQuotaOverrides[keyId] ?? null)
+    setModelsUnit(unitName)
+    setModelsLoading(true)
     try {
-      const res = await window.api.providers.apiModels(providerId)
+      let encrypted: string | undefined
+      // 火山方舟：取该账号密钥负载，供主进程读取每模型免费 token 额度
+      if (providerId === 'volcengine') {
+        const svc = getProviderService()
+        if (svc && user) {
+          const secret = await svc.getProviderKeySecret(user.id, keyId)
+          if (secret) encrypted = secret.encrypted_key
+          // 先静默同步该账号最新免费模型额度/开通状态；命中则用重建的加密负载展示最新值
+          const fresh = await refreshVolcengineModelsOnce(keyId)
+          if (fresh) encrypted = fresh
+        }
+      }
+      // 用户在同步期间已关闭弹窗，则丢弃本次结果
+      if (token !== modelsTokenRef.current) return
+      const res = await window.api.providers.apiModels(providerId, encrypted)
+      if (token !== modelsTokenRef.current) return
       if (res.ok && res.models) {
         setModels(res.models)
-        setModelsLabel(accountName)
-        setModelsQuota(zhipuQuotaOverrides[keyId] ?? null)
-        setModelsUnit(unitName)
       } else {
-        showToast(res.error || '无法加载模型目录', false)
+        if (token === modelsTokenRef.current) {
+          showToast(res.error || '无法加载模型目录', false)
+          setModels(null)
+        }
       }
     } catch (e) {
-      showToast(e instanceof Error ? e.message : String(e), false)
+      if (token === modelsTokenRef.current) {
+        showToast(e instanceof Error ? e.message : String(e), false)
+        setModels(null)
+      }
+    } finally {
+      if (token === modelsTokenRef.current) setModelsLoading(false)
     }
+  }
+
+  // 关闭「查看模型」弹窗：同时重置加载态，避免加载中无法关闭
+  const closeModels = () => {
+    modelsTokenRef.current++ // 使在途同步结果失效，防止完成后重新打开弹窗
+    setModels(null)
+    setModelsLoading(false)
   }
 
   useEffect(() => {
@@ -325,45 +486,61 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         />
       )}
 
-      {models && (
-        <div className="modal-overlay" onClick={() => setModels(null)}>
-          <div className="modal" style={{ maxWidth: '560px' }} onClick={(e) => e.stopPropagation()}>
+      {(models || modelsLoading) && (
+        <div className="modal-overlay" onClick={closeModels}>
+          <div className="modal models-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>模型 · {modelsLabel}</h3>
-              <button className="btn-icon" onClick={() => setModels(null)} aria-label="关闭">×</button>
+              <h3>{modelsLabel}</h3>
+              <button className="modal-close" onClick={closeModels} aria-label="关闭">
+                <IconClose size={14} />
+              </button>
             </div>
             <div className="modal-body">
-              <div className="models-free-quota">
-                免费额度
-                {modelsQuota?.available
-                  ? ` ${modelsQuota.remaining} / ${modelsQuota.total} ${modelsUnit}`
-                  : ' —'}
-              </div>
-              <table className="models-table">
-                <thead>
-                  <tr>
-                    <th>模型</th>
-                    <th>用量</th>
-                    <th>价格</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {models.map((m) => (
-                    <tr key={m.model}>
-                      <td><strong>{m.model}</strong></td>
-                      <td>{m.cost === 0 ? '∞' : '—'}</td>
-                      <td>
-                        <span className={'badge ' + (m.cost === 0 ? 'badge-success' : 'badge-pending')}>
-                          {m.priceLabel}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {modelsLoading ? (
+                <div className="models-loading">
+                  <span
+                    className="spinner"
+                    style={{ width: 20, height: 20, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}
+                  />
+                  <span>{modelsProviderId === 'volcengine' ? '正在同步最新免费额度，请稍候…' : '正在加载模型目录，请稍候…'}</span>
+                </div>
+              ) : models ? (
+                <>
+                  <ModelsQuotaSummary providerId={modelsProviderId} models={models} quota={modelsQuota} unit={modelsUnit} />
+                  <table className="models-table">
+                    <thead>
+                      <tr>
+                        <th>模型</th>
+                        <th>用量</th>
+                        <th>价格</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {models.map((m) => (
+                        <tr key={m.model}>
+                          <td className="models-cell-model">
+                            <code className="models-model-code">{m.model}</code>
+                          </td>
+                          <td className="models-cell-quota">
+                            <ModelQuotaCell providerId={modelsProviderId} model={m} sharedQuota={modelsQuota} unit={modelsUnit} />
+                          </td>
+                          <td>
+                            <span
+                              className={'badge ' + (m.cost === 0 ? (m.activated === false ? 'badge-pending' : 'badge-success') : 'badge-pending')}
+                              title={m.activated === false ? '未开通模型，需在火山方舟控制台开通' : undefined}
+                            >
+                              {m.priceLabel}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : null}
             </div>
             <div className="modal-footer">
-              <button className="btn-sm primary" onClick={() => setModels(null)}>关闭</button>
+              <button className="btn-sm primary" onClick={closeModels}>关闭</button>
             </div>
           </div>
         </div>
@@ -575,7 +752,7 @@ function ProviderRow({
                         )}
                       </td>
                       <td>
-                        {!isApiKeyProvider || agg.providerId === 'zhipu' ? (
+                        {!isApiKeyProvider || agg.providerId === 'zhipu' || agg.providerId === 'volcengine' ? (
                           <>
                             <button
                               className="btn-sm"

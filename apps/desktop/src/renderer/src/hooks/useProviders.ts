@@ -180,6 +180,13 @@ export interface ProvidersResult {
     string,
     { hasSession: boolean; status?: 'alive' | 'expiring' | 'expired'; expMs?: number | null; remainingMs?: number | null }
   >
+  /** 火山方舟各账号控制台会话状态（keyId -> alive/expiring/expired），供态展示与自动续期联动 */
+  volcSessionStatuses: Record<
+    string,
+    { hasSession: boolean; status?: 'alive' | 'expiring' | 'expired'; expMs?: number | null; remainingMs?: number | null }
+  >
+  /** 火山方舟额度同步：后台静默抓取该账号最新免费模型额度/开通状态并落库；命中返回新加密负载，未抓到返回 false */
+  refreshVolcengineModelsOnce: (keyId: string) => Promise<string | false>
 }
 
 export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
@@ -318,6 +325,139 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     if (zhipuKeys.length === 0) return
     zhipuKeys.forEach((key) => void fetchZhipuQuotaOnce(key.id))
   }, [user?.id, keys, fetchZhipuQuotaOnce])
+
+  /* ================= 火山方舟（volcengine）：控制台会话状态与静默续期（仿智谱） ================= */
+
+  /** 全局续期进行中标记：控制台会话分区共享，同一时刻只允许一个火山账号续期 */
+  let volcRenewInFlight = false
+  /** keyId -> 该火山账号最近一次续期尝试时间戳（失败节流） */
+  const volcRenewAt = new Map<string, number>()
+  /** 火山各账号控制台会话状态（keyId -> alive/expiring/expired），供态展示与自动续期联动 */
+  const [volcSessionStatuses, setVolcSessionStatuses] = useState<
+    Record<string, { hasSession: boolean; status?: 'alive' | 'expiring' | 'expired'; expMs?: number | null; remainingMs?: number | null }>
+  >({})
+
+  // 单次拉取火山某账号真实额度并写入覆盖（额度接口待探测，接口可用后即生效）；当前查询失败回退本地账本
+  const fetchVolcengineQuotaOnce = useCallback(
+    async (keyId: string): Promise<number | null> => {
+      const svc = getProviderService()
+      if (!svc || !user) return null
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return null
+        const res = await window.api.providers.fetchQuota('volcengine', secret.encrypted_key)
+        if (res.ok && res.quota) return res.quota.remaining
+        return null
+      } catch {
+        return null
+      }
+    },
+    [user]
+  )
+
+  // 对单个火山账号做一次静默续期：成功则用新加密负载落库并重拉真实额度；全局一次只续一个（共享会话分区）
+  const renewVolcSessionOnce = useCallback(
+    async (keyId: string, encrypted: string): Promise<boolean> => {
+      if (volcRenewInFlight) return false
+      volcRenewInFlight = true
+      volcRenewAt.set(keyId, Date.now())
+      try {
+        const res = await window.api.providers.volcRenewSession(keyId, encrypted)
+        if (!res.ok || !res.encrypted) return false
+        const svc = getProviderService()
+        if (svc && user) {
+          await svc.refreshProviderKey(user.id, keyId, {
+            encryptedKey: res.encrypted,
+            healthStatus: 'healthy'
+          })
+        }
+        setVolcSessionStatuses((prev) => ({
+          ...prev,
+          [keyId]: { hasSession: true, status: 'alive', expMs: res.expMs ?? null, remainingMs: res.remainingMs ?? null }
+        }))
+        await fetchVolcengineQuotaOnce(keyId)
+        return true
+      } catch {
+        return false
+      } finally {
+        volcRenewInFlight = false
+      }
+    },
+    [user, fetchVolcengineQuotaOnce]
+  )
+
+  // 火山方舟额度同步：后台复用该账号分区登录态静默抓取最新免费模型额度/开通状态并落库。
+  // 命中（抓到新 models）则用重建的加密负载更新 DB 并返回新 encrypted，供「查看模型」即时展示；
+  // 未抓到（登录态失效/页面未就绪）保留旧值返回 false，不打断调用方。
+  const refreshVolcengineModelsOnce = useCallback(
+    async (keyId: string): Promise<string | false> => {
+      const svc = getProviderService()
+      if (!svc || !user) return false
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return false
+        const res = await window.api.providers.volcSyncModels(keyId, secret.encrypted_key)
+        if (!res.ok || res.preserved || !res.encrypted) return false
+        await svc.refreshProviderKey(user.id, keyId, {
+          encryptedKey: res.encrypted,
+          healthStatus: 'healthy',
+          // 同步回填账号级指纹：抓到的 accountId 稳定后重算指纹入库，同账号多 Key 共享，去重提示才命中
+          accountFingerprint: res.accountFingerprint ?? null
+        })
+        return res.encrypted
+      } catch {
+        return false
+      }
+    },
+    [user]
+  )
+
+  // 扫描所有火山账号的会话状态：命中 expiring / expired 且未到重试节流时，触发一次静默续期并停止本轮
+  const scanVolcSessions = useCallback(async (): Promise<void> => {
+    if (volcRenewInFlight) return
+    const svc = getProviderService()
+    if (!svc || !user) return
+    const now = Date.now()
+    for (const key of keys.filter((k) => k.provider_id === 'volcengine')) {
+      if (now - (volcRenewAt.get(key.id) ?? 0) < ZHIPU_RENEW_RETRY_MS) continue
+      let secret: { encrypted_key: string } | null = null
+      try {
+        secret = await svc.getProviderKeySecret(user.id, key.id)
+      } catch {
+        continue
+      }
+      if (!secret) continue
+      let state
+      try {
+        state = await window.api.providers.volcSessionStatus(key.id, secret.encrypted_key)
+      } catch {
+        continue
+      }
+      setVolcSessionStatuses((prev) => ({ ...prev, [key.id]: state }))
+      if (state.hasSession && (state.status === 'expiring' || state.status === 'expired')) {
+        await renewVolcSessionOnce(key.id, secret.encrypted_key)
+        return
+      }
+    }
+  }, [user, keys, renewVolcSessionOnce])
+
+  // 启动火山会话状态扫描：初始化立即扫一次，之后周期轮询；账号切换时重建
+  useEffect(() => {
+    if (!user) return
+    void scanVolcSessions()
+    const t = setInterval(() => {
+      void scanVolcSessions()
+    }, ZHIPU_SESSION_SCAN_MS)
+    return () => clearInterval(t)
+  }, [user?.id, scanVolcSessions])
+
+  // 初始化 / 刷新时主动拉取火山各账号真实额度
+  useEffect(() => {
+    if (!user || keys.length === 0) return
+    const volcKeys = keys.filter((k) => k.provider_id === 'volcengine')
+    if (volcKeys.length === 0) return
+    volcKeys.forEach((key) => void fetchVolcengineQuotaOnce(key.id))
+  }, [user?.id, keys, fetchVolcengineQuotaOnce])
 
   // 会话内覆盖某账号健康状态（API Key 测试成功/失败后即时反映，不落库）
   const setKeyHealth = useCallback((keyId: string, status: string) => {
@@ -494,6 +634,12 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         void refreshZhipuQuota(payload.zhipuRefreshKeyId)
         return
       }
+      // 火山方舟生成完成：静默同步该账号免费模型真实剩余额度（开通管理页抓取），并刷新账本
+      if (payload.volcRefreshKeyId) {
+        void refreshVolcengineModelsOnce(payload.volcRefreshKeyId)
+        // 同步后重拉该账号真实额度，让页面剩余展示即时生效
+        void fetchVolcengineQuotaOnce(payload.volcRefreshKeyId)
+      }
       const ledger = payload.ledger
       setLedgers((prev) => {
         const idx = prev.findIndex((l) => l.id === ledger.id)
@@ -505,7 +651,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         return [ledger, ...prev]
       })
     })
-  }, [user?.id, refreshZhipuQuota])
+  }, [user?.id, refreshZhipuQuota, refreshVolcengineModelsOnce, fetchVolcengineQuotaOnce])
 
   // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
   useEffect(() => {
@@ -696,6 +842,8 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     unbind,
     zhipuQuotaOverrides,
     setKeyHealth,
-    zhipuSessionStatuses
+    zhipuSessionStatuses,
+    volcSessionStatuses,
+    refreshVolcengineModelsOnce
   }
 }
