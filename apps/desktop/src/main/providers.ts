@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain, safeStorage, session } from 'electron'
 import type { Cookie } from 'electron'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fetchZhipuQuota, testZhipuApiKey } from '@quota-flow/providers'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -957,6 +958,222 @@ export function decodeZhipuPayload(decrypted: string): { apiKey: string; console
   }
 }
 
+/**
+ * 智谱账号级指纹：优先用控制台会话查询出的 customerId（同一账号多个 API Key 共享），
+ * 拿到 customerId 时指纹 = sha256(providerId|"zhipu-account:"+customerId)；
+ * 拿不到（未带会话 / 查询失败）时回退按 API Key 明文哈希，不做账号级拦截。
+ * payload 为「加密前明文」，可能是 `{v:1,apiKey,consoleJwt}` 或纯 API Key。
+ */
+async function zhipuAccountFingerprint(payload: string): Promise<string | null> {
+  const { apiKey, consoleJwt } = decodeZhipuPayload(payload)
+  if (!apiKey) return null
+  if (consoleJwt) {
+    try {
+      const res = await fetchZhipuQuota(apiKey, consoleJwt)
+      if (res.ok && res.quota.customerId) {
+        return fingerprintFor('zhipu', 'zhipu-account:' + String(res.quota.customerId))
+      }
+    } catch {
+      // 查询失败则回退 API Key 指纹
+    }
+  }
+  return fingerprintFor('zhipu', apiKey)
+}
+
+// 智谱控制台会话捕获窗口：打开 bigmodel.cn 控制台，注入拦截器捕获访问令牌（consoleJwt）。
+// 智谱控制台前端用 axios/XMLHttpRequest/fetch 调 /api/biz/ 接口，注入脚本需同时 hook 三种方式
+// 以读取请求头 Authorization: Bearer <JWT>；仅扫描 localStorage 拿不到有效 JWT（隔离会话里只有 session_id）。
+// 用户登录后点击注入条上的「获取 API Key」，主进程轮询取回捕获的令牌并销毁窗口。
+const ZHIPU_CONSOLE_URL = 'https://open.bigmodel.cn/apikey/platform'
+// 智谱控制台用独立分区；每次打开前仅清「登录态存储」（cookies/localStorage 等），
+// 保留 HTTP 磁盘缓存以加速重复打开（整站是重 SPA，若每次 clearCache 会强制全量重新下载，明显变慢）。
+const ZHIPU_CONSOLE_PARTITION = 'persist:qf-zhipu-console'
+function zhipuConsoleSession(): Electron.Session {
+  return session.fromPartition(ZHIPU_CONSOLE_PARTITION)
+}
+
+export async function captureZhipuConsoleSession(): Promise<{ ok: boolean; consoleJwt?: string; error?: string }> {
+  const winKey = 'zhipu-console'
+  const existing = loginWindows.get(winKey)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return { ok: false, error: '智谱控制台窗口已打开' }
+  }
+
+  // 加载前先等登录态存储清空，避免上一次登录残留跨次出现在新窗口
+  try {
+    await zhipuConsoleSession().clearStorageData()
+  } catch {}
+  const ses = zhipuConsoleSession()
+
+  const win = new BrowserWindow({
+    width: 1024,
+    height: 768,
+    minWidth: 840,
+    minHeight: 620,
+    title: '⋮⋮  Quota-Flow · 智谱控制台',
+    autoHideMenuBar: true,
+    backgroundColor: '#ffffff',
+    // 生成/控制台窗口统一保留真实渲染，避免默认隐藏窗口显示时白屏闪烁
+    paintWhenInitiallyHidden: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      session: ses
+    }
+  })
+  win.webContents.setUserAgent(CHROME_UA)
+  loginWindows.set(winKey, win)
+  void win.loadURL(ZHIPU_CONSOLE_URL).catch(() => {})
+
+  const INJECT = `(() => {
+    if (window.__QUOTA_FLOW_ZHIPU__) return;
+    window.__QUOTA_FLOW_ZHIPU__ = true;
+    window.__ZF_CAPTURED__ = window.__ZF_CAPTURED__ || null;
+    window.__ZF_SUBMIT__ = false;
+    const JWT_RE = /(eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,})/;
+    const store = (v) => {
+      if (typeof v === 'string' && v) {
+        const m = v.match(JWT_RE);
+        if (m) { window.__ZF_CAPTURED__ = window.__ZF_CAPTURED__ || m[0]; }
+      }
+    };
+    // 1) hook fetch
+    const origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = function (...args) {
+        try {
+          const init = args[1] || {};
+          const h = init.headers;
+          const getAuth = () => {
+            try {
+              if (h instanceof Headers) return h.get('authorization');
+              if (Array.isArray(h)) { const f = h.find((kv) => (kv[0] || '').toLowerCase() === 'authorization'); return f ? f[1] : undefined; }
+              if (h && typeof h === 'object') return h['authorization'] || h['Authorization'];
+            } catch (_) {}
+            return undefined;
+          };
+          const a = getAuth();
+          if (a) { store(String(a).replace(/^Bearer\\s+/i, '')); }
+        } catch (_) {}
+        return origFetch.apply(this, args);
+      };
+    }
+    // 2) hook XMLHttpRequest.setRequestHeader（axios 底层）
+    const origSet = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+      try { if (String(k).toLowerCase() === 'authorization') store(String(v).replace(/^Bearer\\s+/i, '')); } catch (_) {}
+      return origSet.apply(this, arguments);
+    };
+    // 3) 兜底：定时扫描本地存储（部分页面会持久化登录态）
+    const scanStorage = () => {
+      for (const name of ['localStorage', 'sessionStorage']) {
+        try {
+          const s = window[name];
+          if (!s) continue;
+          for (let i = 0; i < s.length; i++) {
+            const k = s.key(i);
+            if (!k) continue;
+            const v = s.getItem(k);
+            if (v && typeof v === 'string') store(v);
+          }
+        } catch (_) {}
+      }
+    };
+    window.__ZF_SCAN__ = setInterval(scanStorage, 1500);
+    scanStorage();
+    // 4) 可拖拽注入条（左上角；标题栏含 ⋮⋮ 标识，cursor:grab）
+    const bar = document.createElement('div');
+    bar.id = 'qf-zhipu-bar';
+    bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:440px;';
+    bar.innerHTML =
+      '<div id="qf-zhipu-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
+      '<span id="qf-zhipu-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
+      '<span>Quota-Flow · 智谱控制台</span>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+      '<span style="flex:1;min-width:0;color:#c4c8d0;font-size:12px;line-height:1.4;">请在页面完成智谱控制台登录；登录后在「API Key 管理」页复制 API Key，然后点击下方按钮返回</span>' +
+      '<button id="qf-zhipu-get" style="flex-shrink:0;padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;white-space:nowrap;">已获取key返回</button>' +
+      '</div>';
+    document.body.appendChild(bar);
+    document.getElementById('qf-zhipu-get').addEventListener('click', () => {
+      scanStorage();
+      window.__ZF_SUBMIT__ = true;
+      window.__ZF_STATE__ = window.__ZF_CAPTURED__ ? 'ok' : 'none';
+    });
+    // 拖拽：按下 grip 或标题栏拖动，实时更新位置并夹紧窗口边界
+    let dragging = false, offX = 0, offY = 0;
+    const grip = document.getElementById('qf-zhipu-grip');
+    const header = document.getElementById('qf-zhipu-header');
+    const barEl = document.getElementById('qf-zhipu-bar');
+    const startDrag = (e) => {
+      dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop;
+      barEl.style.cursor = 'grabbing';
+      e.preventDefault();
+    };
+    if (grip) grip.addEventListener('mousedown', startDrag);
+    if (header) header.addEventListener('mousedown', startDrag);
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX));
+      const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY));
+      barEl.style.left = x + 'px'; barEl.style.top = y + 'px';
+    });
+    document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
+  })()`
+
+  const inject = (): void => {
+    void win.webContents.executeJavaScript(INJECT).catch(() => {})
+  }
+  win.webContents.on('did-finish-load', () => {
+    // 延迟注入，避免与控制台自身早期脚本竞争
+    setTimeout(inject, 500)
+  })
+
+  return new Promise((resolve) => {
+    let finished = false
+    const done = (result: { ok: boolean; consoleJwt?: string; error?: string }): void => {
+      if (finished) return
+      finished = true
+      clearInterval(pollTimer)
+      if (!win.isDestroyed()) win.destroy()
+      loginWindows.delete(winKey)
+      resolve(result)
+    }
+    win.on('closed', () => {
+      clearInterval(pollTimer)
+      try {
+        void win.webContents
+          .executeJavaScript('clearInterval(window.__ZF_SCAN__)')
+          .catch(() => {})
+      } catch {}
+      if (loginWindows.get(winKey) === win) loginWindows.delete(winKey)
+      if (!finished) {
+        finished = true
+        resolve({ ok: false, error: '窗口已关闭' })
+      }
+    })
+
+    // 轮询注入条按钮：点击后按捕获情况返回
+    const pollTimer = setInterval(() => {
+      if (win.isDestroyed()) return
+      void win.webContents
+        .executeJavaScript('window.__ZF_SUBMIT__ ? [window.__ZF_STATE__, window.__ZF_CAPTURED__] : null')
+        .then((val: unknown) => {
+          if (!val) return
+          const [state, jwt] = val as [string, string | null]
+          if (state !== 'ok' || !jwt) {
+            done({ ok: false, error: '未在页面捕获到会话令牌，请确认已登录智谱控制台后重试' })
+            return
+          }
+          done({ ok: true, consoleJwt: jwt })
+        })
+        .catch(() => {})
+    }, 700)
+  })
+}
+
 let registered = false
 
 export function initProviders(): void {
@@ -967,12 +1184,20 @@ export function initProviders(): void {
     return openLoginWindow(providerId, typeof keyId === 'string' ? keyId : undefined)
   })
 
-  ipcMain.handle('provider:encrypt', (_e, providerId: string, plain: string) => {
+  ipcMain.handle('provider:encrypt', async (_e, providerId: string, plain: string) => {
     if (typeof plain !== 'string') return { encrypted: '' }
     try {
       const encrypted = safeStorage.encryptString(plain).toString('base64')
-      // apikey 型厂商：指纹 = sha256(providerId|apikey 明文)，用于去重
-      const fingerprint = plain.trim() ? fingerprintFor(providerId, plain.trim()) : null
+      // apikey 型厂商：指纹用于去重。
+      // 智谱：同一账号可有多个 API Key，优先按 customerId 生成账号级指纹（同账号不同 Key 去重）；
+      //       拿不到 customerId（无会话 / 查询失败）时回退按 API Key 明文哈希，避免误拦截。
+      let fingerprint: string | null = null
+      if (plain.trim()) {
+        fingerprint =
+          providerId === 'zhipu'
+            ? await zhipuAccountFingerprint(plain)
+            : fingerprintFor(providerId, plain.trim())
+      }
       return { encrypted, fingerprint }
     } catch {
       return { encrypted: '' }
@@ -981,6 +1206,36 @@ export function initProviders(): void {
 
   ipcMain.handle('provider:health-check', (_e, providerId: string, encrypted: string, keyId?: string) => {
     return healthCheck(providerId, encrypted, typeof keyId === 'string' ? keyId : undefined)
+  })
+
+  // API Key 型厂商（智谱）「测试」按钮：解密出 API Key 后调开放平台只读接口校验有效性，不产生费用
+  ipcMain.handle('provider:test-api-key', async (_e, _providerId: string, encrypted: string) => {
+    try {
+      const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+      const { apiKey } = decodeZhipuPayload(plain)
+      if (!apiKey) return { ok: false, error: '未解析到 API Key' }
+      return await testZhipuApiKey(apiKey)
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'API Key 校验失败' }
+    }
+  })
+
+  // API Key 型厂商（智谱）真实额度查询：解密后取 apiKey + consoleJwt，调控制台 biz 接口拿资源包余额
+  ipcMain.handle('provider:fetch-quota', async (_e, _providerId: string, encrypted: string) => {
+    if (!encrypted) return { ok: false, error: '缺少密钥' }
+    try {
+      const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+      const { apiKey, consoleJwt } = decodeZhipuPayload(plain)
+      if (!apiKey) return { ok: false, error: '未解析到 API Key' }
+      return await fetchZhipuQuota(apiKey, consoleJwt ?? undefined)
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : '额度查询失败' }
+    }
+  })
+
+  // 智谱控制台会话捕获：弹出控制台登录窗口并捕获访问令牌（consoleJwt），供后续调额度接口使用
+  ipcMain.handle('provider:capture-zhipu-session', async () => {
+    return captureZhipuConsoleSession()
   })
 
   ipcMain.handle(

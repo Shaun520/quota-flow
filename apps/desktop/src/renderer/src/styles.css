@@ -2877,6 +2877,40 @@ body {
   border-top: 1px solid var(--border-light);
 }
 
+/* 查看模型弹窗：顶部免费额度用量（付费模型共用） + 模型/用量/价格 */
+.models-free-quota {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-radius: var(--radius-md);
+}
+.models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+.models-table th,
+.models-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+.models-table th {
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.models-table td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
 .about-box {
   display: flex;
   flex-direction: column;
@@ -3653,6 +3687,48 @@ textarea::-webkit-scrollbar {
   background: var(--accent-bg);
   color: var(--accent);
   font-size: 0.85em;
+}
+/* 顶部居中悬浮提示（API Key 测试结果等）：淡入，自动消失由 JS 定时器驱动 */
+.account-top-toast {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  max-width: 70vw;
+  padding: 8px 18px;
+  font-size: 0.9em;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
+  animation: account-toast-in 0.22s ease-out;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-top-toast-ok {
+  color: #fff;
+  background: #16a34a;
+}
+.account-top-toast-err {
+  color: #fff;
+  background: #dc2626;
+}
+[data-theme="dark"] .account-top-toast-ok {
+  background: #22c55e;
+}
+[data-theme="dark"] .account-top-toast-err {
+  background: #ef4444;
+}
+@keyframes account-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 .providers-empty-cell {
   padding: 40px 20px;

@@ -10,7 +10,8 @@ import {
   providerModeOptions,
   ratioOptions,
   resolutionOptions,
-  uploadHint
+  uploadHint,
+  zhipuModelDurations
 } from '../spec'
 import { IconInfo, IconMaximize, IconPlay, IconUpload, ProviderIconMark } from './icons'
 import { EmptyState } from './EmptyState'
@@ -25,12 +26,28 @@ import { ensureFreshSession } from '../auth/session'
 import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
+import { uploadReferenceImage } from '../utils/uploadImage'
 
 const VIP = false
 /** 本轮 auto 仍只走豆包；避免只绑千问/元宝时把 auto 展示成可用项 */
 const AUTO_CAPABLE_PROVIDER_IDS = new Set(['doubao'])
 
-function maxImageUploadCount(provider: string): number {
+function maxImageUploadCount(provider: string, model: string): number {
+  // 智谱按模型能力限制图片上传数量：图生视频1张、首尾帧2张、Vidu 2参考生视频最多5张
+  if (provider === 'zhipu') {
+    switch (model) {
+      case 'cogvideox-flash':
+      case 'cogvideox-2':
+      case 'cogvideox-3':
+        return 1
+      case 'Vidu Q1':
+        return 2
+      case 'Vidu 2':
+        return 5
+      default:
+        return 1
+    }
+  }
   if (provider === 'yuanbao' || provider === 'dola') return 10
   if (provider === 'doubao') return 10
   return 5
@@ -54,7 +71,9 @@ const STAGE_LABEL: Record<string, string> = {
   'risk-verify': '需要验证，请在弹窗完成…',
   'risk-resolved': '验证完成，继续生成…',
   'account-failed': '当前账号失败，尝试切换…',
-  blocked: '厂商拒绝了本次生成（见左侧错误）'
+  blocked: '厂商拒绝了本次生成（见左侧错误）',
+  // API 分支（智谱）onProgress 的兜底文案；有具体进度时优先展示 genProgress
+  progress: '正在生成…'
 }
 
 /** 进入这些阶段说明提示词已发送，不能再终止生成 */
@@ -142,7 +161,7 @@ export default function Dashboard({
   onMaterialImagesConsumed,
   onRegenerateConsumed
 }: DashboardProps) {
-  const { aggs: provAggs } = providers
+  const { aggs: provAggs, zhipuQuotaOverrides } = providers
   const { user, team } = useAuth()
   const { items: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('auto')
@@ -160,6 +179,8 @@ export default function Dashboard({
   const [genError, setGenError] = useState<string | null>(null)
   const [genFailed, setGenFailed] = useState(false)
   const [genStage, setGenStage] = useState<string | null>(null)
+  // 智谱等 API 分支 onProgress 的具体进度文案（限流重试、正在生成等），供状态区直接显示
+  const [genProgress, setGenProgress] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const submittedRef = useRef(false)
   const cancellingRef = useRef(false)
@@ -237,8 +258,11 @@ export default function Dashboard({
     if (provider === 'auto') {
       return intersectDurations(activeBoundAggs.map((a) => a.durations))
     }
+    // 智谱固定生成时长为模型级能力（cogvideox-3 5/10s、Vidu Q1 5s、Vidu 2 4s 等），
+    // 与主进程 api-branch 的模型时长校验保持一致，避免 UI 可选但与生成校验冲突。
+    if (provider === 'zhipu') return zhipuModelDurations(model)
     return providerDurations.get(provider) ?? DEFAULT_SUPPORTED_DURATIONS
-  }, [provider, activeBoundAggs, providerDurations])
+  }, [provider, model, activeBoundAggs, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
   const modeOptions = useMemo(
     () => visibleModeOptions(provider, model, features),
@@ -320,15 +344,20 @@ export default function Dashboard({
       if (activeJobIdRef.current && ev.jobId && ev.jobId !== activeJobIdRef.current) return
       if (ev.status === 'pending') {
         setGenStage('pending')
+        setGenProgress(null)
       } else if (ev.status === 'running' && ev.stage) {
         setGenStage(ev.stage)
+        // API 分支（智谱 onProgress）带具体过程文案时记录，状态区直接展示
+        if (ev.message) setGenProgress(ev.message)
       } else if (ev.status === 'failed') {
         setGenError(ev.message || '生成失败')
         setGenFailed(true)
         setGenStage(null)
+        setGenProgress(null)
       } else if (ev.status === 'success') {
         setGenFailed(false)
         setGenStage(null)
+        setGenProgress(null)
       }
     })
   }, [reloadJobs])
@@ -427,7 +456,8 @@ export default function Dashboard({
       return
     }
     const imageCount = savedImagePaths.length + imageFiles.length
-    if (currentMode !== 't2v' && imageCount === 0) {
+    // 文生视频需图片：排除 t2v（网页厂商）与 text2video（智谱 API）两种文案枚举
+    if (currentMode !== 't2v' && currentMode !== 'text2video' && imageCount === 0) {
       const modeLabel = visibleModeOptions(provider, model, features).find((m) => m.value === currentMode)?.label ?? '多参考'
       setGenError(`${modeLabel}需要至少上传一张素材图片`)
       return
@@ -448,6 +478,7 @@ export default function Dashboard({
     setGenError(null)
     setGenFailed(false)
     setGenStage(null)
+    setGenProgress(null)
     activeJobIdRef.current = null // 上一轮残留的任务 id 会过滤掉本轮进度事件，必须重置
     submittedRef.current = false
     cancellingRef.current = false
@@ -487,7 +518,7 @@ export default function Dashboard({
         ratio,
         images: currentMode === 't2v' && provider !== 'yuanbao'
           ? []
-          : [...savedImagePaths, ...imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean)].slice(0, maxImageUploadCount(provider)),
+          : [...savedImagePaths, ...imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean)].slice(0, maxImageUploadCount(provider, model)),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -575,26 +606,56 @@ export default function Dashboard({
     fileInputRef.current?.click()
   }, [])
 
+  // 智谱走开放平台 API，图生/多参考/首尾帧的图片必须为公网 https URL：
+  // 先立即显示本地预览（blob URL），再逐个后台上传到 qf-images 桶取公开 URL（回填 savedImagePaths 同序号格子）。
+  const appendZhipuImages = useCallback(
+    async (files: File[]) => {
+      const base = savedImagePaths.length
+      // 预览立刻出现，不等网络上传
+      setImages((prev) => [...prev, ...files.map((f) => URL.createObjectURL(f))])
+      // 预占储存格保证 savedImagePaths 与 images 序号对齐；上传完成后回填 https URL
+      setSavedImagePaths((prev) => [...prev, ...files.map(() => '')])
+      for (let i = 0; i < files.length; i++) {
+        try {
+          const url = await uploadReferenceImage(files[i])
+          setSavedImagePaths((prev) => prev.map((p, idx) => (idx === base + i ? url : p)))
+        } catch (e) {
+          setGenError('图片上传失败：' + (e instanceof Error ? e.message : String(e)))
+        }
+      }
+    },
+    [savedImagePaths]
+  )
+
   const onFilesSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
-    const remaining = Math.max(0, maxImageUploadCount(provider) - savedImagePaths.length)
+    const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
     const picked = files.slice(0, remaining)
+    if (provider === 'zhipu') {
+      void appendZhipuImages(picked)
+      e.target.value = ''
+      return
+    }
     const urls = picked.map((f) => URL.createObjectURL(f))
     setImages((prev) => [...prev, ...urls])
     setImageFiles((prev) => [...prev, ...picked])
     e.target.value = ''
-  }, [provider, savedImagePaths])
+  }, [provider, model, savedImagePaths, appendZhipuImages])
 
   const onPasteImages = useCallback((e: ReactClipboardEvent<HTMLDivElement>) => {
     const files = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith('image/'))
     if (files.length === 0) return
     e.preventDefault()
-    const remaining = Math.max(0, maxImageUploadCount(provider) - savedImagePaths.length)
+    const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
     const picked = files.slice(0, remaining)
+    if (provider === 'zhipu') {
+      void appendZhipuImages(picked)
+      return
+    }
     const urls = picked.map((f) => URL.createObjectURL(f))
     setImages((prev) => [...prev, ...urls])
     setImageFiles((prev) => [...prev, ...picked])
-  }, [provider, savedImagePaths])
+  }, [provider, model, savedImagePaths, appendZhipuImages])
 
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
@@ -671,6 +732,20 @@ export default function Dashboard({
               </button>
             </div>
           </div>
+
+          {provider === 'zhipu' && (
+            <p
+              className="field-hint"
+              style={{
+                margin: '6px 0 0',
+                fontSize: 12,
+                color: '#22c55e',
+                lineHeight: 1.5
+              }}
+            >
+              智谱建议使用英文描述分镜 / 镜头运动 / 风格 / 光线，效果更佳
+            </p>
+          )}
 
           <div className="cascade-row">
             <div className="param-field">
@@ -794,7 +869,7 @@ export default function Dashboard({
                       <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveImage(idx) }}>×</button>
                     </div>
                   ))}
-                  {images.length < maxImageUploadCount(provider) && (
+                  {images.length < maxImageUploadCount(provider, model) && (
                     <div className="thumb-add">+</div>
                   )}
                 </div>
@@ -827,7 +902,7 @@ export default function Dashboard({
             {generating && (
               <div className="gen-status">
                 <span className="gen-status-spinner" />
-                <span>{genStage ? (STAGE_LABEL[genStage] ?? genStage) : '正在准备…'}</span>
+                <span>{genStage === 'progress' && genProgress ? genProgress : genStage ? STAGE_LABEL[genStage] ?? genStage : '正在准备…'}</span>
               </div>
             )}
             <button
@@ -918,9 +993,22 @@ export default function Dashboard({
             <>
               <div className="provider-status-list">
                 {visibleAggs.map((p) => {
-                  const used = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.used, 0)
-                  const remaining = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.remaining, 0)
-                  const total = p.bindings.filter((b) => b.enabled).reduce((s, b) => s + b.dailyTotal, 0)
+                  const enabledBindings = p.bindings.filter((b) => b.enabled)
+                  // 智谱等 API 型厂商：汇总取平台真实资源包余额（而非静态默认额度），生成后自动刷新
+                  const quotaOf = (keyId: string) =>
+                    zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available
+                      ? zhipuQuotaOverrides[keyId]
+                      : undefined
+                  const isApiQuota = p.providerId === 'zhipu'
+                  const used = enabledBindings.reduce((s, b) => s + b.used, 0)
+                  const remaining = enabledBindings.reduce(
+                    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
+                    0
+                  )
+                  const total = enabledBindings.reduce(
+                    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
+                    0
+                  )
                   const fill = total > 0 ? Math.round((remaining / total) * 100) : 0
                   return (
                     <div className="ps-item" key={p.providerId}>

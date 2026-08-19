@@ -14,6 +14,7 @@ import type { GenerateInput } from './dispatch'
 import { decodeZhipuPayload } from './providers'
 import { fetchZhipuQuota, zhipuGenerateWithKey } from '@quota-flow/providers'
 import type { ZhipuGenerateOptions } from '@quota-flow/providers'
+import { ipcMain } from 'electron'
 
 /** 解密后的 API 厂商凭证（各厂商子集可不同；这里统一宽松字段） */
 export interface ApiCredential {
@@ -52,7 +53,23 @@ export interface ApiGenerationBranch {
   supportedDurations(model?: string): number[]
   /** 真实剩余额度（按次资源包）；无法查询返回 null */
   remaining?(creds: ApiCredential, model: string): Promise<number | null>
+  /** 展示用模型目录（「查看模型」弹窗） */
+  catalog(): ApiModelInfo[]
   generate(input: GenerateInput, creds: ApiCredential, params: ApiGenerateParams): Promise<ApiGenerateOutcome>
+}
+
+export interface ApiModelInfo {
+  model: string
+  /** 展示价格：免费模型「免费」，付费「¥x/次」 */
+  priceLabel: string
+  /** 0 = 免费，1+ = 付费按次 */
+  cost: number
+  /** 支持时长（秒） */
+  durations: number[]
+  /** 固定尺寸；null = 跟随调度台分辨率 */
+  size: string | null
+  /** 该模型支持生成模式 */
+  modes: Array<{ value: string; label: string }>
 }
 
 const ZHIPU_MODEL_COST: Record<string, number> = {
@@ -107,6 +124,44 @@ function zhipuSizeFromResolution(resolution?: string): string | undefined {
   return undefined
 }
 
+/** 展示价格（2026-08 实测，来源 open.bigmodel.cn/pricing 与长期接入沉淀） */
+const ZHIPU_MODEL_PRICE: Record<string, string> = {
+  'cogvideox-flash': '免费',
+  'cogvideox-2': '¥0.5/次',
+  'cogvideox-3': '¥1/次',
+  'Vidu Q1': '¥2.5/次',
+  'Vidu 2': '¥1.25/次起'
+}
+
+/** 各模型支持的生成模式（值域与调度台/派发保持一致） */
+const ZHIPU_MODEL_MODES: Record<string, Array<{ value: string; label: string }>> = {
+  'cogvideox-flash': [
+    { value: 'text2video', label: '文生视频' },
+    { value: 'img2video', label: '图生视频' }
+  ],
+  'cogvideox-2': [
+    { value: 'text2video', label: '文生视频' },
+    { value: 'img2video', label: '图生视频' }
+  ],
+  'cogvideox-3': [
+    { value: 'text2video', label: '文生视频' },
+    { value: 'img2video', label: '图生视频' }
+  ],
+  'Vidu Q1': [
+    { value: 'text2video', label: '文生视频' },
+    { value: 'img2video', label: '图生视频' },
+    { value: 'first_last', label: '首尾帧生成' }
+  ],
+  'Vidu 2': [
+    { value: 'img2video', label: '图生视频' },
+    { value: 'first_last', label: '首尾帧生成' },
+    { value: 'multi_ref', label: '多参考生成' }
+  ]
+}
+
+/** 模型目录固定顺序 */
+const ZHIPU_CATALOG_ORDER = ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2']
+
 export function makeZhipuBranch(): ApiGenerationBranch {
   return {
     id: 'zhipu',
@@ -135,6 +190,16 @@ export function makeZhipuBranch(): ApiGenerationBranch {
       } catch {
         return null
       }
+    },
+    catalog() {
+      return ZHIPU_CATALOG_ORDER.map((model) => ({
+        model,
+        priceLabel: ZHIPU_MODEL_PRICE[model],
+        cost: ZHIPU_MODEL_COST[model],
+        durations: ZHIPU_MODEL_DURATIONS[model],
+        size: ZHIPU_MODEL_SIZE[model],
+        modes: ZHIPU_MODEL_MODES[model]
+      }))
     },
     async generate(input, creds, params) {
       // 图生/首尾/参考生需公开图片 URL：本地路径无法用于 API，前端已上传 Supabase 取 https URL。
@@ -198,4 +263,18 @@ export function makeZhipuBranch(): ApiGenerationBranch {
 /** 已注册的 API 生成分支（key = providerId） */
 export const API_BRANCHES: Record<string, ApiGenerationBranch> = {
   zhipu: makeZhipuBranch()
+}
+
+let apiIpcRegistered = false
+
+/** 注册 API 型厂商相关 IPC：provider:api-models（「查看模型」弹窗目录） */
+export function registerApiIpc(): void {
+  if (apiIpcRegistered) return
+  apiIpcRegistered = true
+
+  ipcMain.handle('provider:api-models', async (_e, providerId: string) => {
+    const branch = API_BRANCHES[providerId]
+    if (!branch) return { ok: false, error: '不支持的 API 厂商' }
+    return { ok: true, models: branch.catalog() }
+  })
 }

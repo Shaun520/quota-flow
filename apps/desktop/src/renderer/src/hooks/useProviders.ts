@@ -160,6 +160,10 @@ export interface ProvidersResult {
   setEnabled: (keyId: string, enabled: boolean) => Promise<void>
   setProviderKeyScope: (keyId: string, teamId: string | null) => Promise<void>
   unbind: (keyId: string) => Promise<void>
+  /** 智谱等 API 型厂商账号真实额度（平台资源包余额）覆盖，key = keyId */
+  zhipuQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  /** 会话内更新某账号健康状态（API Key 测试成功后即时反映） */
+  setKeyHealth: (keyId: string, status: string) => void
 }
 
 export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
@@ -173,6 +177,60 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   const [reloadKey, setReloadKey] = useState(0)
   // 健康检查结果会话内覆盖：只更新 map，不重建 keys 数组，避免下游 memo / 效应链整体重算
   const [healthOverrides, setHealthOverrides] = useState<Record<string, string>>({})
+  // 智谱等 API 型厂商账号真实额度覆盖（平台资源包余额），key = keyId
+  const [zhipuQuotaOverrides, setZhipuQuotaOverrides] = useState<
+    Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  >({})
+
+  // 单次拉取智谱某账号真实额度（平台资源包余额）并写入覆盖；返回剩余次数（查询失败返回 null）
+  const fetchZhipuQuotaOnce = useCallback(
+    async (keyId: string): Promise<number | null> => {
+      const svc = getProviderService()
+      if (!svc || !user) return null
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return null
+        const res = await window.api.providers.fetchQuota('zhipu', secret.encrypted_key)
+        if (res.ok && res.quota) {
+          setZhipuQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
+          return res.quota.remaining
+        }
+        return null
+      } catch {
+        // 额度查询失败不影响生成结果
+        return null
+      }
+    },
+    [user]
+  )
+
+  // 生成后刷新智谱真实额度：平台扣减有延迟，用 30s 重试窗口（12 次、间隔 2.5s），剩余值下降即提前结束
+  const refreshZhipuQuota = useCallback(
+    async (keyId: string) => {
+      let lastRemaining: number | null = null
+      for (let i = 0; i < 12; i++) {
+        const remaining = await fetchZhipuQuotaOnce(keyId)
+        if (remaining === null) break
+        if (lastRemaining !== null && remaining < lastRemaining) break
+        lastRemaining = remaining
+        if (i < 11) await new Promise((r) => setTimeout(r, 2500))
+      }
+    },
+    [fetchZhipuQuotaOnce]
+  )
+
+  // 初始化 / 刷新时主动拉取智谱各账号真实额度，覆盖静态默认额度展示为平台实际剩余
+  useEffect(() => {
+    if (!user || keys.length === 0) return
+    const zhipuKeys = keys.filter((k) => k.provider_id === 'zhipu')
+    if (zhipuKeys.length === 0) return
+    zhipuKeys.forEach((key) => void fetchZhipuQuotaOnce(key.id))
+  }, [user?.id, keys, fetchZhipuQuotaOnce])
+
+  // 会话内覆盖某账号健康状态（API Key 测试成功/失败后即时反映，不落库）
+  const setKeyHealth = useCallback((keyId: string, status: string) => {
+    setHealthOverrides((prev) => ({ ...prev, [keyId]: status }))
+  }, [])
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
 
@@ -339,6 +397,11 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     if (!user) return
     return window.api.dispatch.onQuotaUpdated((payload) => {
       if (payload.userId !== user.id) return
+      // API 型厂商（智谱）生成完成：只刷新该账号真实额度，不更新本地账本
+      if (payload.zhipuRefreshKeyId) {
+        void refreshZhipuQuota(payload.zhipuRefreshKeyId)
+        return
+      }
       const ledger = payload.ledger
       setLedgers((prev) => {
         const idx = prev.findIndex((l) => l.id === ledger.id)
@@ -350,7 +413,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         return [ledger, ...prev]
       })
     })
-  }, [user?.id])
+  }, [user?.id, refreshZhipuQuota])
 
   // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
   useEffect(() => {
@@ -538,6 +601,8 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     setDefault,
     setEnabled,
     setProviderKeyScope,
-    unbind
+    unbind,
+    zhipuQuotaOverrides,
+    setKeyHealth
   }
 }

@@ -8,6 +8,7 @@ import type { ProviderAgg, ProvidersResult } from '../hooks/useProviders'
 import { getProviderService } from '../auth/service'
 import { useAuth } from '../hooks/useAuth'
 import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
+import type { ApiModelInfo } from '../../../preload'
 
 const PAGE_SIZE = 10
 
@@ -30,7 +31,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, setKeyHealth } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -39,7 +40,63 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
   const [page, setPage] = useState(1)
   const [justRefreshed, setJustRefreshed] = useState(false)
   const [siteError, setSiteError] = useState('')
+  // 顶部居中悬浮提示（API Key 测试结果等）
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
+  // 「查看模型」弹窗
+  const [models, setModels] = useState<ApiModelInfo[] | null>(null)
+  const [modelsLabel, setModelsLabel] = useState('')
+  // 弹窗顶部免费额度用量（该账号真实资源包余额；付费模型共用）
+  const [modelsQuota, setModelsQuota] = useState<{ available: boolean; total: number; remaining: number } | null>(null)
+  const [modelsUnit, setModelsUnit] = useState('次')
   const wasRefreshing = useRef(false)
+
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok })
+    window.setTimeout(() => setToast(null), 2600)
+  }
+
+  // API Key 型厂商「测试」：解密后调开放平台只读接口校验，不产生费用
+  const handleTestApiKey = async (providerId: string, keyId: string) => {
+    try {
+      const svc = getProviderService()
+      if (!svc || !user) {
+        showToast('登录状态异常，无法测试', false)
+        return
+      }
+      const secret = await svc.getProviderKeySecret(user.id, keyId)
+      if (!secret) {
+        showToast('未找到该账号密钥', false)
+        return
+      }
+      const res = await window.api.providers.testApiKey(providerId, secret.encrypted_key)
+      if (res.ok) {
+        setKeyHealth(keyId, 'healthy')
+        showToast('API Key 可用', true)
+      } else {
+        setKeyHealth(keyId, 'expired')
+        showToast(res.error ? `API Key 异常：${res.error}` : 'API Key 异常', false)
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), false)
+    }
+  }
+
+  // API Key 型厂商「查看模型」：拉取模型目录
+  const handleViewModels = async (providerId: string, keyId: string, accountName: string, unitName: string) => {
+    try {
+      const res = await window.api.providers.apiModels(providerId)
+      if (res.ok && res.models) {
+        setModels(res.models)
+        setModelsLabel(accountName)
+        setModelsQuota(zhipuQuotaOverrides[keyId] ?? null)
+        setModelsUnit(unitName)
+      } else {
+        showToast(res.error || '无法加载模型目录', false)
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), false)
+    }
+  }
 
   useEffect(() => {
     if (refreshing) {
@@ -133,6 +190,14 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         <div className="auth-msg auth-msg-error">{error || siteError}</div>
       )}
 
+      {toast && (
+        <div className={
+          'account-top-toast ' + (toast.ok ? 'account-top-toast-ok' : 'account-top-toast-err')
+        }>
+          {toast.msg}
+        </div>
+      )}
+
       {boundRows.length === 0 && (
           <div className="providers-hint">
             <IconInfo size={14} />
@@ -217,6 +282,9 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                           await setProviderKeyScope(keyId, teamId)
                         }}
                         onOpenSite={(keyId) => openSite(p.providerId, keyId)}
+                        onTestApiKey={(keyId) => handleTestApiKey(p.providerId, keyId)}
+                        onViewModels={(keyId, accountName) => handleViewModels(p.providerId, keyId, accountName, p.unitName)}
+                        zhipuQuotaOverrides={zhipuQuotaOverrides}
                         currentUserId={user?.id ?? ''}
                         team={team}
                       />
@@ -256,6 +324,50 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
           }}
         />
       )}
+
+      {models && (
+        <div className="modal-overlay" onClick={() => setModels(null)}>
+          <div className="modal" style={{ maxWidth: '560px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>模型 · {modelsLabel}</h3>
+              <button className="btn-icon" onClick={() => setModels(null)} aria-label="关闭">×</button>
+            </div>
+            <div className="modal-body">
+              <div className="models-free-quota">
+                免费额度
+                {modelsQuota?.available
+                  ? ` ${modelsQuota.remaining} / ${modelsQuota.total} ${modelsUnit}`
+                  : ' —'}
+              </div>
+              <table className="models-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>用量</th>
+                    <th>价格</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => (
+                    <tr key={m.model}>
+                      <td><strong>{m.model}</strong></td>
+                      <td>{m.cost === 0 ? '∞' : '—'}</td>
+                      <td>
+                        <span className={'badge ' + (m.cost === 0 ? 'badge-success' : 'badge-pending')}>
+                          {m.priceLabel}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-sm primary" onClick={() => setModels(null)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -275,6 +387,9 @@ function ProviderRow({
   onUnbind,
   onSetScope,
   onOpenSite,
+  onTestApiKey,
+  onViewModels,
+  zhipuQuotaOverrides,
   currentUserId,
   team
 }: {
@@ -292,14 +407,27 @@ function ProviderRow({
   onUnbind: (keyId: string) => Promise<void>
   onSetScope: (keyId: string, teamId: string | null) => Promise<void>
   onOpenSite: (keyId: string) => Promise<void>
+  onTestApiKey: (keyId: string) => Promise<void>
+  onViewModels: (keyId: string, accountName: string) => Promise<void>
+  zhipuQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   currentUserId: string
   team: { id: string } | null
 }) {
   const isApiKeyProvider = agg.authType === 'apikey'
   const activeBindings = agg.bindings.filter((b) => b.enabled)
   const totalUsed = activeBindings.reduce((s, b) => s + b.used, 0)
-  const remaining = activeBindings.reduce((s, b) => s + b.remaining, 0)
-  const totalQuota = activeBindings.reduce((s, b) => s + b.dailyTotal, 0)
+  // 智谱等 API 型厂商：额度以平台真实资源包余额为准，而非静态默认额度；汇总只累计有可用余额的账号
+  const isApiQuota = agg.providerId === 'zhipu'
+  const quotaOf = (keyId: string) =>
+    zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available ? zhipuQuotaOverrides[keyId] : undefined
+  const remaining = activeBindings.reduce(
+    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
+    0
+  )
+  const totalQuota = activeBindings.reduce(
+    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
+    0
+  )
   const disabledCount = agg.bindings.length - activeBindings.length
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
@@ -409,7 +537,18 @@ function ProviderRow({
                           </span>
                         )}
                       </td>
-                      <td>{acc.remaining} / {acc.dailyTotal} {agg.unitName}</td>
+                      <td>
+                        {agg.providerId === 'zhipu' ? (
+                          (() => {
+                            const q = zhipuQuotaOverrides[acc.keyId]
+                            return (
+                              <span>{q?.available ? `${q.remaining} / ${q.total} ${agg.unitName}` : '—'}</span>
+                            )
+                          })()
+                        ) : (
+                          `${acc.remaining} / ${acc.dailyTotal} ${agg.unitName}`
+                        )}
+                      </td>
                       <td className={acc.health === 'healthy' ? 'healthy' : acc.health === 'expiring' ? 'expiring' : 'exhausted'}>
                         {!acc.enabled
                           ? '已停用'
@@ -466,32 +605,38 @@ function ProviderRow({
                                 共享到团队
                               </button>
                             ) : null}{' '}
-                            {!isApiKeyProvider && (
-                              <>
-                                <button
-                                  className="btn-sm"
-                                  disabled={acc.isDefault || !acc.enabled}
-                                  onClick={() => void onSetDefault(acc.keyId)}
-                                  title={
-                                    !acc.enabled
-                                      ? '账号已停用，请先启用'
-                                      : acc.isDefault
-                                        ? '已是默认账号'
-                                        : '设为默认：优先扣减该账号额度'
-                                  }
-                                >
-                                  设为默认
-                                </button>{' '}
-                                <button
-                                  className="btn-sm"
-                                  onClick={() => void onTest(acc.keyId)}
-                                  disabled={!acc.enabled}
-                                  title={!acc.enabled ? '账号已停用，请先启用' : undefined}
-                                >
-                                  测试
-                                </button>{' '}
-                              </>
-                            )}
+                            <button
+                              className="btn-sm"
+                              disabled={acc.isDefault || !acc.enabled}
+                              onClick={() => void onSetDefault(acc.keyId)}
+                              title={
+                                !acc.enabled
+                                  ? '账号已停用，请先启用'
+                                  : acc.isDefault
+                                    ? '已是默认账号'
+                                    : '设为默认：优先扣减该账号额度'
+                              }
+                            >
+                              设为默认
+                            </button>{' '}
+                            <button
+                              className="btn-sm"
+                              onClick={() => void (agg.authType === 'apikey' ? onTestApiKey(acc.keyId) : onTest(acc.keyId))}
+                              disabled={!acc.enabled}
+                              title={!acc.enabled ? '账号已停用，请先启用' : undefined}
+                            >
+                              测试
+                            </button>{' '}
+                            {agg.authType === 'apikey' && (
+                              <button
+                                className="btn-sm"
+                                onClick={() => void onViewModels(acc.keyId, acc.accountName)}
+                                disabled={!acc.enabled}
+                                title={!acc.enabled ? '账号已停用，请先启用' : '查看该账号支持的模型、价格与生成模式'}
+                              >
+                                查看模型
+                              </button>
+                            )}{' '}
                             <button
                               className="btn-sm"
                               style={{ color: 'var(--error)' }}

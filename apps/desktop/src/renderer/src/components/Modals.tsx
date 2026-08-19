@@ -646,6 +646,8 @@ export function AddProviderModal({
     defaultScope === 'team' && !!team ? 'team' : 'personal'
   )
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
+  // 智谱控制台会话令牌：用户经「获取 API Key」捕获后暂存，保存时并入加密 payload 作为账号级去重依据
+  const [consoleJwt, setConsoleJwt] = useState<string | null>(null)
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -664,6 +666,19 @@ export function AddProviderModal({
   // 新建账号时 tempId 会作为 DB 记录 id，使「登录分区 = 生成分区」
   // 刷新已有账号时，登录后通过 migratePartition 把 cookie 迁移到目标分区
   const [loginTempId, setLoginTempId] = useState<string | null>(null)
+  // 重复账号确认：检测到同一账号指纹已绑定时，先给用户选择是「更新已有」还是「新建」
+  const [dupCandidate, setDupCandidate] = useState<{
+    id: string
+    accountName: string
+  } | null>(null)
+  // 暂存待保存的参数，待用户确认重复账号后再执行
+  const [pendingSave, setPendingSave] = useState<{
+    encrypted: string
+    authType: 'cookie' | 'apikey'
+    expiresAt: number | null
+    accountFingerprint?: string | null
+    refreshKeyId?: string | null
+  } | null>(null)
 
   useEffect(() => {
     const current = providers.find((p) => p.providerId === providerId)
@@ -695,6 +710,8 @@ export function AddProviderModal({
     setExistingKeys([])
     setRefreshTarget('new')
     setLoginTempId(null)
+    setDupCandidate(null)
+    setPendingSave(null)
   }
 
   const saveEncrypted = async (
@@ -702,7 +719,8 @@ export function AddProviderModal({
     authType: 'cookie' | 'apikey',
     expiresAt: number | null,
     accountFingerprint?: string | null,
-    refreshKeyId?: string | null
+    refreshKeyId?: string | null,
+    forceNew: boolean = false
   ) => {
     setSaving(true)
     setError(null)
@@ -736,32 +754,24 @@ export function AddProviderModal({
         return true
       }
 
-      // P2 去重：同一账号指纹已存在则拦截（指纹为 null 时跳过）
-      if (accountFingerprint) {
+      // P2 去重：同一账号指纹已存在则弹出友好提示，由用户选择「更新已有」或「新建」
+      if (!forceNew && accountFingerprint) {
         const dup =
           scopeKeys.find(
             (k) => k.provider_id === providerId && k.account_fingerprint === accountFingerprint
           ) ?? null
         if (dup) {
           if (accountScope === 'team' && team && dup.owner_user_id !== userId) {
-            throw new Error('该账号已由其他成员绑定，请由绑定成员刷新')
+            setError('该账号已由其他成员绑定，请由绑定成员刷新')
+            setSaving(false)
+            return false
           }
-          // 同一账号重新登录：刷新 cookie，保留 keyId 与额度归属
-          await svc.refreshProviderKey(userId, dup.id, {
-            encryptedKey: encrypted,
-            expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-            healthStatus: 'healthy',
-            accountFingerprint: accountFingerprint ?? null
-          })
-          // 把临时分区的 cookie 迁移到已有账号分区
-          if (loginTempId) {
-            try {
-              await window.api.providers.migratePartition(providerId, loginTempId, dup.id)
-            } catch {}
-          }
-          setNotice(`已刷新账号「${dup.account_name ?? '未命名账号'}」的登录态（保留原账号记录）`)
+          // 暂存参数，弹出友好提示让用户选择
+          setPendingSave({ encrypted, authType, expiresAt, accountFingerprint, refreshKeyId: refreshKeyId ?? null })
+          setDupCandidate({ id: dup.id, accountName: dup.account_name ?? '未命名账号' })
+          setNotice(null)
           setSaving(false)
-          return true
+          return false // 需用户在重复确认面板选择，不直接关闭
         }
       }
 
@@ -807,6 +817,54 @@ export function AddProviderModal({
     return true
   }
 
+  // 重复账号处理：用户选择「更新已有」或「强制新建」
+  const handleRefreshDup = async (): Promise<void> => {
+    if (!dupCandidate || !pendingSave) return
+    setSaving(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const svc = getProviderService()
+      if (!svc) throw new Error('数据库服务未配置')
+      // 暂存中已记录了刷新目标；若为空，使用 dupCandidate.id
+      const refreshKeyId = pendingSave.refreshKeyId ?? dupCandidate.id
+      await svc.refreshProviderKey(userId, refreshKeyId, {
+        encryptedKey: pendingSave.encrypted,
+        expiresAt: pendingSave.expiresAt ? new Date(pendingSave.expiresAt).toISOString() : null,
+        healthStatus: 'healthy',
+        accountFingerprint: pendingSave.accountFingerprint ?? null
+      })
+      if (loginTempId) {
+        try {
+          await window.api.providers.migratePartition(providerId, loginTempId, refreshKeyId)
+        } catch {}
+      }
+      setNotice(`已更新账号「${dupCandidate.accountName}」的登录态与密钥`)
+      setDupCandidate(null)
+      setPendingSave(null)
+      setStatus(pendingSave.authType === 'apikey' ? 'apikey-ok' : 'login-ok')
+    } catch (e) {
+      setError(errMsg(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleCreateNewDespiteDup = async (): Promise<void> => {
+    // 忽略重复提示，把 pendingSave 当作新建账号继续流程（forceNew 跳过二次去重拦截）
+    if (!pendingSave) return
+    setDupCandidate(null)
+    const p = pendingSave
+    setPendingSave(null)
+    const ok = await saveEncrypted(p.encrypted, p.authType, p.expiresAt, p.accountFingerprint ?? null, null, true)
+    if (!ok) return
+    if (p.authType === 'apikey') {
+      setStatus('apikey-ok')
+    } else {
+      setStatus('login-ok')
+    }
+  }
+
   const saveApiKey = async (): Promise<boolean> => {
     if (!selected) return false
     setError(null)
@@ -816,7 +874,11 @@ export function AddProviderModal({
     }
     setStatus('logging')
     try {
-      const enc = await window.api.providers.encrypt(selected.providerId, apiKey.trim())
+      const trimmed = apiKey.trim()
+      // 智谱：如有已捕获的控制台会话，并入 `{v:1,apiKey,consoleJwt}` 结构化 payload，
+      // 供主进程解析出 customerId 生成「账号级」去重指纹（同账号不同 Key 去重）。
+      const raw = providerId === 'zhipu' && consoleJwt ? JSON.stringify({ v: 1, apiKey: trimmed, consoleJwt }) : trimmed
+      const enc = await window.api.providers.encrypt(selected.providerId, raw)
       if (!enc.encrypted) {
         setStatus('idle')
         setError('加密失败')
@@ -833,6 +895,42 @@ export function AddProviderModal({
       setError(errMsg(e))
       setStatus('idle')
       return false
+    }
+  }
+
+  // API Key 型厂商「测试 API Key」：加密后调开放平台只读接口校验，不产生费用
+  const testApiKeyInput = async (): Promise<void> => {
+    if (!selected) return
+    setError(null)
+    setNotice(null)
+    if (!apiKey.trim()) {
+      setError('请输入 API Key')
+      return
+    }
+    setSaving(true)
+    try {
+      const enc = await window.api.providers.encrypt(selected.providerId, apiKey.trim())
+      if (!enc.encrypted) throw new Error('加密失败')
+      const res = await window.api.providers.testApiKey(selected.providerId, enc.encrypted)
+      if (res.ok) setNotice('API Key 校验通过')
+      else setError(res.error || 'API Key 无效')
+    } catch (e) {
+      setError(errMsg(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // 智谱「获取 API Key」：打开智谱控制台会话窗口以捕获 consoleJwt；用户在窗口内复制 API Key
+  const openGetApiKey = async (): Promise<void> => {
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await window.api.providers.captureZhipuSession()
+      if (res.ok && res.consoleJwt) setConsoleJwt(res.consoleJwt)
+      if (!res.ok && res.error) setError(res.error)
+    } catch (e) {
+      setError(errMsg(e))
     }
   }
 
@@ -1089,6 +1187,41 @@ export function AddProviderModal({
           {notice}
         </div>
       )}
+      {dupCandidate && (
+        <div
+          style={{
+            background: 'rgba(249,115,22,0.08)',
+            border: '1px solid rgba(249,115,22,0.4)',
+            borderRadius: 10,
+            padding: '12px 14px',
+            marginBottom: 12
+          }}
+        >
+          <div style={{ fontSize: 13, color: '#e8a54d', fontWeight: 600, marginBottom: 4 }}>
+            ⚠ 检测到同账号已绑定
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--fg-secondary)', marginBottom: 10, lineHeight: 1.5 }}>
+            这个智谱账号（同一 customerId）在本项目已绑定为
+            <strong style={{ color: 'var(--fg-primary)' }}>「{dupCandidate.accountName}」</strong>。
+            是否更新该账号的 API Key？
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-sm primary" onClick={() => void handleRefreshDup()} disabled={saving}>
+              ✓ 更新已有账号
+            </button>
+            <button className="btn-sm" onClick={() => void handleCreateNewDespiteDup()} disabled={saving}>
+              仍要新建
+            </button>
+            <button
+              className="btn-sm"
+              onClick={() => { setDupCandidate(null); setPendingSave(null) }}
+              disabled={saving}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
       <div className="form-group" style={{ background: 'var(--bg-elevated)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
         {isApiKey ? (
           <>
@@ -1102,6 +1235,16 @@ export function AddProviderModal({
               onChange={(e) => setApiKey(e.target.value)}
               disabled={saving}
             />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn-sm" onClick={() => void testApiKeyInput()} disabled={saving}>
+                测试 API Key
+              </button>
+              {providerId === 'zhipu' && (
+                <button className="btn-sm primary" onClick={() => void openGetApiKey()} disabled={saving}>
+                  获取 API Key
+                </button>
+              )}
+            </div>
           </>
         ) : (
           <>

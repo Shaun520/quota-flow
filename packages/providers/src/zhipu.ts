@@ -193,7 +193,7 @@ async function submitWithRetry(
     const delay = policy.baseDelayMs * 2 ** (attempt - 1); // 指数退避
     log("warn", "submit", `限流（code=${err?.code ?? "-"}），${delay}ms 后重试 (${attempt}/${policy.maxRetries})`);
     // 面向桌面调度台的过程提示：让 UI 显示「限流，xxxxms 后重试」而非停留在「选中账号…」
-    onProgress?.(`限流（code=${err?.code ?? "-"}），${delay}ms 后重试（${attempt}/${policy.maxRetries}）`);
+    onProgress?.(`平台限流，${delay}ms 后自动重试（第 ${attempt}/${policy.maxRetries} 次）`);
     await new Promise((r) => setTimeout(r, delay));
   }
 }

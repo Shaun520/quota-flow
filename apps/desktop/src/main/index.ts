@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { initWebviewTest } from './webview-test'
 import { initProviders } from './providers'
+import { registerApiIpc } from './api-branch'
 import { initCookieRenew } from './cookie-renew'
 import {
   checkForUpdatesNow,
@@ -535,6 +536,7 @@ app.whenReady().then(() => {
   })
   initAutoUpdater(sendUpdaterStatus)
   initProviders()
+  registerApiIpc()
   initCookieRenew()
   createWindow()
 

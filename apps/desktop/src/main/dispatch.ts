@@ -13,6 +13,8 @@ import { parseStoredCredentials as parseProviderCredentials } from './providers'
 import { runQwenGeneration } from './qwen-webview'
 import { runYuanbaoGeneration } from './yuanbao-webview'
 import { runDolaGeneration } from './dola-webview'
+import { API_BRANCHES } from './api-branch'
+import type { ApiCredential, ApiGenerateParams } from './api-branch'
 
 export interface GenerateInput {
   supabaseUrl: string
@@ -46,6 +48,8 @@ export interface DispatchEvent {
 export interface QuotaUpdatedPayload {
   userId: string
   ledger: QuotaLedgerRow
+  /** API 型厂商（智谱）生成成功后触发：渲染层据此重新拉取该账号真实额度 */
+  zhipuRefreshKeyId?: string
 }
 
 const UA =
@@ -196,6 +200,11 @@ export async function runGenerate(
   // 元宝当前没有独立视频生成入口，生成完全靠 chat 输入框提示词完成；
   // 这里在进入任务前补前缀，保证任务记录与页面实际发送的 prompt 一致。
   const dispatchPrompt = resolvedProviderId === 'yuanbao' ? `视频生成：${input.prompt}` : input.prompt
+
+  // API 型厂商（智谱等）走独立分支：实体为 API Key，无 cookie 自动化，额度在平台资源包。
+  if (resolvedProviderId in API_BRANCHES) {
+    return runApiBranch(input, emit, onJobCreated, onQuotaUpdated)
+  }
   try {
     const providers = await providerSvc.listAllProviders()
     const meta = providers.find((p) => p.id === resolvedProviderId)
@@ -580,5 +589,200 @@ export async function runGenerate(
     data: { resultUrl, cost, localPath, accountId: selectedKey?.id ?? null }
   })
 
+  return { ok: true, jobId: job.id }
+}
+
+/**
+ * API 型厂商生成分支（智谱等）：凭证为 API Key，直接调开放平台；
+ * 不做 cookie 自动化、不参与 auto 选路，额度为平台资源包（生成后由渲染层刷新真实余额）。
+ */
+async function runApiBranch(
+  input: GenerateInput,
+  emit: (event: DispatchEvent) => void,
+  onJobCreated?: (jobId: string, state: { aborted: boolean; submitted: boolean }) => void,
+  onQuotaUpdated?: (payload: QuotaUpdatedPayload) => void
+): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+  const providerId = input.providerId
+  const branch = API_BRANCHES[providerId]
+
+  const client = createSupabaseClient({
+    supabaseUrl: input.supabaseUrl,
+    supabaseAnonKey: input.supabaseAnonKey
+  })
+  try {
+    await client.auth.setSession({ access_token: input.accessToken, refresh_token: input.refreshToken })
+  } catch {
+    return { ok: false, error: '登录态恢复失败，请重新登录' }
+  }
+  const jobSvc = new JobService(client)
+  const providerSvc = new ProviderService(client)
+
+  const model = input.model || 'cogvideox-flash'
+  if (!branch.supportedDurations(model).includes(input.durationSec)) {
+    return { ok: false, error: `当前模型不支持 ${input.durationSec} 秒` }
+  }
+
+  const runCancelState: { aborted: boolean; submitted: boolean } = { aborted: false, submitted: false }
+
+  let job
+  try {
+    job = await jobSvc.insertJob(input.userId, {
+      teamId: input.teamId,
+      mode: normalizeJobMode(input.mode),
+      prompt: input.prompt,
+      status: 'pending',
+      providerId: input.providerId
+    })
+  } catch (e) {
+    return { ok: false, error: '创建任务失败: ' + (e instanceof Error ? e.message : String(e)) }
+  }
+  if (!job) return { ok: false, error: '创建任务失败' }
+  emit({ jobId: job.id, status: 'pending', message: '任务已创建' })
+  onJobCreated?.(job.id, runCancelState)
+
+  const jobOptions: Record<string, unknown> = {
+    mode: input.mode,
+    model,
+    durationSec: input.durationSec
+  }
+
+  const keys = input.teamId
+    ? await providerSvc.listTeamProviderKeysWithSecrets(input.teamId)
+    : (await providerSvc.listProviderKeysWithSecrets(input.userId)).filter((k) => !k.team_id)
+  const providerKeys = keys.filter((k) => k.provider_id === providerId && k.enabled !== false)
+  // 默认账号优先，无默认则取首个可用账号
+  const cand = providerKeys.find((k) => k.is_default) ?? providerKeys[0]
+  if (!cand) {
+    const err = `未绑定${branch.displayName}账号（请在厂商页绑定后重试）`
+    await jobSvc.updateJob(input.userId, job.id, {
+      status: 'failed',
+      error: err,
+      options: jobOptions,
+      completedAt: new Date().toISOString()
+    })
+    emit({ jobId: job.id, status: 'failed', message: err })
+    return { ok: false, jobId: job.id, error: err }
+  }
+
+  let creds: ApiCredential | null = null
+  try {
+    const plain = safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(Buffer.from(cand.encrypted_key ?? '', 'base64'))
+      : ''
+    creds = branch.parseCredentials(plain)
+  } catch {
+    creds = null
+  }
+  if (!creds) {
+    const err = '账号「' + (cand.account_name || '未命名') + '」凭据解密失败'
+    await jobSvc.updateJob(input.userId, job.id, {
+      status: 'failed',
+      error: err,
+      options: jobOptions,
+      completedAt: new Date().toISOString()
+    })
+    emit({ jobId: job.id, status: 'failed', message: err })
+    return { ok: false, jobId: job.id, error: err }
+  }
+
+  await jobSvc.updateJob(input.userId, job.id, {
+    status: 'running',
+    accountId: cand.id,
+    options: { ...jobOptions, accountId: cand.id, accountName: cand.account_name }
+  })
+  emit({
+    jobId: job.id,
+    status: 'running',
+    stage: 'select-account',
+    message: `使用账号：${cand.account_name || '未命名'}`
+  })
+
+  if (runCancelState.aborted) {
+    await jobSvc.updateJob(input.userId, job.id, {
+      status: 'interrupted',
+      error: '已手动终止生成',
+      options: jobOptions,
+      completedAt: new Date().toISOString()
+    })
+    return { ok: false, jobId: job.id, error: '已手动终止生成' }
+  }
+
+  const rawMode = normalizeJobMode(input.mode)
+  const mode: ApiGenerateParams['mode'] =
+    rawMode === 'text2video' || rawMode === 'first_last' || rawMode === 'multi_ref' ? rawMode : 'img2video'
+  const params: ApiGenerateParams = {
+    mode,
+    model,
+    prompt: input.prompt,
+    // 图生/首尾/参考生图片为前端上传后的公网 https URL；由 branch 按模式过滤与数量校验
+    images: input.images ?? [],
+    durationSec: input.durationSec,
+    onProgress: (msg) => emit({ jobId: job.id, status: 'running', stage: 'progress', message: msg })
+  }
+  const res = await branch.generate(input, creds, params)
+  if (!res.ok || !res.videoUrl) {
+    const err = res.error || '生成失败'
+    await jobSvc.updateJob(input.userId, job.id, {
+      status: 'failed',
+      error: err,
+      options: jobOptions,
+      completedAt: new Date().toISOString()
+    })
+    emit({ jobId: job.id, status: 'failed', message: err })
+    return { ok: false, jobId: job.id, error: err }
+  }
+
+  let localPath: string | null = null
+  try {
+    localPath = await downloadVideo(res.videoUrl, job.id, providerId)
+  } catch {
+    // 下载失败不阻断成功返回，回落远程 URL
+  }
+  const resultUrl = localPath || res.videoUrl
+  const cost = branch.cost(model)
+
+  await jobSvc.updateJob(input.userId, job.id, {
+    status: 'success',
+    providerId,
+    accountId: cand.id,
+    resultUrl,
+    costUnit: branch.unitName,
+    costAmount: cost,
+    attempts: [],
+    options: {
+      ...jobOptions,
+      remoteUrl: res.videoUrl,
+      localPath: localPath || null,
+      accountId: cand.id,
+      accountName: cand.account_name
+    }
+  })
+  emit({
+    jobId: job.id,
+    status: 'success',
+    message: '生成成功',
+    data: { resultUrl, cost, localPath, accountId: cand.id }
+  })
+
+  // 智谱本地账本不做原子扣减（真实额度在平台资源包），仅记录 costAmount 展示；
+  // 生成完成后下发 zhipuRefreshKeyId，渲染层据此重新拉取该账号真实余额。
+  onQuotaUpdated?.({
+    userId: input.userId,
+    ledger: {
+      id: job.id,
+      date: todayKey(),
+      team_id: input.teamId ?? null,
+      owner_user_id: input.userId,
+      account_key_id: cand.id,
+      provider_id: providerId,
+      unit_name: branch.unitName,
+      daily_total: 0,
+      used: 0,
+      remaining: 0,
+      reserved: 0,
+      refreshed_at: new Date().toISOString()
+    },
+    zhipuRefreshKeyId: cand.id
+  })
   return { ok: true, jobId: job.id }
 }

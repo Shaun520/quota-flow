@@ -103,6 +103,28 @@ export interface WatermarkStatusResult {
 export interface QuotaUpdatedPayload {
   userId: string
   ledger: QuotaLedgerRow
+  /** API 型厂商（智谱）生成成功后触发：据此重新拉取该账号真实额度 */
+  zhipuRefreshKeyId?: string
+}
+
+/** 智谱平台资源包余额（fetch-quota 返回） */
+export interface ZhipuQuotaResult {
+  available: boolean
+  total: number
+  remaining: number
+  expiresAt?: string | null
+  packageName?: string | null
+  expired?: boolean
+}
+
+/** API 型厂商「查看模型」弹窗目录项 */
+export interface ApiModelInfo {
+  model: string
+  priceLabel: string
+  cost: number
+  durations: number[]
+  size: string | null
+  modes: Array<{ value: string; label: string }>
 }
 
 export interface UpdaterStatus {
@@ -186,6 +208,22 @@ export interface DesktopApi {
      * 迁移分区：把 src 分区的 cookie 复制到 dst 分区（用于刷新已有账号时把临时分区登录态迁移到目标分区）
      */
     migratePartition: (providerId: string, srcKeyId: string, dstKeyId: string) => Promise<{ ok: boolean; cookieCount?: number; error?: string }>
+    /**
+     * 测试 API Key 型厂商凭据是否有效（不产生费用）
+     */
+    testApiKey: (providerId: string, encrypted: string) => Promise<{ ok: boolean; error?: string }>
+    /**
+     * 查询 API 型厂商账号真实额度（智谱：平台资源包余额）
+     */
+    fetchQuota: (providerId: string, encrypted: string) => Promise<{ ok: boolean; quota?: ZhipuQuotaResult; error?: string }>
+    /**
+     * 查询 API 型厂商模型目录（「查看模型」弹窗）
+     */
+    apiModels: (providerId: string) => Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>
+    /**
+     * 捕获智谱控制台登录会话（consoleJwt），用于真实额度查询
+     */
+    captureZhipuSession: () => Promise<{ ok: boolean; consoleJwt?: string; error?: string }>
   }
   cookieRenew: {
     configure: (config: CookieRenewConfig) => Promise<{ ok: boolean; error?: string }>
@@ -286,7 +324,15 @@ const api: DesktopApi = {
     cancelLogin: (providerId, keyId) =>
       ipcRenderer.invoke('provider:login-cancel', providerId, keyId) as Promise<void>,
     migratePartition: (providerId, srcKeyId, dstKeyId) =>
-      ipcRenderer.invoke('provider:migrate-partition', providerId, srcKeyId, dstKeyId) as Promise<{ ok: boolean; cookieCount?: number; error?: string }>
+      ipcRenderer.invoke('provider:migrate-partition', providerId, srcKeyId, dstKeyId) as Promise<{ ok: boolean; cookieCount?: number; error?: string }>,
+    testApiKey: (providerId, encrypted) =>
+      ipcRenderer.invoke('provider:test-api-key', providerId, encrypted) as Promise<{ ok: boolean; error?: string }>,
+    fetchQuota: (providerId, encrypted) =>
+      ipcRenderer.invoke('provider:fetch-quota', providerId, encrypted) as Promise<{ ok: boolean; quota?: ZhipuQuotaResult; error?: string }>,
+    apiModels: (providerId) =>
+      ipcRenderer.invoke('provider:api-models', providerId) as Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>,
+    captureZhipuSession: () =>
+      ipcRenderer.invoke('provider:capture-zhipu-session') as Promise<{ ok: boolean; consoleJwt?: string; error?: string }>
   },
   cookieRenew: {
     configure: (config) => ipcRenderer.invoke('cookie-renew:configure', config) as Promise<{ ok: boolean; error?: string }>,

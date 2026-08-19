@@ -9,7 +9,8 @@ export const PROVIDER_LABEL: Record<string, string> = {
   yuanbao: '元宝混元',
   dola: 'Dola',
   kling: '可灵',
-  hailuo: '海螺'
+  hailuo: '海螺',
+  zhipu: '智谱（bigmodel）'
 }
 
 export const MODELS: Record<string, string[]> = {
@@ -21,7 +22,31 @@ export const MODELS: Record<string, string[]> = {
   yuanbao: ['混元'],
   dola: ['Dreamina Seedance 2.5', 'Dreamina Seedance 2.0 Fast', 'Dreamina Seedance 1.0'],
   kling: ['可灵-标准', '可灵-大师'],
-  hailuo: ['海螺-标准']
+  hailuo: ['海螺-标准'],
+  zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2']
+}
+
+/** 智谱模型展示价格（与主进程 api-branch 保持一致） */
+export const ZHIPU_MODEL_PRICE: Record<string, string> = {
+  'cogvideox-flash': '免费',
+  'cogvideox-2': '¥0.5/次',
+  'cogvideox-3': '¥1/次',
+  'Vidu Q1': '¥2.5/次',
+  'Vidu 2': '¥1.25/次起'
+}
+
+/** 智谱各模型固定生成时长（秒）；与主进程 api-branch.ZHIPU_MODEL_DURATIONS 保持一致 */
+export const ZHIPU_MODEL_DURATIONS: Record<string, number[]> = {
+  'cogvideox-flash': [5],
+  'cogvideox-2': [5],
+  'cogvideox-3': [5, 10],
+  'Vidu Q1': [5],
+  'Vidu 2': [4]
+}
+
+/** 智谱按模型取有效时长；未收录模型回退厂商配置或默认档 */
+export function zhipuModelDurations(model: string): number[] {
+  return ZHIPU_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
 }
 
 export interface DurationOption {
@@ -36,6 +61,31 @@ const DURATION_ORDER = [5, 10, 15] as const
 
 /** 千问视频生成模式按模型限定；本轮不再给 qwenwan 暴露文生/图生视频 */
 export function providerModeOptions(provider: string, model = ''): Array<{ value: string; label: string }> {
+  if (provider === 'zhipu') {
+    switch (model) {
+      case 'cogvideox-flash':
+      case 'cogvideox-2':
+      case 'cogvideox-3':
+        return [
+          { value: 'text2video', label: '文生视频' },
+          { value: 'img2video', label: '图生视频' }
+        ]
+      case 'Vidu Q1':
+        return [
+          { value: 'text2video', label: '文生视频' },
+          { value: 'img2video', label: '图生视频' },
+          { value: 'first_last', label: '首尾帧生成' }
+        ]
+      case 'Vidu 2':
+        return [
+          { value: 'img2video', label: '图生视频' },
+          { value: 'first_last', label: '首尾帧生成' },
+          { value: 'multi_ref', label: '多参考生成' }
+        ]
+      default:
+        return []
+    }
+  }
   if (provider === 'qwenwan') {
     if (model === '万相 2.7') {
       return [
@@ -83,6 +133,14 @@ export function durationOptions(
   supportedDurations: number[] = DEFAULT_SUPPORTED_DURATIONS
 ): DurationOption[] {
   const allowed = new Set(supportedDurations)
+  // 智谱：Vidu 2 固定 4s，时长可能不在标准档位，直接按模型能力生成
+  if (provider === 'zhipu') {
+    const list: DurationOption[] = [...new Set([...allowed])]
+      .filter((d) => Number.isFinite(d) && d > 0)
+      .sort((a, b) => a - b)
+      .map((d) => ({ value: d, label: `${d} 秒` }))
+    return list.length > 0 ? list : [{ value: 5, label: '5 秒' }]
+  }
   const durations: DurationOption[] = DURATION_ORDER.filter((d) => allowed.has(d)).map((d) => ({
     value: d,
     label: `${d} 秒`
@@ -150,6 +208,15 @@ export function ratioOptions(provider: string): Array<{ value: string; label: st
 }
 
 export function uploadHint(provider: string, mode: string): string {
+  if (provider === 'zhipu') {
+    const map: Record<string, string> = {
+      img2video: '生视频需上传 1 张首帧图片',
+      first_last: '首尾帧生成需上传首帧和尾帧共 2 张图片',
+      multi_ref: '参考生视频最多上传 5 张参考图',
+      text2video: '文生视频无需上传素材'
+    }
+    return map[mode] ?? '文生视频无需上传素材'
+  }
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'doubao' && mode === 'multi_ref') return '上传图片作为参考（最多 10 张）'
@@ -172,6 +239,10 @@ export function computeCost(
   resolution: string
 ): CostResult {
   const d = DURATION_POINT[duration] ?? 0
+  if (provider === 'zhipu') {
+    const price = ZHIPU_MODEL_PRICE[model] ?? '免费'
+    return { text: price, who: model + ' · ' + duration + 's' }
+  }
   if (provider === 'qwen' || provider === 'qwenwan') {
     const cost = 1 + d + (resolution === '1080' ? 1 : 0)
     return { text: cost + ' 额度', who: model + ' · ' + duration + 's · ' + resolution + 'p' }
