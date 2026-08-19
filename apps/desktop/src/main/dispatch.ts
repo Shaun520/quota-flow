@@ -57,10 +57,6 @@ const UA =
 
 const DEFAULT_SUPPORTED_DURATIONS = [5, 10]
 
-function resolveDispatchProvider(providerId: string): string {
-  return providerId === 'auto' ? 'doubao' : providerId
-}
-
 function normalizeJobMode(mode?: string): string {
   if (mode === 'img' || mode === 'img2video') return 'img2video'
   if (mode === 'multi_ref' || mode === 'first_last' || mode === 'first_frame' || mode === 'firstlast') {
@@ -196,7 +192,7 @@ export async function runGenerate(
   const jobSvc = new JobService(client)
   const providerSvc = new ProviderService(client)
 
-  const resolvedProviderId = resolveDispatchProvider(input.providerId)
+  const resolvedProviderId = input.providerId
   // 元宝当前没有独立视频生成入口，生成完全靠 chat 输入框提示词完成；
   // 这里在进入任务前补前缀，保证任务记录与页面实际发送的 prompt 一致。
   const dispatchPrompt = resolvedProviderId === 'yuanbao' ? `视频生成：${input.prompt}` : input.prompt
@@ -594,7 +590,7 @@ export async function runGenerate(
 
 /**
  * API 型厂商生成分支（智谱等）：凭证为 API Key，直接调开放平台；
- * 不做 cookie 自动化、不参与 auto 选路，额度为平台资源包（生成后由渲染层刷新真实余额）。
+ * 不做 cookie 自动化，按所选厂商直连平台 API，额度为平台资源包（生成后由渲染层刷新真实余额）。
  */
 async function runApiBranch(
   input: GenerateInput,

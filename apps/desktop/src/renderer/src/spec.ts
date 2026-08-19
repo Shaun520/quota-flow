@@ -1,7 +1,6 @@
 // 额度规格逻辑，与 docs/数据库与额度/Provider额度规格.md 保持一致
 
 export const PROVIDER_LABEL: Record<string, string> = {
-  auto: '智能调度',
   doubao: '豆包',
   jimeng: '即梦',
   qwen: '通义万相',
@@ -14,7 +13,6 @@ export const PROVIDER_LABEL: Record<string, string> = {
 }
 
 export const MODELS: Record<string, string[]> = {
-  auto: ['自动选择'],
   doubao: ['Seedance 2.0 Mini'],
   jimeng: ['视频 S2.0', '视频 S2.0 Pro'],
   qwen: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
@@ -111,18 +109,6 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
     { value: 'multi_ref', label: '多参考生成' },
     { value: 'first_last', label: '首尾帧生成' }
   ]
-}
-
-export function intersectDurations(lists: number[][]): number[] {
-  if (lists.length === 0) return [...DEFAULT_SUPPORTED_DURATIONS]
-  const counts = new Map<number, number>()
-  for (const list of lists) {
-    const unique = Array.from(new Set(list.map(Number).filter((n) => Number.isFinite(n) && n > 0)))
-    for (const duration of unique) {
-      counts.set(duration, (counts.get(duration) ?? 0) + 1)
-    }
-  }
-  return DURATION_ORDER.filter((duration) => counts.get(duration) === lists.length)
 }
 
 export function durationOptions(

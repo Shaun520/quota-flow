@@ -6,7 +6,6 @@ import {
   MODELS,
   computeCost,
   durationOptions,
-  intersectDurations,
   providerModeOptions,
   ratioOptions,
   resolutionOptions,
@@ -29,8 +28,6 @@ import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
 import { uploadReferenceImage } from '../utils/uploadImage'
 
 const VIP = false
-/** 本轮 auto 仍只走豆包；避免只绑千问/元宝时把 auto 展示成可用项 */
-const AUTO_CAPABLE_PROVIDER_IDS = new Set(['doubao'])
 
 function maxImageUploadCount(provider: string, model: string): number {
   // 智谱按模型能力限制图片上传数量：图生视频1张、首尾帧2张、Vidu 2参考生视频最多5张
@@ -164,8 +161,8 @@ export default function Dashboard({
   const { aggs: provAggs, zhipuQuotaOverrides } = providers
   const { user, team } = useAuth()
   const { items: jobItems, reload: reloadJobs } = jobs
-  const [provider, setProvider] = useState('auto')
-  const [model, setModel] = useState(MODELS.auto[0])
+  const [provider, setProvider] = useState('doubao')
+  const [model, setModel] = useState(MODELS.doubao[0])
   const [mode, setMode] = useState('t2v')
   const [duration, setDuration] = useState(5)
   const [resolution, setResolution] = useState('720')
@@ -198,7 +195,7 @@ export default function Dashboard({
     const nextProvider = regenerateDraft.providerId
     const nextModel = MODELS[nextProvider]?.includes(regenerateDraft.model)
       ? regenerateDraft.model
-      : MODELS[nextProvider]?.[0] ?? MODELS.auto[0]
+      : MODELS[nextProvider]?.[0] ?? MODELS.doubao[0]
     const normalizedMode = normalizeRegenerateMode(nextProvider, regenerateDraft.mode)
     const nextModes = visibleModeOptions(nextProvider, nextModel, features)
     const nextMode = nextModes.some((m) => m.value === normalizedMode)
@@ -255,14 +252,11 @@ export default function Dashboard({
     return new Map(provAggs.map((a) => [a.providerId, a.durations]))
   }, [provAggs])
   const selectedDurations = useMemo(() => {
-    if (provider === 'auto') {
-      return intersectDurations(activeBoundAggs.map((a) => a.durations))
-    }
     // 智谱固定生成时长为模型级能力（cogvideox-3 5/10s、Vidu Q1 5s、Vidu 2 4s 等），
     // 与主进程 api-branch 的模型时长校验保持一致，避免 UI 可选但与生成校验冲突。
     if (provider === 'zhipu') return zhipuModelDurations(model)
     return providerDurations.get(provider) ?? DEFAULT_SUPPORTED_DURATIONS
-  }, [provider, model, activeBoundAggs, providerDurations])
+  }, [provider, model, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
   const modeOptions = useMemo(
     () => visibleModeOptions(provider, model, features),
@@ -270,29 +264,27 @@ export default function Dashboard({
   )
   const resolutions = resolutionOptions(provider)
   const ratios = ratioOptions(provider)
-  const cost = computeCost(provider === 'auto' ? 'doubao' : provider, model, duration, resolution)
+  const cost = computeCost(provider, model, duration, resolution)
   const upload = uploadHint(provider, mode)
 
   // 调度台状态面板不展示后台已停用的厂商，避免出现置灰/停用态干扰调度信息。
   const visibleAggs = useMemo(() => provAggs.filter((p) => p.enabled !== false), [provAggs])
 
-  // 厂商选项只取「已启用且已绑定」的厂商；智能调度仅在至少绑定一家时提供
+  // 厂商选项只取「已启用且已绑定」的厂商
   const providerOptions = useMemo(() => {
     if (activeBoundAggs.length === 0) return []
-    const canUseAuto = activeBoundAggs.some((a) => AUTO_CAPABLE_PROVIDER_IDS.has(a.providerId))
-    const options = activeBoundAggs.map((a) => ({ value: a.providerId, label: a.name }))
-    return canUseAuto ? [{ value: 'auto', label: '智能调度（推荐）' }, ...options] : options
+    return activeBoundAggs.map((a) => ({ value: a.providerId, label: a.name }))
   }, [activeBoundAggs])
 
-  // 当前选择不在可用列表时（例如厂商被解绑），回退到智能调度或第一个可用厂商
+  // 当前选择不在可用列表时（例如厂商被解绑），回退到第一个可用厂商
   useEffect(() => {
     if (providerOptions.length === 0) return
     const valid = providerOptions.map((o) => o.value)
     if (!valid.includes(provider)) {
-      const next = valid.includes('auto') ? 'auto' : valid[0]
+      const next = valid[0]
       setProvider(next)
-      setModel(MODELS[next]?.[0] ?? MODELS.auto[0])
-      const nextModes = visibleModeOptions(next, MODELS[next]?.[0] ?? MODELS.auto[0], features)
+      setModel(MODELS[next]?.[0] ?? MODELS.doubao[0])
+      const nextModes = visibleModeOptions(next, MODELS[next]?.[0] ?? MODELS.doubao[0], features)
       setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
       setImageFiles([])
@@ -573,7 +565,7 @@ export default function Dashboard({
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
-    const nextModel = MODELS[value]?.[0] ?? MODELS.auto[0]
+    const nextModel = MODELS[value]?.[0] ?? MODELS.doubao[0]
     setModel(nextModel)
     const nextModes = visibleModeOptions(value, nextModel, features)
     setMode(nextModes[0]?.value ?? 't2v')
@@ -674,7 +666,7 @@ export default function Dashboard({
             <h1>调度台</h1>
             <div className="divider" />
           </div>
-          <p>聚合 7 家厂商免费额度 · 智能调度 · 一键生成</p>
+          <p>聚合 7 家厂商免费额度 · 一键生成</p>
         </div>
       </div>
 
@@ -683,7 +675,7 @@ export default function Dashboard({
         <div className="generate-panel">
           <div className="panel-header">
             <h2>生成视频</h2>
-            <span className="panel-meta">智能调度 · 可用优先</span>
+            <span className="panel-meta">自选厂商 · 一键生成</span>
           </div>
 
           <div className="input-group">
@@ -763,7 +755,7 @@ export default function Dashboard({
                 id="model"
                 value={model}
                 onChange={onModelChange}
-                options={(MODELS[provider] ?? MODELS.auto).map((m) => ({ value: m, label: m }))}
+                options={(MODELS[provider] ?? MODELS.doubao).map((m) => ({ value: m, label: m }))}
               />
             </div>
           </div>
@@ -981,7 +973,7 @@ export default function Dashboard({
               <EmptyState
                 className="ps-empty"
                 title="还没有绑定任何厂商账号"
-                description="绑定账号后即可自动获取免费额度，由智能调度按可用额度分发任务"
+                description="绑定账号后即可自动获取免费额度，在调度台选择厂商生成"
                 action={
                   <button className="btn-sm primary" onClick={onGoProviders}>
                     去绑定账号 →

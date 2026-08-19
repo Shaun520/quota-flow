@@ -585,7 +585,7 @@ export class ProviderService {
     if (error) throw error
   }
 
-  /** 启用/停用账号：停用后智能调度（生成视频等）自动跳过该账号 */
+  /** 启用/停用账号：停用后生成视频等任务跳过该账号 */
   async setEnabled(userId: string, keyId: string, enabled: boolean): Promise<void> {
     const { error } = await this.client
       .from('provider_keys')
