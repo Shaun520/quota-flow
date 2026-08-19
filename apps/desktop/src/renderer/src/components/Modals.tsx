@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { IconChevron, IconClose, ProviderIconMark } from './icons'
 import { BrandMark } from './Brand'
@@ -583,37 +583,51 @@ function ProviderSelect({
       </button>
       {open && (
         <div className="provider-select-list" role="listbox" aria-label="选择厂商">
-          {providers.map((p) => {
-            const disabled = p.enabled === false
-            return (
-              <button
-                type="button"
-                key={p.providerId}
-                role="option"
-                aria-selected={!disabled && p.providerId === value}
-                aria-disabled={disabled}
-                className={
-                  'provider-select-item' +
-                  (p.providerId === value ? ' active' : '') +
-                  (disabled ? ' disabled' : '')
-                }
-                disabled={disabled}
-                onClick={() => {
-                  onChange(p.providerId)
-                  setOpen(false)
-                }}
-              >
-                <ProviderIconMark providerId={p.providerId} logo={p.logo} size={16} />
-                <span>{p.name}</span>
-                {disabled && <span className="provider-select-disabled-label">已停用</span>}
-                {!disabled && p.providerId === value && (
-                  <svg className="provider-select-check" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M5 13l4 4 10-10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                )}
-              </button>
-            )
-          })}
+          {(
+            [
+              { key: 'cookie', label: 'Cookie 登录', items: providers.filter((p) => p.authType !== 'apikey') },
+              { key: 'apikey', label: 'API Key', items: providers.filter((p) => p.authType === 'apikey') }
+            ] as const
+          ).map((group) =>
+            group.items.length > 0 ? (
+              <Fragment key={group.key}>
+                <div className="provider-select-group" role="presentation">
+                  {group.label}
+                </div>
+                {group.items.map((p) => {
+                  const disabled = p.enabled === false
+                  return (
+                    <button
+                      type="button"
+                      key={p.providerId}
+                      role="option"
+                      aria-selected={!disabled && p.providerId === value}
+                      aria-disabled={disabled}
+                      className={
+                        'provider-select-item' +
+                        (p.providerId === value ? ' active' : '') +
+                        (disabled ? ' disabled' : '')
+                      }
+                      disabled={disabled}
+                      onClick={() => {
+                        onChange(p.providerId)
+                        setOpen(false)
+                      }}
+                    >
+                      <ProviderIconMark providerId={p.providerId} logo={p.logo} size={16} />
+                      <span>{p.name}</span>
+                      {disabled && <span className="provider-select-disabled-label">已停用</span>}
+                      {!disabled && p.providerId === value && (
+                        <svg className="provider-select-check" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M5 13l4 4 10-10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </button>
+                  )
+                })}
+              </Fragment>
+            ) : null
+          )}
         </div>
       )}
     </div>

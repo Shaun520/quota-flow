@@ -3078,6 +3078,31 @@ textarea::-webkit-scrollbar {
   z-index: 220;
   max-height: 264px;
   overflow-y: auto;
+  /* 完全隐藏滚动条视觉，保留滚轮/触控板滚动能力 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.provider-select-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.provider-select-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-tertiary, #8a8a8e);
+  user-select: none;
+}
+.provider-select-group:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 8px;
 }
 .provider-select-item {
   display: flex;
