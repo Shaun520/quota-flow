@@ -18,6 +18,7 @@ import type { AuthUser } from './hooks/useAuth'
 import { useProviders } from './hooks/useProviders'
 import { useJobs } from './hooks/useJobs'
 import { useDesktopPermissions } from './hooks/useDesktopPermissions'
+import { useProviderCaps } from './hooks/useProviderCaps'
 import type { TeamContext, UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import {
   Modal,
@@ -316,6 +317,7 @@ function MainApp({
   }, [user?.id])
 
   const permissions = useDesktopPermissions(user.id, team?.id)
+  const providerCaps = useProviderCaps(user.id, team?.id)
   const visibleTabs = useMemo(
     () => TABS.filter((t) => permissions.features[`tab.${t.id}` as const] !== false),
     [permissions.features]
@@ -496,6 +498,7 @@ function MainApp({
               providers={providers}
               jobs={jobs}
               features={permissions.features}
+              providerCaps={providerCaps}
               regenerateDraft={regenerateDraft}
               materialImages={materialImages}
               onMaterialImagesConsumed={() => setMaterialImages([])}
