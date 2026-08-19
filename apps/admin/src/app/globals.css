@@ -1040,6 +1040,67 @@ input:focus, select:focus, textarea:focus {
   white-space: nowrap;
 }
 
+/* Provider 生成能力弹窗 */
+.provider-cap-scope {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.provider-cap-scope .cap-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-background);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.provider-cap-scope .cap-option.active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-muted);
+}
+
+.provider-cap-scope .cap-option input {
+  accent-color: var(--color-primary);
+  margin: 0;
+}
+
+.cap-checkbox-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-2);
+}
+
+.cap-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.cap-checkbox:hover {
+  border-color: var(--color-primary);
+}
+
+.cap-checkbox input {
+  accent-color: var(--color-primary);
+  margin: 0;
+}
+
 .permission-workspace {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);

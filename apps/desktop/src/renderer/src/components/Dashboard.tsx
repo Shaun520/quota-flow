@@ -25,6 +25,7 @@ import { ensureFreshSession } from '../auth/session'
 import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
+import type { ProviderCaps, ProviderCapsMap } from '../hooks/useProviderCaps'
 import { uploadReferenceImage } from '../utils/uploadImage'
 
 const VIP = false
@@ -98,6 +99,7 @@ interface DashboardProps {
   providers: ProvidersResult
   jobs: JobsResult
   features: DesktopFeatureFlags
+  providerCaps: ProviderCapsMap
   regenerateDraft?: RegenerateDraft | null
   /** 素材库「用作参考」注入的图片：添加为图像参考并切到图生/多参考模式 */
   materialImages?: Array<{ path: string; url: string }>
@@ -125,12 +127,20 @@ function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
   return 't2v'
 }
 
+/** 桌面子模式键归一为 admin 目录扁平键，用于与 caps.modes 求交集 */
+function toFlatMode(value: string): string {
+  if (value === 't2v') return 'text2video'
+  if (value === 'img') return 'img2video'
+  return value
+}
+
 function visibleModeOptions(
   provider: string,
   model: string,
-  features: DesktopFeatureFlags
+  features: DesktopFeatureFlags,
+  caps?: ProviderCaps
 ): Array<{ value: string; label: string }> {
-  return providerModeOptions(provider, model).filter((option) => {
+  const base = providerModeOptions(provider, model).filter((option) => {
     if (option.value === 't2v') return features['dispatch.text2video']
     if (option.value === 'img') return features['dispatch.img2video']
     if (option.value === 'multi_ref') return features['dispatch.multi_ref']
@@ -138,6 +148,12 @@ function visibleModeOptions(
     if (option.value === 'first_frame') return features['dispatch.first_frame']
     return true
   })
+  // Admin 配置了厂商级 caps 时，模式列表与 caps.modes 求交集（双层 AND）
+  if (caps?.modes) {
+    const allowed = new Set(caps.modes)
+    return base.filter((option) => allowed.has(toFlatMode(option.value)))
+  }
+  return base
 }
 
 export default function Dashboard({
@@ -153,6 +169,7 @@ export default function Dashboard({
   providers,
   jobs,
   features,
+  providerCaps,
   regenerateDraft,
   materialImages,
   onMaterialImagesConsumed,
@@ -189,15 +206,19 @@ export default function Dashboard({
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Admin 厂商级生成能力：命中 provider_caps 时该厂商模式/模型以配置为准，缺省回退硬编码默认
+  const caps = providerCaps[provider]
+  const modelList = (p: string): string[] => providerCaps[p]?.models ?? MODELS[p] ?? MODELS.doubao
+
   // 历史详情「重新生成」：把历史参数回填到调度台表单，图片走已保存副本路径
   useEffect(() => {
     if (!regenerateDraft) return
     const nextProvider = regenerateDraft.providerId
-    const nextModel = MODELS[nextProvider]?.includes(regenerateDraft.model)
+    const nextModel = modelList(nextProvider).includes(regenerateDraft.model)
       ? regenerateDraft.model
-      : MODELS[nextProvider]?.[0] ?? MODELS.doubao[0]
+      : modelList(nextProvider)[0] ?? MODELS.doubao[0]
     const normalizedMode = normalizeRegenerateMode(nextProvider, regenerateDraft.mode)
-    const nextModes = visibleModeOptions(nextProvider, nextModel, features)
+    const nextModes = visibleModeOptions(nextProvider, nextModel, features, providerCaps[nextProvider])
     const nextMode = nextModes.some((m) => m.value === normalizedMode)
       ? normalizedMode
       : (nextModes[0]?.value ?? 't2v')
@@ -231,18 +252,18 @@ export default function Dashboard({
     return () => {
       cancelled = true
     }
-  }, [regenerateDraft, features, onRegenerateConsumed])
+  }, [regenerateDraft, features, providerCaps, onRegenerateConsumed])
 
   // 素材库「用作参考」：把图片追加为图像参考，并切到当前厂商可用的图生/多参考模式
   useEffect(() => {
     if (!materialImages || materialImages.length === 0) return
     setSavedImagePaths((prev) => [...prev, ...materialImages.map((m) => m.path)])
     setImages((prev) => [...prev, ...materialImages.map((m) => m.url)])
-    const validModes = visibleModeOptions(provider, model, features)
+    const validModes = visibleModeOptions(provider, model, features, caps)
     const imageMode = validModes.find((m) => ['multi_ref', 'img', 'first_last', 'first_frame'].includes(m.value))
     if (imageMode && imageMode.value !== mode) setMode(imageMode.value)
     onMaterialImagesConsumed?.()
-  }, [materialImages, provider, model, features, mode, onMaterialImagesConsumed])
+  }, [materialImages, provider, model, features, caps, mode, onMaterialImagesConsumed])
 
   const activeBoundAggs = useMemo(
     () => provAggs.filter((a) => a.enabled && a.boundCount > 0),
@@ -259,8 +280,8 @@ export default function Dashboard({
   }, [provider, model, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
   const modeOptions = useMemo(
-    () => visibleModeOptions(provider, model, features),
-    [provider, model, features]
+    () => visibleModeOptions(provider, model, features, caps),
+    [provider, model, features, caps]
   )
   const resolutions = resolutionOptions(provider)
   const ratios = ratioOptions(provider)
@@ -282,15 +303,16 @@ export default function Dashboard({
     const valid = providerOptions.map((o) => o.value)
     if (!valid.includes(provider)) {
       const next = valid[0]
+      const nextModel = modelList(next)[0] ?? MODELS.doubao[0]
       setProvider(next)
-      setModel(MODELS[next]?.[0] ?? MODELS.doubao[0])
-      const nextModes = visibleModeOptions(next, MODELS[next]?.[0] ?? MODELS.doubao[0], features)
+      setModel(nextModel)
+      const nextModes = visibleModeOptions(next, nextModel, features, providerCaps[next])
       setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
       setImageFiles([])
       setSavedImagePaths([])
     }
-  }, [providerOptions, provider, features])
+  }, [providerOptions, provider, features, providerCaps])
 
   useEffect(() => {
     if (!durations.some((d) => d.value === duration)) {
@@ -315,14 +337,14 @@ export default function Dashboard({
 
   // 千问生成模式按模型限定；模型变化后若当前模式不可用，自动落到该模型第一个可用模式
   useEffect(() => {
-    const validModes = visibleModeOptions(provider, model, features).map((m) => m.value)
+    const validModes = visibleModeOptions(provider, model, features, caps).map((m) => m.value)
     if (!validModes.includes(mode)) {
       setMode(validModes[0] ?? 't2v')
       setImages([])
       setImageFiles([])
       setSavedImagePaths([])
     }
-  }, [provider, model, mode, features])
+  }, [provider, model, mode, features, caps])
 
   // 主进程生成事件：仅终态（成功/失败）刷新列表，进度事件不触发，避免历史页列表/分页反复闪加载
   useEffect(() => {
@@ -442,7 +464,12 @@ export default function Dashboard({
       setGenError('请先填写 Prompt 描述')
       return
     }
-    const validModes = visibleModeOptions(provider, model, features).map((m) => m.value)
+    // Admin 配置该厂商 models 为空（被屏蔽）时，无可生成模型
+    if (modelList(provider).length === 0) {
+      setGenError('该厂商暂无可生成模型')
+      return
+    }
+    const validModes = visibleModeOptions(provider, model, features, caps).map((m) => m.value)
     if (!validModes.includes(currentMode)) {
       setGenError('当前生成模式已被管理员关闭，请选择可用的生成模式')
       return
@@ -450,7 +477,7 @@ export default function Dashboard({
     const imageCount = savedImagePaths.length + imageFiles.length
     // 文生视频需图片：排除 t2v（网页厂商）与 text2video（智谱 API）两种文案枚举
     if (currentMode !== 't2v' && currentMode !== 'text2video' && imageCount === 0) {
-      const modeLabel = visibleModeOptions(provider, model, features).find((m) => m.value === currentMode)?.label ?? '多参考'
+      const modeLabel = visibleModeOptions(provider, model, features, caps).find((m) => m.value === currentMode)?.label ?? '多参考'
       setGenError(`${modeLabel}需要至少上传一张素材图片`)
       return
     }
@@ -530,7 +557,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, features, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -565,9 +592,9 @@ export default function Dashboard({
 
   const onProviderChange = (value: string): void => {
     setProvider(value)
-    const nextModel = MODELS[value]?.[0] ?? MODELS.doubao[0]
+    const nextModel = modelList(value)[0] ?? MODELS.doubao[0]
     setModel(nextModel)
-    const nextModes = visibleModeOptions(value, nextModel, features)
+    const nextModes = visibleModeOptions(value, nextModel, features, providerCaps[value])
     setMode(nextModes[0]?.value ?? 't2v')
     setImages([])
     setImageFiles([])
@@ -585,7 +612,7 @@ export default function Dashboard({
 
   const onModelChange = (value: string): void => {
     setModel(value)
-    const nextModes = visibleModeOptions(provider, value, features)
+    const nextModes = visibleModeOptions(provider, value, features, caps)
     if (!nextModes.some((m) => m.value === mode)) {
       setMode(nextModes[0]?.value ?? 't2v')
       setImages([])
@@ -755,7 +782,7 @@ export default function Dashboard({
                 id="model"
                 value={model}
                 onChange={onModelChange}
-                options={(MODELS[provider] ?? MODELS.doubao).map((m) => ({ value: m, label: m }))}
+                options={modelList(provider).map((m) => ({ value: m, label: m }))}
               />
             </div>
           </div>

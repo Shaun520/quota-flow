@@ -1,10 +1,12 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ListChecks, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { createAdminBrowserClient } from "@/lib/supabase/client";
 import { insertAuditLog } from "@/lib/utils/audit";
 import { PROVIDER_ICONS } from "./provider-icons";
+import { listTeamOptions, type TeamOption } from "@/lib/api/teams";
+import { MODE_LABELS, PROVIDER_GENERATION_CATALOG } from "@/lib/provider-catalog";
 
 export interface ProviderRow {
   id: string;
@@ -123,6 +125,7 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ProviderRow | null>(null);
   const [deleting, setDeleting] = useState<ProviderRow | null>(null);
+  const [capsProvider, setCapsProvider] = useState<ProviderRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingBusy, setDeletingBusy] = useState(false);
 
@@ -516,6 +519,7 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
                   onToggle={() => toggleProvider(provider)}
                   onEdit={() => setEditing(provider)}
                   onDelete={() => setDeleting(provider)}
+                  onCaps={() => setCapsProvider(provider)}
                 />
               ))
             )}
@@ -547,6 +551,10 @@ export function ProviderManager({ providers: initialProviders }: { providers: Pr
           onConfirm={confirmDelete}
           onClose={() => setDeleting(null)}
         />
+      ) : null}
+
+      {capsProvider ? (
+        <ProviderCapsModal provider={capsProvider} onClose={() => setCapsProvider(null)} />
       ) : null}
     </div>
   );
@@ -730,13 +738,15 @@ function ProviderRowItem({
   busy,
   onToggle,
   onEdit,
-  onDelete
+  onDelete,
+  onCaps
 }: {
   provider: ProviderRow;
   busy: boolean;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onCaps: () => void;
 }) {
   const IconComp = PROVIDER_ICONS[provider.id];
   const logoUrl = isRemoteLogo(provider.logo) ? provider.logo : null;
@@ -790,6 +800,10 @@ function ProviderRowItem({
           <button className="btn btn-secondary btn-sm" type="button" disabled={busy} onClick={onEdit}>
             <Pencil size={14} />
             编辑
+          </button>
+          <button className="btn btn-secondary btn-sm" type="button" disabled={busy} onClick={onCaps}>
+            <ListChecks size={14} />
+            生成能力
           </button>
           <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={onDelete}>
             <Trash2 size={14} />
@@ -1031,6 +1045,248 @@ function ProviderDeleteModal({
           <button className="btn btn-danger btn-sm" type="button" onClick={onConfirm} disabled={busy}>
             <Trash2 />
             {busy ? "删除中..." : "确认删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface CapsRow {
+  modes: string[];
+  models: string[];
+}
+
+function ProviderCapsModal({ provider, onClose }: { provider: ProviderRow; onClose: () => void }) {
+  const catalog = PROVIDER_GENERATION_CATALOG[provider.id] ?? { modes: [], models: [] };
+  const [teams, setTeams] = useState<TeamOption[]>([]);
+  const [scopeKind, setScopeKind] = useState<"global" | "team">("global");
+  const [teamId, setTeamId] = useState("");
+  const [selectedModes, setSelectedModes] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const targetId = scopeKind === "team" ? teamId : null;
+
+  const loadCaps = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const supabase = createAdminBrowserClient();
+      let query = supabase
+        .from("provider_caps")
+        .select("modes, models")
+        .eq("provider", provider.id)
+        .eq("target_type", scopeKind);
+      query = scopeKind === "team" ? query.eq("target_id", teamId) : query.is("target_id", null);
+      const { data, error: qError } = await query.maybeSingle();
+      if (qError) throw qError;
+      const row = (data ?? null) as CapsRow | null;
+      setSelectedModes(row?.modes ?? []);
+      setSelectedModels(row?.models ?? []);
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : (e as { message?: string } | undefined)?.message || String(e);
+      setError(msg || "配置加载失败");
+    } finally {
+      setLoading(false);
+    }
+  }, [provider.id, scopeKind, teamId]);
+
+  useEffect(() => {
+    void listTeamOptions().then(setTeams).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    // team 范围尚未选择团队时不加载（避免与 global 的 null target 冲突）
+    if (scopeKind === "team" && !teamId) {
+      setSelectedModes([]);
+      setSelectedModels([]);
+      return;
+    }
+    void loadCaps();
+  }, [scopeKind, teamId, loadCaps]);
+
+  function toggleMode(mode: string, checked: boolean) {
+    setSelectedModes((prev) => (checked ? [...prev, mode] : prev.filter((m) => m !== mode)));
+  }
+  function toggleModel(model: string, checked: boolean) {
+    setSelectedModels((prev) => (checked ? [...prev, model] : prev.filter((m) => m !== model)));
+  }
+
+  async function handleSave() {
+    if (scopeKind === "team" && !teamId) {
+      setError("请先选择团队");
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      const supabase = createAdminBrowserClient();
+      const {
+        data: { user }
+      } = await supabase.auth.getUser();
+      const adminId = user?.id ?? null;
+
+      let del = supabase
+        .from("provider_caps")
+        .delete()
+        .eq("provider", provider.id)
+        .eq("target_type", scopeKind);
+      del = scopeKind === "team" ? del.eq("target_id", teamId) : del.is("target_id", null);
+      const { error: delError } = await del;
+      if (delError) throw delError;
+
+      const { error: insError } = await supabase.from("provider_caps").insert({
+        target_type: scopeKind,
+        target_id: targetId,
+        provider: provider.id,
+        modes: selectedModes,
+        models: selectedModels,
+        updated_by: adminId
+      });
+      if (insError) throw insError;
+
+      await insertAuditLog("providerCaps.upsert", {
+        target: provider.id,
+        metadata: {
+          provider_id: provider.id,
+          targetType: scopeKind,
+          targetId: targetId,
+          modes: selectedModes,
+          models: selectedModels
+        }
+      });
+
+      onClose();
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : (e as { message?: string } | undefined)?.message || String(e);
+      setError(msg || "配置保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const scopeLabel = scopeKind === "team" ? `团队：${teams.find((t) => t.id === teamId)?.name ?? "未选择"}` : "全局默认";
+
+  return (
+    <div className="modal-overlay show" role="dialog" aria-modal="true">
+      <div className="modal">
+        <div className="modal-header">
+          <div className="modal-title">
+            生成能力 · {provider.name}
+          </div>
+          <button className="modal-close" type="button" onClick={onClose} disabled={saving} aria-label="关闭">
+            <X />
+          </button>
+        </div>
+        <div className="modal-body">
+          <p className="form-hint">
+            配置后桌面端该厂商的模式/模型以勾选项为唯一可选；全不勾选＝屏蔽该厂商；该作用域未配置＝桌面端默认值。
+          </p>
+
+          <div className="form-group">
+            <label className="form-label">作用范围</label>
+            <div className="provider-cap-scope">
+              <label className={scopeKind === "global" ? "cap-option active" : "cap-option"}>
+                <input
+                  type="radio"
+                  name="caps-scope"
+                  checked={scopeKind === "global"}
+                  onChange={() => setScopeKind("global")}
+                />
+                全局默认
+              </label>
+              <label className={scopeKind === "team" ? "cap-option active" : "cap-option"}>
+                <input
+                  type="radio"
+                  name="caps-scope"
+                  checked={scopeKind === "team"}
+                  onChange={() => setScopeKind("team")}
+                />
+                指定团队
+              </label>
+            </div>
+          </div>
+
+          {scopeKind === "team" ? (
+            <div className="form-group">
+              <label className="form-label">选择团队</label>
+              <select
+                className="form-select"
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value)}
+              >
+                <option value="">请选择团队</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
+          {loading ? (
+            <p className="form-hint">加载配置中...</p>
+          ) : (
+            <>
+              <div className="form-group">
+                <label className="form-label">
+                  生成模式（<span style={{ color: "var(--color-destructive)" }}>暂存为 {scopeLabel}</span>）
+                </label>
+                <div className="cap-checkbox-group">
+                  {catalog.modes.length === 0 ? (
+                    <p className="form-hint">该厂商暂无模式目录</p>
+                  ) : (
+                    catalog.modes.map((mode) => (
+                      <label key={mode} className="cap-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={selectedModes.includes(mode)}
+                          onChange={(e) => toggleMode(mode, e.target.checked)}
+                        />
+                        {MODE_LABELS[mode] ?? mode}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">模型</label>
+                <div className="cap-checkbox-group">
+                  {catalog.models.length === 0 ? (
+                    <p className="form-hint">该厂商暂无模型目录</p>
+                  ) : (
+                    catalog.models.map((model) => (
+                      <label key={model} className="cap-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={selectedModels.includes(model)}
+                          onChange={(e) => toggleModel(model, e.target.checked)}
+                        />
+                        {model}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {error ? <div className="alert alert-danger">{error}</div> : null}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary btn-sm" type="button" onClick={onClose} disabled={saving}>
+            取消
+          </button>
+          <button className="btn btn-primary btn-sm" type="button" onClick={handleSave} disabled={saving || loading}>
+            <Save />
+            {saving ? "保存中..." : "保存"}
           </button>
         </div>
       </div>
