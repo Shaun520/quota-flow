@@ -940,7 +940,13 @@ export function AddProviderModal({
     setError(null)
     setNotice(null)
     try {
-      const res = await window.api.providers.captureZhipuSession()
+      // 智谱按账号绑定：先生成绑定 keyId（作为控制台分区与 DB 记录 id），确保登录态存入该账号自己的分区、多账号互不串号
+      let bindId = loginTempId
+      if (providerId === 'zhipu' && !bindId) {
+        bindId = crypto.randomUUID()
+        setLoginTempId(bindId)
+      }
+      const res = await window.api.providers.captureZhipuSession(providerId === 'zhipu' ? bindId ?? undefined : undefined)
       if (res.ok && res.consoleJwt) setConsoleJwt(res.consoleJwt)
       if (!res.ok && res.error) setError(res.error)
     } catch (e) {

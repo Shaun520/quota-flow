@@ -575,17 +575,21 @@ function ProviderRow({
                         )}
                       </td>
                       <td>
-                        {!isApiKeyProvider && (
+                        {!isApiKeyProvider || agg.providerId === 'zhipu' ? (
                           <>
                             <button
                               className="btn-sm"
                               onClick={() => void onOpenSite(acc.keyId)}
-                              title="打开该账号对应的官网页面"
+                              title={
+                                agg.providerId === 'zhipu'
+                                  ? '打开已登录的智谱控制台（复用当前会话，免重复登录）'
+                                  : '打开该账号对应的官网页面'
+                              }
                             >
                               进入官网
                             </button>{' '}
                           </>
-                        )}
+                        ) : null}
                         {acc.ownerUserId === currentUserId ? (
                           <>
                             {acc.teamId ? (

@@ -94,10 +94,17 @@ const siteWindows = new Map<string, BrowserWindow>()
 
 /**
  * 分区标识：
+ * - 智谱（bigmodel）：控制台会话分区 persist:qf-zhipu-console[:keyId]，keyId 用于账号隔离避免多账号串会话
  * - 无 keyId（通用登录窗口/健康检查）：persist:qf-p:<providerId>
  * - 有 keyId（账号级独立分区，登录=生成）：persist:qf-p:<providerId>:<keyId>
  */
+const ZHIPU_CONSOLE_PARTITION = 'persist:qf-zhipu-console'
+/** 智谱控制台分区按账号隔离：persist:qf-zhipu-console[:keyId]（无 keyId 回退共享分区，兼容旧账号/即开即用） */
+function zhipuConsolePartitionFor(keyId?: string): string {
+  return keyId ? `${ZHIPU_CONSOLE_PARTITION}:${keyId}` : ZHIPU_CONSOLE_PARTITION
+}
 function partitionFor(providerId: string, keyId?: string): string {
+  if (providerId === 'zhipu') return zhipuConsolePartitionFor(keyId)
   const base = 'persist:qf-p:' + providerId
   return keyId ? `${base}:${keyId}` : base
 }
@@ -141,6 +148,7 @@ function defaultStorageOrigin(providerId: string): string {
       // fallthrough to legacy defaults
     }
   }
+  if (providerId === 'zhipu') return 'https://open.bigmodel.cn'
   return providerId === 'qwenwan' ? 'https://www.qianwen.com' : 'https://www.doubao.com'
 }
 
@@ -664,11 +672,21 @@ async function openProviderSite(
   keyId: string,
   encryptedKey?: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const site = providerSite(providerId)
-  const url = site?.loginUrl || site?.healthUrl
-  if (!url) return { ok: false, error: '该厂商仅支持 API Key 绑定，暂不支持打开官网' }
+  // 智谱（bigmodel）：打开该账号控制台，使用按账号隔离的分区（persist:qf-zhipu-console:<keyId>）免重复登录且不串号
+  let url: string | undefined
+  let partition: string
+  let injectableEncrypted: string | undefined
+  if (providerId === 'zhipu') {
+    url = ZHIPU_CONSOLE_URL
+    partition = partitionFor(providerId, keyId)
+  } else {
+    const site = providerSite(providerId)
+    url = site?.loginUrl || site?.healthUrl
+    if (!url) return { ok: false, error: '该厂商仅支持 API Key 绑定，暂不支持打开官网' }
+    partition = partitionFor(providerId, keyId)
+    injectableEncrypted = encryptedKey
+  }
 
-  const partition = partitionFor(providerId, keyId)
   const winKey = `${providerId}:${keyId}`
   const existing = siteWindows.get(winKey)
   if (existing && !existing.isDestroyed()) {
@@ -679,9 +697,10 @@ async function openProviderSite(
 
   const ses = session.fromPartition(partition)
   ses.setUserAgent(CHROME_UA)
-  if (encryptedKey) {
+  // 智谱走共享控制台分区，无需注入账号级 cookie；其余厂商按账号分区并注入 cookie
+  if (injectableEncrypted) {
     try {
-      const parsed = parseStoredCredentials(encryptedKey, providerId)
+      const parsed = parseStoredCredentials(injectableEncrypted, providerId)
       if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
     } catch {
       // 解密失败时仍尝试打开官网，至少让用户看到站点本身。
@@ -985,26 +1004,81 @@ async function zhipuAccountFingerprint(payload: string): Promise<string | null> 
 // 以读取请求头 Authorization: Bearer <JWT>；仅扫描 localStorage 拿不到有效 JWT（隔离会话里只有 session_id）。
 // 用户登录后点击注入条上的「获取 API Key」，主进程轮询取回捕获的令牌并销毁窗口。
 const ZHIPU_CONSOLE_URL = 'https://open.bigmodel.cn/apikey/platform'
-// 智谱控制台用独立分区；每次打开前仅清「登录态存储」（cookies/localStorage 等），
+// 智谱控制台用「按账号隔离的独立分区」（persist:qf-zhipu-console[:keyId]，keyId 见 zhipuConsolePartitionFor）；
+// 每次打开前仅清「登录态存储」（cookies/localStorage 等），
 // 保留 HTTP 磁盘缓存以加速重复打开（整站是重 SPA，若每次 clearCache 会强制全量重新下载，明显变慢）。
-const ZHIPU_CONSOLE_PARTITION = 'persist:qf-zhipu-console'
-function zhipuConsoleSession(): Electron.Session {
-  return session.fromPartition(ZHIPU_CONSOLE_PARTITION)
+function zhipuConsoleSession(keyId?: string): Electron.Session {
+  return session.fromPartition(zhipuConsolePartitionFor(keyId))
 }
 
-export async function captureZhipuConsoleSession(): Promise<{ ok: boolean; consoleJwt?: string; error?: string }> {
-  const winKey = 'zhipu-console'
+/** 静默续期窗口最多等待时长（毫秒）；超时仍未捕获到新 JWT，视为控制台登录态已失效 */
+const ZHIPU_QUIET_RENEW_TIMEOUT_MS = 25000
+
+/**
+ * 从智谱控制台会话 JWT 中解析 `exp`（毫秒）。非标准 JWT / 无 exp / 解析失败返回 null（据此不自动续期）。
+ */
+function zhipuJwtExpiryMs(consoleJwt?: string | null): number | null {
+  if (!consoleJwt) return null
+  const m = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(consoleJwt.trim())
+  if (!m) return null
+  try {
+    const b64 = m[2].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : ''
+    const data = JSON.parse(Buffer.from(b64 + pad, 'base64').toString('utf8')) as { exp?: number }
+    return typeof data.exp === 'number' ? data.exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+/** 自动续期触发阈值：距离过期不足该时长时进入「将过期」状态并触发静默续期（默认 10 分钟） */
+const ZHIPU_RENEW_THRESHOLD_MS = 10 * 60 * 1000
+/** 同一账号连续两次续期尝试的最小间隔（续期失败后节流重试，避免反复开隐藏窗口） */
+const ZHIPU_RENEW_MIN_INTERVAL_MS = 5 * 60 * 1000
+
+export type ZhipuConsoleSessionState =
+  | { hasSession: false }
+  | { hasSession: true; status: 'alive' | 'expiring' | 'expired'; expMs: number | null; remainingMs: number | null }
+
+/** 依据 JWT 的 exp 判定会话状态：无有效 JWT → hasSession=false；有 exp → 按剩余时间分 alive/expiring/expired；解析不出 exp → 默认 alive */
+function zhipuConsoleSessionState(consoleJwt?: string | null): ZhipuConsoleSessionState {
+  if (!consoleJwt) return { hasSession: false }
+  const expMs = zhipuJwtExpiryMs(consoleJwt)
+  if (expMs === null) return { hasSession: true, status: 'alive', expMs: null, remainingMs: null }
+  const remainingMs = expMs - Date.now()
+  const status = remainingMs <= 0 ? 'expired' : remainingMs <= ZHIPU_RENEW_THRESHOLD_MS ? 'expiring' : 'alive'
+  return { hasSession: true, status, expMs, remainingMs }
+}
+
+/**
+ * 智谱控制台会话捕获 / 静默续期。
+ * @param opts.quiet 为 true 时作为「静默续期」：隐藏窗口、不显示注入条、保留登录态 cookie，
+ *   直接轮询捕获到的新 JWT 并返回（用于 consoleJwt 过期后的自动续期）。缺省为首次绑定交互式捕获。
+ */
+export async function captureZhipuConsoleSession(opts?: {
+  quiet?: boolean
+  /** 绑定/续期所属的账号 keyId；用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话 */
+  keyId?: string
+  /** 静默续期时当前有效的旧 JWT；若捕获到的新 JWT 与之相同，视为登录态未变化，不当作成功续期 */
+  oldConsoleJwt?: string | null
+}): Promise<{ ok: boolean; consoleJwt?: string; error?: string }> {
+  const quiet = !!opts?.quiet
+  const optKeyId = opts?.keyId
+  const winKey = `${quiet ? 'zhipu-console-quiet' : 'zhipu-console'}:${optKeyId ?? 'shared'}`
+  const oldConsoleJwt = opts?.oldConsoleJwt
   const existing = loginWindows.get(winKey)
   if (existing && !existing.isDestroyed()) {
     existing.focus()
-    return { ok: false, error: '智谱控制台窗口已打开' }
+    return { ok: false, error: quiet ? '会话续期进行中' : '智谱控制台窗口已打开' }
   }
 
-  // 加载前先等登录态存储清空，避免上一次登录残留跨次出现在新窗口
-  try {
-    await zhipuConsoleSession().clearStorageData()
-  } catch {}
-  const ses = zhipuConsoleSession()
+  // 首次绑定需清空登录态存储避免残留；静默续期必须保留 cookie 以复用已登录会话，跳过清空
+  if (!quiet) {
+    try {
+      await zhipuConsoleSession(optKeyId).clearStorageData()
+    } catch {}
+  }
+  const ses = zhipuConsoleSession(optKeyId)
 
   const win = new BrowserWindow({
     width: 1024,
@@ -1014,6 +1088,8 @@ export async function captureZhipuConsoleSession(): Promise<{ ok: boolean; conso
     title: '⋮⋮  Quota-Flow · 智谱控制台',
     autoHideMenuBar: true,
     backgroundColor: '#ffffff',
+    // 静默续期窗口不显示，避免打扰用户
+    show: !quiet,
     // 生成/控制台窗口统一保留真实渲染，避免默认隐藏窗口显示时白屏闪烁
     paintWhenInitiallyHidden: true,
     webPreferences: {
@@ -1133,16 +1209,19 @@ export async function captureZhipuConsoleSession(): Promise<{ ok: boolean; conso
 
   return new Promise((resolve) => {
     let finished = false
+    let renewTimeout: NodeJS.Timeout | null = null
     const done = (result: { ok: boolean; consoleJwt?: string; error?: string }): void => {
       if (finished) return
       finished = true
       clearInterval(pollTimer)
+      if (renewTimeout) clearTimeout(renewTimeout)
       if (!win.isDestroyed()) win.destroy()
       loginWindows.delete(winKey)
       resolve(result)
     }
     win.on('closed', () => {
       clearInterval(pollTimer)
+      if (renewTimeout) clearTimeout(renewTimeout)
       try {
         void win.webContents
           .executeJavaScript('clearInterval(window.__ZF_SCAN__)')
@@ -1155,9 +1234,28 @@ export async function captureZhipuConsoleSession(): Promise<{ ok: boolean; conso
       }
     })
 
-    // 轮询注入条按钮：点击后按捕获情况返回
+    // 静默续期：若超时仍未捕获到新 JWT，判定控制台登录态已失效（可能需要用户重新登录）
+    if (quiet) {
+      renewTimeout = setTimeout(() => {
+        done({ ok: false, error: '静默续期超时：控制台登录态可能已失效，请在厂商页手动刷新账号' })
+      }, ZHIPU_QUIET_RENEW_TIMEOUT_MS)
+    }
+
+    // 轮询注入条按钮：交互式点击后按捕获情况返回；静默式直接自动取捕获到的新 JWT
     const pollTimer = setInterval(() => {
       if (win.isDestroyed()) return
+      if (quiet) {
+        void win.webContents
+          .executeJavaScript('window.__ZF_CAPTURED__ || null')
+          .then((jwt: unknown) => {
+            if (typeof jwt !== 'string' || !jwt) return
+            // 与当前旧 JWT 相同 → 登录态未更新，继续等待页面刷新出真正的新令牌
+            if (oldConsoleJwt && jwt === oldConsoleJwt.trim()) return
+            done({ ok: true, consoleJwt: jwt })
+          })
+          .catch(() => {})
+        return
+      }
       void win.webContents
         .executeJavaScript('window.__ZF_SUBMIT__ ? [window.__ZF_STATE__, window.__ZF_CAPTURED__] : null')
         .then((val: unknown) => {
@@ -1233,10 +1331,58 @@ export function initProviders(): void {
     }
   })
 
-  // 智谱控制台会话捕获：弹出控制台登录窗口并捕获访问令牌（consoleJwt），供后续调额度接口使用
-  ipcMain.handle('provider:capture-zhipu-session', async () => {
-    return captureZhipuConsoleSession()
+  // 智谱控制台会话捕获：按账号 keyId 弹出对应分区控制台登录窗口并捕获访问令牌（consoleJwt）
+  ipcMain.handle('provider:capture-zhipu-session', async (_e, keyId?: string) => {
+    return captureZhipuConsoleSession({ keyId: typeof keyId === 'string' && keyId ? keyId : undefined })
   })
+
+  // 智谱控制台会话状态：按账号 keyId 解密后视 JWT 的 exp 判定 alive / expiring / expired，供自动续期调度参考
+  ipcMain.handle(
+    'provider:zhipu-session-status',
+    async (_e, _providerId: string, keyId: string, encrypted: string) => {
+      if (!encrypted) return { hasSession: false }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { consoleJwt } = decodeZhipuPayload(plain)
+        return zhipuConsoleSessionState(consoleJwt)
+      } catch {
+        return { hasSession: false }
+      }
+    }
+  )
+
+  // 智谱控制台会话静默续期：按账号 keyId 隐藏窗口复用该账号分区登录态 cookie 重新捕获新 JWT，命中后重建加密负载返回
+  ipcMain.handle(
+    'provider:zhipu-renew-session',
+    async (_e, _providerId: string, keyId: string, encrypted: string) => {
+      if (!encrypted) return { ok: false, reason: 'no-secret', error: '缺少密钥' }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { apiKey, consoleJwt } = decodeZhipuPayload(plain)
+        if (!apiKey) return { ok: false, reason: 'no-key', error: '未解析到 API Key' }
+        const res = await captureZhipuConsoleSession({
+          quiet: true,
+          keyId: typeof keyId === 'string' && keyId ? keyId : undefined,
+          oldConsoleJwt: consoleJwt ?? null
+        })
+        if (!res.ok || !res.consoleJwt) {
+          return { ok: false, reason: 'capture-failed', error: res.error ?? '静默续期失败' }
+        }
+        const newJwt = res.consoleJwt
+      // 重建加密负载（保留 apiKey，替换 consoleJwt），返回新 encrypted 供渲染层落库
+        const newPlain = JSON.stringify({ v: 1, apiKey, consoleJwt: newJwt })
+        const newEncrypted = safeStorage.encryptString(newPlain).toString('base64')
+        const st = zhipuConsoleSessionState(newJwt)
+        return {
+          ok: true,
+          encrypted: newEncrypted,
+          ...(st.hasSession ? { expMs: st.expMs, remainingMs: st.remainingMs } : {})
+        }
+      } catch (e) {
+        return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '静默续期失败' }
+      }
+    }
+  )
 
   ipcMain.handle(
     'provider:open-site',

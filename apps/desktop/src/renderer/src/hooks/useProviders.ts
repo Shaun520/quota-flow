@@ -91,6 +91,17 @@ const healthCheckAt = new Map<string, number>()
 /** 健康检查节流记录所属的 user id；账号切换时清空，避免节流记录串号 */
 let healthCheckUserId: string | null = null
 
+/* ============ 智谱 consoleJwt 会话自动续期（静默隐式，后台完成，不打扰用户） ============ */
+
+/** keyId -> 该 key 最近一次续期尝试时间戳（后续期失败节流，避免反复开隐藏窗口） */
+const zhipuRenewAt = new Map<string, number>()
+/** 全局续期进行中标记：控制台会话分区共享，同一时刻只允许一个账号续期，避免隐藏窗口互抢 */
+let zhipuRenewInFlight = false
+/** 会话状态扫描周期（毫秒） */
+const ZHIPU_SESSION_SCAN_MS = 60 * 1000
+/** 同一账号两次续期尝试的最小间隔（毫秒）；续期成功或失败都以此节流 */
+const ZHIPU_RENEW_RETRY_MS = 3 * 60 * 1000
+
 async function runHealthChecks(
   svc: ProviderService,
   userId: string,
@@ -164,6 +175,11 @@ export interface ProvidersResult {
   zhipuQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   /** 会话内更新某账号健康状态（API Key 测试成功后即时反映） */
   setKeyHealth: (keyId: string, status: string) => void
+  /** 智谱各账号控制台会话状态（keyId -> alive/expiring/expired），供态展示与自动续期联动 */
+  zhipuSessionStatuses: Record<
+    string,
+    { hasSession: boolean; status?: 'alive' | 'expiring' | 'expired'; expMs?: number | null; remainingMs?: number | null }
+  >
 }
 
 export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
@@ -218,6 +234,82 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     },
     [fetchZhipuQuotaOnce]
   )
+
+  // 会话内缓存的各智谱账号控制台会话状态（keyId -> 状态）；续期命中/失败时同步更新
+  const [zhipuSessionStatuses, setZhipuSessionStatuses] = useState<
+    Record<string, { hasSession: boolean; status?: 'alive' | 'expiring' | 'expired'; expMs?: number | null; remainingMs?: number | null }>
+  >({})
+
+  // 对单个智谱账号做一次静默续期：成功则用新加密负载落库并重拉真实额度；全局一次只续一个（共享会话分区）
+  const renewZhipuSessionOnce = useCallback(
+    async (keyId: string, encrypted: string): Promise<boolean> => {
+      if (zhipuRenewInFlight) return false
+      zhipuRenewInFlight = true
+      zhipuRenewAt.set(keyId, Date.now())
+      try {
+        const res = await window.api.providers.zhipuRenewSession(keyId, encrypted)
+        if (!res.ok || !res.encrypted) return false
+        const svc = getProviderService()
+        if (svc && user) {
+          await svc.refreshProviderKey(user.id, keyId, {
+            encryptedKey: res.encrypted,
+            healthStatus: 'healthy'
+          })
+        }
+        setZhipuSessionStatuses((prev) => ({
+          ...prev,
+          [keyId]: { hasSession: true, status: 'alive', expMs: res.expMs ?? null, remainingMs: res.remainingMs ?? null }
+        }))
+        // 续期成功后重新拉取真实额度，让页面额度显示即时生效
+        await fetchZhipuQuotaOnce(keyId)
+        return true
+      } catch {
+        return false
+      } finally {
+        zhipuRenewInFlight = false
+      }
+    },
+    [user, fetchZhipuQuotaOnce]
+  )
+
+  // 扫描所有智谱账号的会话状态：命中 expiring / expired 且未到重试节流时，触发一次静默续期并停止本轮
+  const scanZhipuSessions = useCallback(async (): Promise<void> => {
+    if (zhipuRenewInFlight) return
+    const svc = getProviderService()
+    if (!svc || !user) return
+    const now = Date.now()
+    for (const key of keys.filter((k) => k.provider_id === 'zhipu')) {
+      if (now - (zhipuRenewAt.get(key.id) ?? 0) < ZHIPU_RENEW_RETRY_MS) continue
+      let secret: { encrypted_key: string } | null = null
+      try {
+        secret = await svc.getProviderKeySecret(user.id, key.id)
+      } catch {
+        continue
+      }
+      if (!secret) continue
+      let state
+      try {
+        state = await window.api.providers.zhipuSessionStatus(key.id, secret.encrypted_key)
+      } catch {
+        continue
+      }
+      setZhipuSessionStatuses((prev) => ({ ...prev, [key.id]: state }))
+      if (state.hasSession && (state.status === 'expiring' || state.status === 'expired')) {
+        await renewZhipuSessionOnce(key.id, secret.encrypted_key)
+        return
+      }
+    }
+  }, [user, keys, renewZhipuSessionOnce])
+
+  // 启动智谱会话状态扫描：初始化立即扫一次，之后周期轮询；账号切换时重建
+  useEffect(() => {
+    if (!user) return
+    void scanZhipuSessions()
+    const t = setInterval(() => {
+      void scanZhipuSessions()
+    }, ZHIPU_SESSION_SCAN_MS)
+    return () => clearInterval(t)
+  }, [user?.id, scanZhipuSessions])
 
   // 初始化 / 刷新时主动拉取智谱各账号真实额度，覆盖静态默认额度展示为平台实际剩余
   useEffect(() => {
@@ -603,6 +695,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     setProviderKeyScope,
     unbind,
     zhipuQuotaOverrides,
-    setKeyHealth
+    setKeyHealth,
+    zhipuSessionStatuses
   }
 }

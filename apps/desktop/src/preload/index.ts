@@ -127,6 +127,14 @@ export interface ApiModelInfo {
   modes: Array<{ value: string; label: string }>
 }
 
+/** 智谱控制台会话状态（依据 consoleJwt 的 JWT exp 判定），供自动续期调度参考 */
+export interface ZhipuSessionStatusResult {
+  hasSession: boolean
+  status?: 'alive' | 'expiring' | 'expired'
+  expMs?: number | null
+  remainingMs?: number | null
+}
+
 export interface UpdaterStatus {
   state: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
   version?: string
@@ -222,8 +230,25 @@ export interface DesktopApi {
     apiModels: (providerId: string) => Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>
     /**
      * 捕获智谱控制台登录会话（consoleJwt），用于真实额度查询
+     * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
      */
-    captureZhipuSession: () => Promise<{ ok: boolean; consoleJwt?: string; error?: string }>
+    captureZhipuSession: (keyId?: string) => Promise<{ ok: boolean; consoleJwt?: string; error?: string }>
+    /**
+     * 读取指定智谱账号的控制台会话状态（依据 consoleJwt 的 JWT exp 判定 alive / expiring / expired），供自动续期调度
+     */
+    zhipuSessionStatus: (keyId: string, encrypted: string) => Promise<ZhipuSessionStatusResult>
+    /**
+     * 指定智谱账号控制台会话静默续期：隐藏窗口复用该账号分区登录态 cookie 重新捕获新 consoleJwt；
+     * 成功后返回重建后的新加密负载（encrypted），供调用方落库更新
+     */
+    zhipuRenewSession: (keyId: string, encrypted: string) => Promise<{
+      ok: boolean
+      encrypted?: string
+      expMs?: number | null
+      remainingMs?: number | null
+      reason?: string
+      error?: string
+    }>
   }
   cookieRenew: {
     configure: (config: CookieRenewConfig) => Promise<{ ok: boolean; error?: string }>
@@ -331,8 +356,19 @@ const api: DesktopApi = {
       ipcRenderer.invoke('provider:fetch-quota', providerId, encrypted) as Promise<{ ok: boolean; quota?: ZhipuQuotaResult; error?: string }>,
     apiModels: (providerId) =>
       ipcRenderer.invoke('provider:api-models', providerId) as Promise<{ ok: boolean; models?: ApiModelInfo[]; error?: string }>,
-    captureZhipuSession: () =>
-      ipcRenderer.invoke('provider:capture-zhipu-session') as Promise<{ ok: boolean; consoleJwt?: string; error?: string }>
+    captureZhipuSession: (keyId) =>
+      ipcRenderer.invoke('provider:capture-zhipu-session', keyId) as Promise<{ ok: boolean; consoleJwt?: string; error?: string }>,
+    zhipuSessionStatus: (keyId, encrypted) =>
+      ipcRenderer.invoke('provider:zhipu-session-status', 'zhipu', keyId, encrypted) as Promise<ZhipuSessionStatusResult>,
+    zhipuRenewSession: (keyId, encrypted) =>
+      ipcRenderer.invoke('provider:zhipu-renew-session', 'zhipu', keyId, encrypted) as Promise<{
+        ok: boolean
+        encrypted?: string
+        expMs?: number | null
+        remainingMs?: number | null
+        reason?: string
+        error?: string
+      }>
   },
   cookieRenew: {
     configure: (config) => ipcRenderer.invoke('cookie-renew:configure', config) as Promise<{ ok: boolean; error?: string }>,
