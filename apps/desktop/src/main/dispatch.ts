@@ -10,6 +10,7 @@ import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
 import { runDoubaoGeneration } from './webview-engine'
 import type { ProviderCookie, OriginStorage } from './webview-engine'
 import { parseStoredCredentials as parseProviderCredentials } from './providers'
+import { clearVolcModelUnavailable, markVolcModelUnavailable } from './providers'
 import { runQwenGeneration } from './qwen-webview'
 import { runYuanbaoGeneration } from './yuanbao-webview'
 import { runDolaGeneration } from './dola-webview'
@@ -246,10 +247,17 @@ export async function runGenerate(
       const imgDir = join(app.getPath('userData'), 'images')
       mkdirSync(imgDir, { recursive: true })
       for (let i = 0; i < images.length; i++) {
+        const img = images[i]
         try {
-          const ext = (/\.(png|gif|webp)$/i.exec(images[i])?.[1] ?? 'jpg').toLowerCase()
+          // 远程公网 URL（开放平台 API 参考图已上传到 Supabase）→ 直接记录 URL，历史详情按公网地址回显
+          if (/^https?:\/\//i.test(img)) {
+            jobImages.push(img)
+            continue
+          }
+          // 本地图片路径 → 复制一份本地副本到 userData/images 持久化，透过多段历史详情回显
+          const ext = (/\.(png|gif|webp)$/i.exec(img)?.[1] ?? 'jpg').toLowerCase()
           const dest = join(imgDir, `${job.id}-${i}.${ext}`)
-          copyFileSync(images[i], dest)
+          copyFileSync(img, dest)
           jobImages.push(dest)
         } catch {}
       }
@@ -638,18 +646,45 @@ async function runApiBranch(
   emit({ jobId: job.id, status: 'pending', message: '任务已创建' })
   onJobCreated?.(job.id, runCancelState)
 
+  // 图片 https URL 随任务持久化，历史详情可回显「上传图片」；api 厂商参考图为 Supabase 公网 URL
+  const jobImages = (input.images ?? [])
+    .filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u))
+    .slice(0, 5)
   const jobOptions: Record<string, unknown> = {
     mode: input.mode,
     model,
     durationSec: input.durationSec
   }
+  if (jobImages.length > 0) jobOptions.images = jobImages
 
   const keys = input.teamId
     ? await providerSvc.listTeamProviderKeysWithSecrets(input.teamId)
     : (await providerSvc.listProviderKeysWithSecrets(input.userId)).filter((k) => !k.team_id)
   const providerKeys = keys.filter((k) => k.provider_id === providerId && k.enabled !== false)
-  // 默认账号优先，无默认则取首个可用账号
-  const cand = providerKeys.find((k) => k.is_default) ?? providerKeys[0]
+  // 选号：厂商实现 pick 时按其策略在多个已启用账号间选最优（如火山按「是否开通+剩余额度」），
+  // 否则回退现状：默认账号优先，无默认取首个可用账号。
+  let cand = providerKeys.find((k) => k.is_default) ?? providerKeys[0]
+  let plain = ''
+  if (branch.pick && providerKeys.length > 0) {
+    try {
+      const list = providerKeys.map((k) => ({
+        id: k.id,
+        accountName: k.account_name ?? null,
+        isDefault: !!k.is_default,
+        enabled: k.enabled !== false,
+        plain: safeStorage.isEncryptionAvailable()
+          ? safeStorage.decryptString(Buffer.from(k.encrypted_key ?? '', 'base64'))
+          : ''
+      }))
+      const idx = branch.pick(list, model)
+      if (idx != null && providerKeys[idx]) {
+        cand = providerKeys[idx]
+        plain = list[idx]?.plain ?? ''
+      }
+    } catch {
+      // 选号异常：回退默认/首个，不阻断
+    }
+  }
   if (!cand) {
     const err = `未绑定${branch.displayName}账号（请在厂商页绑定后重试）`
     await jobSvc.updateJob(input.userId, job.id, {
@@ -664,13 +699,29 @@ async function runApiBranch(
 
   let creds: ApiCredential | null = null
   try {
-    const plain = safeStorage.isEncryptionAvailable()
-      ? safeStorage.decryptString(Buffer.from(cand.encrypted_key ?? '', 'base64'))
-      : ''
+    if (!plain && safeStorage.isEncryptionAvailable()) {
+      plain = safeStorage.decryptString(Buffer.from(cand.encrypted_key ?? '', 'base64'))
+    }
     creds = branch.parseCredentials(plain)
   } catch {
     creds = null
   }
+
+  // 提交前预检：模型未开通 / 免费额度用完等，在向 API 提交之前拦截，避免白跑
+  if (branch.preflight) {
+    const pf = branch.preflight(model, plain, { durationSec: input.durationSec })
+    if (!pf.ok) {
+      await jobSvc.updateJob(input.userId, job.id, {
+        status: 'failed',
+        error: pf.reason,
+        options: jobOptions,
+        completedAt: new Date().toISOString()
+      })
+      emit({ jobId: job.id, status: 'failed', message: pf.reason })
+      return { ok: false, jobId: job.id, error: pf.reason }
+    }
+  }
+
   if (!creds) {
     const err = '账号「' + (cand.account_name || '未命名') + '」凭据解密失败'
     await jobSvc.updateJob(input.userId, job.id, {
@@ -720,6 +771,19 @@ async function runApiBranch(
   const res = await branch.generate(input, creds, params)
   if (!res.ok || !res.videoUrl) {
     const err = res.error || '生成失败'
+    // 火山方舟提交失败且平台判定模型不可用（无接入点 / 已下架）→ 立即写不可用标记落库，后续生成前拦截 + 查看模型置灰
+    if (providerId === 'volcengine' && res.unavailable && model && plain) {
+      const marked = markVolcModelUnavailable(plain, model, res.unavailable)
+      if (marked.ok && safeStorage.isEncryptionAvailable()) {
+        try {
+          await providerSvc.refreshProviderKey(input.userId, cand.id, {
+            encryptedKey: safeStorage.encryptString(marked.plain).toString('base64')
+          })
+        } catch {
+          // 标记写库失败不回滚本次生成失败
+        }
+      }
+    }
     await jobSvc.updateJob(input.userId, job.id, {
       status: 'failed',
       error: err,
@@ -761,6 +825,20 @@ async function runApiBranch(
     message: '生成成功',
     data: { resultUrl, cost, localPath, accountId: cand.id }
   })
+
+  // 火山方舟生成成功 → 自愈清除该模型的历史不可用标记（平台恢复可用即重新放行）
+  if (providerId === 'volcengine' && model && plain) {
+    const cleared = clearVolcModelUnavailable(plain, model)
+    if (cleared.ok && safeStorage.isEncryptionAvailable()) {
+      try {
+        await providerSvc.refreshProviderKey(input.userId, cand.id, {
+          encryptedKey: safeStorage.encryptString(cleared.plain).toString('base64')
+        })
+      } catch {
+        // 自愈写库失败不影响生成成功返回
+      }
+    }
+  }
 
   // API 型厂商本地账本不做原子扣减（真实额度在平台）；生成完成后下发热点字段，
   // 渲染层据此重新拉取/同步该账号真实额度：智谱走 fetch-quota，火山走开通管理页静默同步。

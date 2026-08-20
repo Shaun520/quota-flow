@@ -131,6 +131,10 @@ export interface ApiModelInfo {
   activated?: boolean
   /** 【每账号】免费 token 额度（火山方舟免费视频模型）：剩余/总数；未抓到为 undefined */
   freeQuota?: { remaining?: number; total?: number }
+  /** 火山方舟模型不可用标记：平台下架 / 账号无接入点 */
+  unavailable?: 'decommissioned' | 'no_endpoint'
+  /** 不可用原因标签（已下架 / 无接入点），仅当 unavailable 有值时存在 */
+  unavailableLabel?: string
 }
 
 /** 火山方舟绑定时控制台抓到的免费视频模型（含每账号 token 额度），随加密负载持久化 */
@@ -290,12 +294,13 @@ export interface DesktopApi {
      * 额度/开通状态；命中则返回重建后的新加密负载（encrypted）+ models，供调用方落库并刷新展示；
      * 未抓到（登录态失效/页面未就绪）返回 {ok:true, preserved:true} 保留旧值。
      */
-    volcSyncModels: (keyId: string, encrypted: string) => Promise<{
+    volcSyncModels: (keyId: string, encrypted: string, maxStaleMs?: number) => Promise<{
       ok: boolean
       encrypted?: string
       models?: VolcengineCapturedModel[]
       accountFingerprint?: string | null
       preserved?: boolean
+      cached?: boolean
       reason?: string
       error?: string
     }>
@@ -439,12 +444,13 @@ const api: DesktopApi = {
         reason?: string
         error?: string
       }>,
-    volcSyncModels: (keyId, encrypted) =>
-      ipcRenderer.invoke('provider:volc-sync-models', 'volcengine', keyId, encrypted) as Promise<{
+    volcSyncModels: (keyId, encrypted, maxStaleMs) =>
+      ipcRenderer.invoke('provider:volc-sync-models', 'volcengine', keyId, encrypted, maxStaleMs) as Promise<{
         ok: boolean
         encrypted?: string
         models?: VolcengineCapturedModel[]
         preserved?: boolean
+        cached?: boolean
         reason?: string
         error?: string
       }>

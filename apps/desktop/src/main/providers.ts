@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { app, BrowserWindow, ipcMain, safeStorage, session, shell } from 'electron'
 import type { Cookie } from 'electron'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, openSync, closeSync, readSync, statSync, truncateSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   fetchZhipuQuota,
@@ -12,9 +12,55 @@ import {
   decodeVolcenginePayload,
   jwtExpiryMs,
   captureVolcengineFreeVideoModels,
+  volcengineAuthoritativeIds,
   VOLCENGINE_FREE_NAME_TO_ID
 } from '@quota-flow/providers'
 import type { VolcengineFreeVideoModel } from '@quota-flow/providers'
+
+/** 对「解密后的明文」仅做透明的 models 不可用标记写入，返回新明文（不触发网络；consoleJwt/accountId 原样保留）。 */
+export function markVolcModelUnavailable(
+  plain: string,
+  model: string,
+  kind: 'decommissioned' | 'no_endpoint'
+): { ok: true; plain: string } | { ok: false } {
+  try {
+    const d = decodeVolcenginePayload(plain)
+    if (!d.apiKey) return { ok: false }
+    const models = Array.isArray(d.models) ? d.models : []
+    const byId = new Map(models.map((m) => [m.id, m]))
+    const copy = byId.get(model)
+    if (copy) {
+      copy.unavailable = kind
+    } else {
+      byId.set(model, { id: model, unavailable: kind } as VolcengineFreeVideoModel)
+    }
+    const next = JSON.stringify({ v: 1, apiKey: d.apiKey, consoleJwt: d.consoleJwt ?? null, accountId: d.accountId ?? null, models: Array.from(byId.values()) })
+    return { ok: true, plain: next }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/** 对「解密后的明文」仅做透明的 models 不可用标记清除（生成成功后自愈），返回新明文。 */
+export function clearVolcModelUnavailable(plain: string, model: string): { ok: true; plain: string } | { ok: false } {
+  try {
+    const d = decodeVolcenginePayload(plain)
+    if (!d.apiKey) return { ok: false }
+    const models = Array.isArray(d.models) ? d.models : []
+    const byId = new Map(models.map((m) => [m.id, m]))
+    const cur = byId.get(model)
+    if (cur && 'unavailable' in cur) {
+      delete cur.unavailable
+      // 该 id 除 id 外无其它字段时移除整项，避免占位
+      const { unavailable: _u, ...rest } = cur
+      if (Object.keys(rest).length <= 1) byId.delete(model)
+    }
+    const next = JSON.stringify({ v: 1, apiKey: d.apiKey, consoleJwt: d.consoleJwt ?? null, accountId: d.accountId ?? null, models: Array.from(byId.values()) })
+    return { ok: true, plain: next }
+  } catch {
+    return { ok: false }
+  }
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -1043,9 +1089,64 @@ function volcEngineConsoleSession(keyId?: string): Electron.Session {
   return session.fromPartition(volcConsolePartitionFor(keyId))
 }
 /** 火山同步诊断日志（userData/volc-sync.log）：排查静默抓取为何未命中控制台免费模型 */
+// 日志只用于排查火山控制台抓取/绑定问题，无须无限累积：超过上限时自动截断，只保留最近一段。
+const VOLC_SYNC_LOG_MAX_BYTES = 2 * 1024 * 1024 // 2MB
+const VOLC_SYNC_LOG_KEEP_BYTES = 512 * 1024 // 截断后保留尾部 512KB
+// 避免每次追加都 stat 开销；距上次裁剪超阈值才检查一次
+let volcSyncLastTrimMs = 0
+const VOLC_SYNC_TRIM_INTERVAL_MS = 60 * 1000
+// SYNC_HB 心跳节流：同步期间每秒探一次，仅在「页面状态变化」（URL/登录/模型数/滚动/行/分页/注入）时才落日志，
+// 静止页面不再每秒刷一条大日志；配合上方的 2MB 自动裁剪，避免一次同步堆砌几十条干扰排查。
+let volcSyncHbSig = ''
+// 接口响应体 / 请求 URL 去抖：轮询中每拍返回同一个 JSON dump，只在内容变化时才写日志，
+// 避免每拍重复落一条冗长的 SYNC_MODELBODY/SYNC_RAW/SYNC_RAWURLS（响应体常达 4~6KB）。
+let volcSyncModelBodySig = ''
+let volcSyncRawBodySig = ''
+let volcSyncRawUrlsSig = ''
+// ListModelTokenLimit 逐页累积的额度集合去抖：随分页每拍都会带上已累积的 token 集合，
+// 集合收敛后重复落一条 SYNC_TOKENS，只在 <模型名:额度> 集合整体变化时才记录。
+let volcSyncTokensSig = ''
+// SYNC_HB 只记首尾两条：首拍落第一个快照后，后续每拍仅把最新快照更新进 fireh 内存，
+// 由同步收尾（done）统一落一条 SYNC_HB_END，避免滚动期间每拍都刷一条。
+let volcSyncHbFired = false
+let volcSyncHbLast: string | null = null
+// 各火山账号额度同步成功时间戳缓存 keyId → Date.now()，供「查看模型」秒开时判断是否可命中缓存跳过 webview 同步
+const volcSyncAt = new Map<string, number>()
+
 function logVolcSync(line: string): void {
+  // 仅开发模式记录同步诊断日志：发布版本（app.isPackaged）不落盘，避免无谓写盘与同步日志累积
+  if (app.isPackaged) return
+  const file = join(app.getPath('userData'), 'volc-sync.log')
   try {
-    appendFileSync(join(app.getPath('userData'), 'volc-sync.log'), `[${new Date().toISOString()}] ${line}\n`)
+    const now = Date.now()
+    // 定时裁剪（本地账本自清理）：不超过频率上限，避免每次写入都去 stat 文件
+    if (now - volcSyncLastTrimMs >= VOLC_SYNC_TRIM_INTERVAL_MS) {
+      volcSyncLastTrimMs = now
+      let size = -1
+      try {
+        size = statSync(file).size
+      } catch {
+        size = -1 // 文件尚不存在或读取失败，跳过裁剪
+      }
+      if (size > VOLC_SYNC_LOG_MAX_BYTES) {
+        let tail = ''
+        const fd = openSync(file, 'r')
+        try {
+          const pos = Math.max(0, size - VOLC_SYNC_LOG_KEEP_BYTES)
+          const buf = Buffer.alloc(size - pos)
+          readSync(fd, buf, 0, buf.length, pos)
+          tail = buf.toString('utf8')
+          // 左裁剪到首个换行之后，避免截断把一行日志劈成两半
+          const nl = tail.indexOf('\n')
+          if (nl >= 0) tail = tail.slice(nl + 1)
+        } finally {
+          closeSync(fd)
+        }
+        truncateSync(file, 0)
+        appendFileSync(file, tail)
+      }
+    }
+    appendFileSync(file, `[${new Date().toISOString()}] ${line}\n`)
   } catch {
     // ignore
   }
@@ -1389,12 +1490,83 @@ export async function captureVolcEngineConsoleSession(opts?: {
     window.__QUOTA_FLOW_VOLC__ = true;
     window.__VF_CAPTURED__ = window.__VF_CAPTURED__ || null;
     window.__VF_ACCOUNT__ = window.__VF_ACCOUNT__ || null;
+    // —— 真实账号标识（去重首选）——
+    // 火山控制台把「当前登录账号」存在会话 localStorage（如 SLARDARmlmaas_volcconsole / SLARDARvolc_console），
+    // 值可能是 base64（URL 编码）或纯 JSON，含 userId 形如 "2112155528_0"（「账号_子账号」），账号唯一且专属于当前登录。
+    // 相比从接口响应里扫 accountId（可能命中跨账号共享的静态值，如两次绑到同一 2100466578），用它做去重最可靠，
+    // 且能保留「同一火山账号多把 API Key 自动去重」的诉求。
+    const extractRealUserid = () => {
+      try {
+        // 注：本段注入代码位于模板字符串 INJECT 内，正则里的 \d/\s 必须以 \\d/\\s 转义，
+        // 否则模板字面量会把它降级成字面量字符，导致正则在页面端完全失效（表现为 REAL=null）。
+        const uidRe = /^(?:(\\d{4,20})(?:_\\d+)?)$/;
+        const dig = (u) => { if (typeof u !== 'string') return null; const m = uidRe.exec(u.trim()); return m ? m[1] : null; };
+        // 火山会话值是 urlsafe base64（可能含 - / _，无 padding），atob 前需换算为标准字符集。
+        const decodeB64 = (s) => {
+          const t = s.replace(/-/g, '+').replace(/_/g, '/');
+          const pad = t.length % 4 ? '='.repeat(4 - (t.length % 4)) : '';
+          try { return atob(t + pad); } catch (_) { return null; }
+        };
+        const decode = (s) => {
+          if (typeof s !== 'string' || !s) return s;
+          // base64/urlsafe-base64；火山会话值常为该形态，atob 后有 %7B 这类 URL 编码，先解码再 URL 解码。
+          if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(s)) {
+            const d = decodeB64(s);
+            if (d !== null) {
+              try { return decodeURIComponent(d); } catch (_) { return d; }
+            }
+          }
+          return s;
+        };
+        // 权威来源：火山主登录会话 key。只认这一个 key 的 userId/UserID/user_id 字段，
+        // 避免遍历「所有 console/volc 相关 key 取首个数字」时误抓到无关 token/accountId（如 377810）。
+        const AUTH_KEYS = ['SLARDARmlmaas_volcconsole', 'SLARDARvolc_console'];
+        const AUTH_FIELDS = ['userId', 'UserID', 'user_id'];
+        const read = (k) => { try { return window.localStorage.getItem(k); } catch (_) { return null; } };
+        for (const ak of AUTH_KEYS) {
+          const raw = read(ak);
+          if (!raw) continue;
+          const s = decode(raw);
+          try {
+            const j = JSON.parse(s);
+            for (const f of AUTH_FIELDS) {
+              const d = dig(j[f]);
+              if (d) return d;
+            }
+          } catch (_) {}
+          // 兜底：正则从解码串里找 userId 形如 "2112155528_0" / "2112155528"
+          const m = /"userId"\\s*:\\s*"?((\\d{4,20})(?:_\\d+)?)?"?/i.exec(s);
+          if (m) return m[1];
+        }
+        // 次权威：key 名自带账号 id 的来源：CONSOLE_RECENT_VISIT_<中间_数字_>userId（形如 ..._2112155528 尾段），
+        // 账号 id 是 4~12 位（时间戳为 13 位毫秒），取最后一个符合位数的尾段。
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i) || '';
+          if (!/^CONSOLE_RECENT_VISIT_/i.test(k)) continue;
+          const kparts = k.split('_');
+          const lastSeg = kparts[kparts.length - 1];
+          if (/^\\d{4,12}$/.test(lastSeg)) return lastSeg;
+        }
+      } catch (_) {}
+      return null;
+    };
+    const realUidResolve = () => { const r = extractRealUserid(); if (r) window.__VF_REAL_UID__ = r; return r || null; };
+    window.__VF_REAL_UID__ = null;
     // 账号标识写入 + 落 localStorage：volc 控制台从「开通管理」切到「API Key 管理」是整页跳转(非 SPA)，
     // 页面全局 __VF_ACCOUNT__ 会被清空；持久化到同源 localStorage(按分区隔离)后，任何一次整页加载都能恢复。
     const persistAccount = (id) => {
-      try { window.__VF_ACCOUNT__ = id; window.localStorage.setItem('qf:volc:account', String(id)); } catch (_) {}
+      // 真实 userId 一旦可解析即为权威：优先写它；仅当解析不到（可能登录晚于注入）才用接口扫到的
+      // 临时/共享值（如 2100466578）兜底，但绝不因上次已写入 shared 而阻止后续用 real 覆盖。
+      const real = window.__VF_REAL_UID__ || realUidResolve();
+      const target = real || id;
+      if (!target) return;
+      try { window.__VF_ACCOUNT__ = target; window.localStorage.setItem('qf:volc:account', String(target)); } catch (_) {}
     };
-    try { const _a = window.localStorage.getItem('qf:volc:account'); if (_a && !window.__VF_ACCOUNT__) window.__VF_ACCOUNT__ = _a; } catch (_) {}
+    if (realUidResolve()) {
+      persistAccount(window.__VF_REAL_UID__);
+    } else {
+      try { const _a = window.localStorage.getItem('qf:volc:account'); if (_a && !window.__VF_ACCOUNT__) window.__VF_ACCOUNT__ = _a; } catch (_) {}
+    }
     window.__VF_SUBMIT__ = false;
     const JWT_RE = /(eyJ[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{5,})/;
     const store = (v) => {
@@ -1417,8 +1589,9 @@ export async function captureVolcEngineConsoleSession(opts?: {
     const BUCKET_ACCOUNT_RE = /ark-(?:auto-)?(\\d{6,20})-cn-/i;
     const extractAccount = (text) => {
       if (typeof text !== 'string' || !text || window.__VF_ACCOUNT__) return;
-      // 优先 whitelist 字段；无则用存储桶名兜底（专属性区分账号）
-      const m = text.match(ACCOUNT_KEY_RE) || text.match(BUCKET_ACCOUNT_RE);
+      // 优先「存储桶名」来源（ark-auto-{accountId}-cn-...，每个火山账号唯一），再回退通用 whitelist 字段。
+      // 通用字段可能命中 bot 预设模板里的静态 AccountId（跨账号相同），若被它抢先会把不同账号误识别成同一账号。
+      const m = text.match(BUCKET_ACCOUNT_RE) || text.match(ACCOUNT_KEY_RE);
       if (m && m[1]) persistAccount(m[1]);
     };
     // 开通管理页模型接口：网上承载「freeQuota / quota / activated / modelId」的响应体
@@ -1610,7 +1783,8 @@ export async function captureVolcEngineConsoleSession(opts?: {
         }
       } catch (_) {}
     };
-    window.__VF_SCAN2__ = setInterval(scrapeFreeModels, 2000);
+    // 定期扫描卡片 + 表格行（新 UI 表格行无「剩/共 token」额度也可用开通状态识别；回调延迟执行无 TDZ 问题）
+    window.__VF_SCAN2__ = setInterval(function () { scrapeFreeModels(); scrapeTableRows(); }, 2000);
     scrapeFreeModels();
     // 改版后开通管理页为「表格」布局（列：模型名/提供方、状态、免费推理额度、在线推理定价…）。
     // 表格逐屏虚拟渲染，Wan/Seedance-1.0 等有额度模型常在列表深处：新增面向表格行的抓取，
@@ -1626,8 +1800,10 @@ export async function captureVolcEngineConsoleSession(opts?: {
           // 表头行（无模型名且多为中文列名），跳过
           if (!t || t.length > 400 || /^模型名|^提供方|^状态$/.test(t)) continue;
           const q = t.match(volcQuotaRe);
-          // 门禁：行内必须带「剩 x /共 y token」免费推理额度才收录（2.x 无免费额度的行不混入）
-          if (!q) continue;
+          // 新 UI 行不再显示「剩 x /共 y token」，改用「安心体验/并发数/RPM」。额度匹配降级为可选：
+          // 行内含 开通状态（已开通/未开通/…）即视为模型行，额度有则带、无则留空由 ListModelTokenLimit 接口补齐。
+          const stM = t.match(/已开通|未开通|尚未开通|待开通|去开通/);
+          if (!q && !stM) continue;
           // 取自提供方(中文)前的连续模型名 token：行首第一个无中文的连续串即模型名。
           // 表格行常把模型名连写重复多次（如 Doubao-Seedance-1.5-pro …×3 且无空格），取最小重复周期去重。
           const nm = t.match(/^[A-Za-z][A-Za-z0-9._-]*/);
@@ -1640,15 +1816,16 @@ export async function captureVolcEngineConsoleSession(opts?: {
           // 开通状态：行文本含「未开通/待开通/去开通」→ 未开通；否则视为已开通
           const notActivated = /未开通|尚未开通|待开通|去开通/i.test(t);
           if (window.__VF_MODELS__.some((m) => m.name === name)) continue;
-          window.__VF_MODELS__.push({
-            name,
-            remaining: Number(q[1].replace(/,/g, '')),
-            total: Number(q[2].replace(/,/g, '')),
-            activated: notActivated ? false : true
-          });
+          const rec = { name, activated: notActivated ? false : true };
+          if (q) {
+            rec.remaining = Number(q[1].replace(/,/g, ''));
+            rec.total = Number(q[2].replace(/,/g, ''));
+          }
+          window.__VF_MODELS__.push(rec);
         }
       } catch (_) {}
     };
+    scrapeTableRows();
     let vfScreenIdx = 0;
     // 额度同步模式：逐屏渐进滚动所有可滚动容器，一屏一屏往下，滚动一屏就解析该屏表格行。
     // 每次滚一屏而非直接到底，避免跳底导致中间屏幕的模型行未渲染而漏收。
@@ -1734,7 +1911,27 @@ export async function captureVolcEngineConsoleSession(opts?: {
         '<div style="color:#c9cdd4;font-size:12px;">请使用「手机号登录/账号登录」，进入「API Key 管理」复制 Key 后点击下方按钮即可（第三方登录已拦截，需在外部浏览器完成）</div>' +
         '<button id="qf-volc-done" style="margin-top:2px;border:none;border-radius:6px;background:#22c55e;color:#fff;font:600 12.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:7px 12px;cursor:pointer;align-self:flex-start;">已获取 key 返回</button>';
       document.body.appendChild(bar);
-      bar.querySelector('#qf-volc-done').addEventListener('click', () => { window.__VF_SUBMIT__ = true; window.__VF_STATE__ = window.__VF_CAPTURED__ ? 'ok' : 'empty'; });
+      bar.querySelector('#qf-volc-done').addEventListener('click', () => {
+        let diag = '';
+        try {
+          // 诊断：webview 里权威 key 是否存在、解码结果、real 解析结果（定位为何取不到真实 userId）
+          const db2 = (s) => { const t = s.replace(/-/g, '+').replace(/_/g, '/'); const pad = t.length % 4 ? '='.repeat(4 - (t.length % 4)) : ''; try { return atob(t + pad); } catch (_) { return null; } };
+          const dc2 = (s) => { if (typeof s !== 'string' || !s) return s; if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(s)) { const d = db2(s); if (d !== null) { try { return decodeURIComponent(d); } catch (_) { return d; } } } return s; };
+          const parts = [];
+          for (const ak of ['SLARDARmlmaas_volcconsole', 'SLARDARvolc_console']) {
+            let raw = null; try { raw = window.localStorage.getItem(ak); } catch (_) {}
+            if (!raw) { parts.push(ak + '=ABSENT'); continue; }
+            let dec = raw; try { dec = dc2(raw); } catch (_) {}
+            parts.push(ak + '=' + String(dec).slice(0, 90));
+          }
+          const r = realUidResolve();
+          parts.push('REAL=' + (r || 'null'));
+          diag = parts.join(' | ');
+          try { window.localStorage.setItem('qf:volc:diag', diag); } catch (_) {}
+        } catch (_) {}
+        realUidResolve(); if (window.__VF_REAL_UID__) persistAccount(window.__VF_REAL_UID__);
+        window.__VF_SUBMIT__ = true; window.__VF_STATE__ = window.__VF_CAPTURED__ ? 'ok' : 'empty';
+      });
       let dragging = false, offX = 0, offY = 0;
       const grip = document.getElementById('qf-volc-grip');
       const header = document.getElementById('qf-volc-header');
@@ -1788,6 +1985,10 @@ export async function captureVolcEngineConsoleSession(opts?: {
       finished = true
       clearInterval(pollTimer)
       if (renewTimeout) clearTimeout(renewTimeout)
+      // 收尾落 SYNC_HB_END（仅额度同步模式产生过首拍时）：给出结束时的最新页面快照，补全首尾视角
+      if (volcSyncHbFired && volcSyncHbLast) {
+        logVolcSync(`SYNC_HB_END ${Date.now() - winStart}ms ${volcSyncHbLast}`)
+      }
       if (!win.isDestroyed()) win.destroy()
       loginWindows.delete(winKey)
       resolve(result)
@@ -1918,7 +2119,32 @@ sample:(function(){
   return out;
 })()})`
             )
-            .then((s) => logVolcSync(`SYNC_HB ${Date.now() - winStart}ms page=${s}`))
+            .then((s) => {
+              // 心跳节流：仅在页面状态变化时记录，避免静止页面每秒刷一条大日志
+              let sig = ''
+              let compact = ''
+              try {
+                const o = JSON.parse(s) as Record<string, unknown>
+                // 紧凑字段（诊断空 __VF_MODELS__ 所需）：URL/登录墙/模型数/注入/滚动/卡片/模型行/分页
+                sig = [o.url, o.login, o.vf, o.vfIds, o.injected, o.submit, o.scroller, o.cards, o.rows, o.pag].join('|')
+                compact = JSON.stringify({
+                  url: o.url, login: o.login, vf: o.vf, vfIds: o.vfIds, injected: o.injected,
+                  submit: !!o.submit, scroller: o.scroller, cards: o.cards, rows: o.rows, pag: o.pag
+                })
+              } catch {
+                sig = ''
+              }
+              // 只记首尾：首拍落一条 SYNC_HB 快照；后续每拍仅把最新摘要更新进内存，
+              // 由同步收尾（done）在结束时统一落一条 SYNC_HB_END，避免滚动期间每拍刷屏。
+              if (sig && sig !== volcSyncHbSig) {
+                volcSyncHbSig = sig
+                volcSyncHbLast = compact
+                if (!volcSyncHbFired) {
+                  volcSyncHbFired = true
+                  logVolcSync(`SYNC_HB ${Date.now() - winStart}ms ${compact}`)
+                }
+              }
+            })
             .catch((e) => logVolcSync(`SYNC_HB_err ${e}`))
           void win.webContents
             .executeJavaScript('window.__VF_MODELS__ && (window.__VF_MODELS__.length > 0 || Object.keys(window.__VF_TOKEN_LIMITS__).length > 0 || window.__VF_HAS_RATE__) ? [window.__VF_CAPTURED__, window.__VF_ACCOUNT__ || null, window.__VF_MODELS__, window.__VF_SCREEN__ || 0, window.__VF_SAVED_RAW__ ? window.__VF_SAVED_RAW__.slice(0, 3000) : null, (window.__VF_MODELS_RAW__||[]).map(function(r){return r.url;}).filter(function(u,i,a){return a.indexOf(u)===i;}).slice(0,15), window.__VF_MODEL_BODY__ ? window.__VF_MODEL_BODY__.slice(0, 6000) : null, window.__VF_TOKEN_LIMITS__ || {}, window.__VF_HAS_RATE__ || false, window.__VF_PAGE__ || 0, window.__VF_HASMORE__ ? true : false, (window.__VF_PAGEDEBUG__ || []).join(";")] : null')
@@ -1939,24 +2165,38 @@ sample:(function(){
                 string
               ]
               // 接口原始响应抓取：优先用接口 JSON 解析模型额度的开通状态，DOM 卡片只是兜底。
+              // 去抖：URL/响应体在每轮轮询中重复出现，只在内容变化时记录，避免每拍重复 dump。
               if (Array.isArray(rawUrls) && rawUrls.length > 0) {
-                logVolcSync(`SYNC_RAWURLS ${rawUrls.join(' | ')}`)
+                const urlSig = rawUrls.join('|')
+                if (urlSig !== volcSyncRawUrlsSig) {
+                  volcSyncRawUrlsSig = urlSig
+                  logVolcSync(`SYNC_RAWURLS ${rawUrls.join(' | ')}`)
+                }
               }
-              if (typeof modelBody === 'string' && modelBody.length > 80 && modelBody !== rawBody) {
+              if (typeof modelBody === 'string' && modelBody.length > 80 && modelBody !== rawBody && modelBody !== volcSyncModelBodySig) {
+                volcSyncModelBodySig = modelBody
                 logVolcSync(`SYNC_MODELBODY ${modelBody.slice(0, 6000)}`)
               }
-              if (typeof rawBody === 'string' && rawBody.length > 80) {
+              if (typeof rawBody === 'string' && rawBody.length > 80 && rawBody !== volcSyncRawBodySig) {
+                volcSyncRawBodySig = rawBody
                 logVolcSync(`SYNC_RAW sample=${rawBody.slice(0, 2200)}`)
               }
               // 接口级模型：ListModelTokenLimit 的 TokenLimit 即每个已开通模型的免费总额度。
               // 换算为与目录一致的单位（火山 TokenLimit 单位是 token），remaining = TokenLimit - currentUsage。
               const tokenNames = Object.keys(tokenLimits || {})
               if (tokenNames.length > 0) {
-                logVolcSync(
-                  `SYNC_TOKENS ${tokenNames
-                    .map((n) => `${n}:${tokenLimits[n].tokenLimit}/used${tokenLimits[n].currentUsage}`)
-                    .join(' | ')}`
-                )
+                // 去抖：只用集合整体变化时记录一次，避免每拍重复落一条已收敛的 SYNC_TOKENS
+                const tokSig = tokenNames
+                  .map((n) => `${n}:${tokenLimits[n].tokenLimit}/${tokenLimits[n].currentUsage}`)
+                  .join('|')
+                if (tokSig !== volcSyncTokensSig) {
+                  volcSyncTokensSig = tokSig
+                  logVolcSync(
+                    `SYNC_TOKENS ${tokenNames
+                      .map((n) => `${n}:${tokenLimits[n].tokenLimit}/used${tokenLimits[n].currentUsage}`)
+                      .join(' | ')}`
+                  )
+                }
                 // 把接口真实额度 upsert 进 rawModels（副本），供下方 capture 合并，保证已开通模型不被
                 // 目录 fallback 显示「待开通」。随后继续走 capture/稳定收敛，不做 return。
                 for (const name of tokenNames) {
@@ -2000,14 +2240,33 @@ sample:(function(){
                 (scrolledEnough && syncStableCount >= 3 && !morePages) ||
                 (scrolledEnough && Date.now() - winStart >= 18000)
               ) {
+                // 权威判定「未开通」：分页耗尽(morePages=false) 且 ListModelTokenLimit 已返回过真实 token
+                // 额度（该接口只覆盖已开通模型、随分页逐页累积），认定已抓到全量已开通免费模型；
+                // 未被抓到的目录模型即为「未开通」，据此覆盖目录默认 activated:true，避免未开通模型
+                // （如本账号未开通的 seedance-1.5-pro）误显示「已开通」。
+                const complete = !morePages && Object.keys(tokenLimits || {}).length > 0
+                const finalCaptured = captureVolcengineFreeVideoModels(rawModels, undefined, {
+                  markAbsentInactivated: complete
+                })
+                const finalModels = finalCaptured.models
+                // 接口为准+未知保守：只信任 ListModelTokenLimit 返回（权威）模型的 freeQuota；
+                // 未命中模型的 freeQuota 来自 DOM/旧缓存，会误导「查看模型」展示（如 seedance-1.0-pro
+                // 显示 272120/2000000 而官网为已开通剩0），一律置空按「— 未知」保守展示。
+                const authoritative = volcengineAuthoritativeIds(Object.keys(tokenLimits || {}))
+                if (authoritative.size > 0) {
+                  for (const m of finalModels) {
+                    if (!authoritative.has(m.id)) m.freeQuota = undefined
+                  }
+                }
                 logVolcSync(
-                  `SYNC_HIT models=${sig.slice(0, 400)} raw=${rawModels.length} stable=${syncStableCount} screen=${screenIdx} page=${curPage} more=${hasMore ? true : false} pgdb=${pageDebug || ''}`
+                  `SYNC_FINAL complete=${complete ? 'YES' : 'NO'} authoritative=${authoritative.size} models=${finalModels.map((m) => `${m.id}:${m.activated ? 'T' : 'F'}${m.freeQuota ? '/Q' : '/-'}`).join(',')}`
                 )
+                if (syncLatest) syncLatest.models = finalModels
                 done({
                   ok: true,
                   consoleJwt: syncLatest.consoleJwt,
                   accountId: typeof syncLatest.accountId === 'string' ? syncLatest.accountId : undefined,
-                  models: syncLatest.models,
+                  models: finalModels,
                   source: 'console'
                 })
               }
@@ -2026,20 +2285,21 @@ sample:(function(){
         return
       }
       void win.webContents
-        .executeJavaScript('window.__VF_SUBMIT__ ? [window.__VF_STATE__, window.__VF_CAPTURED__, (window.__VF_ACCOUNT__ || (function(){try{return window.localStorage.getItem(\'qf:volc:account\')||null}catch(_){return null}})()), window.__VF_MODELS__ || [], (function(){try{return window.localStorage.getItem(\'qf:volc:account\')||null}catch(_){return \'e\'}})() ] : null')
+        .executeJavaScript('window.__VF_SUBMIT__ ? [window.__VF_STATE__, window.__VF_CAPTURED__, (window.__VF_ACCOUNT__ || (function(){try{return window.localStorage.getItem(\'qf:volc:account\')||null}catch(_){return null}})()), window.__VF_MODELS__ || [], (function(){try{return window.localStorage.getItem(\'qf:volc:account\')||null}catch(_){return \'e\'}})(), (function(){try{return window.localStorage.getItem(\'qf:volc:diag\')||null}catch(_){return null}})() ] : null')
         .then((val: unknown) => {
           if (!val) return
-          const [state, jwt, accountId, rawModels, lsVal] = val as [
+          const [state, jwt, accountId, rawModels, lsVal, diag] = val as [
             string,
             string | null,
             string | null,
             Array<{ name: string; remaining?: number; total?: number }>,
+            string | null,
             string | null
           ]
           // 绑定诊断：accountId 可能来自页面全局 __VF_ACCOUNT__，或整页跳转后从 localStorage 恢复读取；
           // 两者都空才能判定绑定时确未抓到账号 id（否则是链路其它环节丢的）
           logVolcSync(
-            `CAPTURE_SUBMIT state=${state} accountId=${accountId ? 'YES' : 'NO'} ls=${(typeof lsVal === 'string' && lsVal) ? 'YES' : 'NO'}`
+            `CAPTURE_SUBMIT state=${state} accountId=${accountId ? `YES:${accountId}` : 'NO'} ls=${(typeof lsVal === 'string' && lsVal) ? `YES:${lsVal}` : 'NO'} diag=${typeof diag === 'string' && diag ? diag : 'NONE'}`
           )
           // 火山方舟控制台走 cookie 会话，通常不产生进入 Authorization 头的三段式 JWT（consoleJwt）。
           // 故「已获取 key 返回」时不再把缺 JWT 视为失败：绑定只需 API Key，consoleJwt 作为可选增强，
@@ -2103,7 +2363,7 @@ export function initProviders(): void {
         if (providerId === 'volcengine') {
           const { accountId } = decodeVolcenginePayload(plain)
           logVolcSync(
-            `ENC_VOLC accountId=${accountId ? 'YES' : 'NO'} fp_level=${fingerprint ? (accountId ? 'account' : 'key-hash') : 'none'}`
+            `ENC_VOLC accountId=${accountId ? `YES:${accountId}` : 'NO'} fp_level=${fingerprint ? (accountId ? 'account' : 'key-hash') : 'none'}`
           )
         }
       }
@@ -2217,8 +2477,29 @@ export function initProviders(): void {
   // 成功则重建加密负载（更新 models + 最新 consoleJwt/accountId）返回 newEncrypted，供渲染层落库并刷新展示。
   ipcMain.handle(
     'provider:volc-sync-models',
-    async (_e, _providerId: string, keyId: string, encrypted: string) => {
+    async (_e, _providerId: string, keyId: string, encrypted: string, maxStaleMs?: number) => {
       if (!encrypted) return { ok: false, reason: 'no-secret', error: '缺少密钥' }
+      // 缓存命中：maxStaleMs>0 且上次同步成功未超期，且负载里已有 models → 直接返回，跳过一次 webview 同步让弹窗秒开
+      if (typeof maxStaleMs === 'number' && maxStaleMs > 0) {
+        try {
+          const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+          const { models } = decodeVolcenginePayload(plain)
+          const syncedAt = volcSyncAt.get(keyId)
+          if (Array.isArray(models) && models.length > 0 && typeof syncedAt === 'number' && Date.now() - syncedAt < maxStaleMs) {
+            logVolcSync(`SYNC_CACHED key=${keyId}`)
+            return { ok: true, cached: true }
+          }
+        } catch {
+          /* 负载解析失败则按未命中继续走完整同步 */
+        }
+      }
+      volcSyncHbSig = '' // 新一次同步重置心跳节流，保证每次都会记录首个状态快照
+      volcSyncModelBodySig = ''
+      volcSyncRawBodySig = ''
+      volcSyncRawUrlsSig = ''
+      volcSyncTokensSig = ''
+      volcSyncHbFired = false
+      volcSyncHbLast = null
       logVolcSync(`SYNC_START key=${keyId}`)
       try {
         const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
@@ -2243,6 +2524,7 @@ export function initProviders(): void {
           if (newAccountId) {
             newFingerprint = await volcengineAccountFingerprint(newPlain)
           }
+          volcSyncAt.set(keyId, Date.now()) // 记录本次成功同步时间，供后续缓存判断
           console.log(`[volc-sync] 回写 models=${res.models.map((m) => m.id).join(',')} accountId=${newAccountId ?? 'NO'}`)
           logVolcSync(`SYNC_BACKFILL key=${keyId} accountId=${newAccountId ? 'YES' : 'NO'} fp=${newFingerprint ? 'account' : (accountId ? 'account' : 'key-hash')}`)
           logVolcSync(`SYNC_WRITEBACK key=${keyId} models=${res.models.map((m) => m.id).join(',')} accountId=${newAccountId ? 'YES' : 'NO'} fp=${newFingerprint ? 'account' : 'key-hash'}`)

@@ -12,6 +12,9 @@ import type { ApiModelInfo } from '../../../preload'
 
 const PAGE_SIZE = 10
 
+// 火山「查看模型」额度缓存有效期：有效期内点开不再触发 webview 同步，直接秒开展示缓存值；过期后台静默刷新
+const VOLC_VIEW_MODELS_CACHE_MS = 5 * 60 * 1000
+
 /** 顶部额度汇总条
  * - volcengine：聚合免费模型的额度（保持火山方舟原有展示，单位 tokens）
  * - zhipu（及其他）：展示账号级共用额度（付费模型共用），单位按厂商配置
@@ -28,10 +31,13 @@ function ModelsQuotaSummary({
   unit?: string
 }) {
   if (providerId === 'volcengine') {
-    // 火山方舟：聚合免费模型额度
-    const freeModels = models.filter((m) => m.cost === 0 && m.freeQuota?.total)
-    const total = freeModels.reduce((sum, m) => sum + (m.freeQuota?.total ?? 0), 0)
-    const remaining = freeModels.reduce((sum, m) => sum + (m.freeQuota?.remaining ?? 0), 0)
+    // 火山方舟：聚合所有免费模型额度。
+    // total 含已开通 + 未开通的所有免费模型；remaining 只计已开通（activated !== false）模型的可用量。
+    const modelsWithQuota = models.filter((m) => m.cost === 0 && m.freeQuota?.total)
+    const total = modelsWithQuota.reduce((sum, m) => sum + (m.freeQuota?.total ?? 0), 0)
+    const remaining = modelsWithQuota
+      .filter((m) => m.activated !== false)
+      .reduce((sum, m) => sum + (m.freeQuota?.remaining ?? 0), 0)
     if (total <= 0) return null
     const pct = Math.min(100, Math.max(0, (remaining / total) * 100))
     return (
@@ -88,6 +94,21 @@ function ModelQuotaCell({
   const freeQuota = model.freeQuota
 
   if (providerId === 'volcengine') {
+    // 火山方舟：不可用模型（已下架 / 无接入点）置灰 + 徽标，提示原因
+    const unavail = model.unavailable
+    if (unavail === 'decommissioned' || unavail === 'no_endpoint') {
+      return (
+        <span
+          className="models-quota-cell"
+          title={unavail === 'decommissioned' ? '该模型已被火山平台下架/停用，无法生成' : '该账号无此模型接入点，无法生成；可在开通管理页开通或更换模型'}
+        >
+          <span className={unavail === 'decommissioned' ? 'badge badge-danger' : 'badge badge-pending'}>
+            {unavail === 'decommissioned' ? '已下架' : '无接入点'}
+          </span>
+          <span className="models-quota-text models-quota-text--dim">不可生成</span>
+        </span>
+      )
+    }
     // 火山方舟：免费模型 + 待开通徽章
     const activated = model.activated !== false
     if (!activated) {
@@ -108,7 +129,12 @@ function ModelQuotaCell({
         </span>
       )
     }
-    return <span className="models-quota-text models-quota-text--dim">— token</span>
+    // 已开通但接口未返回免费额度（额度耗尽/不在权威列表）：接口为准，未知保守，避免 DOM 旧值误导
+    return (
+      <span className="models-quota-text models-quota-text--dim" title="接口未返回该模型的免费推理额度，暂不展示具体数值">
+        — 未知
+      </span>
+    )
   }
 
   // 其他厂商（智谱等）
@@ -153,7 +179,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, setKeyHealth, refreshVolcengineModelsOnce } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -207,7 +233,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
     }
   }
 
-  // API Key 型厂商「查看模型」：拉取模型目录（火山方舟先静默同步最新免费模型额度/开通状态）
+  // API Key 型厂商「查看模型」：拉取模型目录（火山方舟先展示缓存额度，再按 5min 缓存后台静默同步刷新）
   const handleViewModels = async (providerId: string, keyId: string, accountName: string, unitName: string) => {
     // 立即弹出弹窗并进入加载态，让火山方舟较慢的静默同步有可见反馈
     const token = ++modelsTokenRef.current
@@ -225,21 +251,35 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         if (svc && user) {
           const secret = await svc.getProviderKeySecret(user.id, keyId)
           if (secret) encrypted = secret.encrypted_key
-          // 先静默同步该账号最新免费模型额度/开通状态；命中则用重建的加密负载展示最新值
-          const fresh = await refreshVolcengineModelsOnce(keyId)
-          if (fresh) encrypted = fresh
         }
       }
-      // 用户在同步期间已关闭弹窗，则丢弃本次结果
+      // 先立即用缓存展示模型目录，让弹窗第一次打开就秒出内容
       if (token !== modelsTokenRef.current) return
-      const res = await window.api.providers.apiModels(providerId, encrypted)
+      const cachedRes = encrypted ? await window.api.providers.apiModels(providerId, encrypted) : null
       if (token !== modelsTokenRef.current) return
-      if (res.ok && res.models) {
-        setModels(res.models)
-      } else {
+      if (cachedRes?.ok && cachedRes.models) {
+        setModels(cachedRes.models)
+        setModelsLoading(false)
+      }
+      // 后台静默同步最新额度/开通状态（火山方舟：命中 5min 缓存则跳过，否则同步后刷新展示）
+      if (providerId === 'volcengine') {
+        const fresh = await refreshVolcengineModelsOnce(keyId, { maxStaleMs: VOLC_VIEW_MODELS_CACHE_MS })
+        if (fresh && token === modelsTokenRef.current) {
+          const newRes = await window.api.providers.apiModels(providerId, fresh)
+          if (token === modelsTokenRef.current && newRes.ok && newRes.models) {
+            setModels(newRes.models)
+          }
+        }
+        // 非火山：无缓存可秒开，同步完成后重新拉取展示最新值
+      } else if (cachedRes && (!cachedRes.ok || !cachedRes.models)) {
+        const res = await window.api.providers.apiModels(providerId, encrypted)
         if (token === modelsTokenRef.current) {
-          showToast(res.error || '无法加载模型目录', false)
-          setModels(null)
+          if (res.ok && res.models) {
+            setModels(res.models)
+          } else {
+            showToast(res.error || '无法加载模型目录', false)
+            setModels(null)
+          }
         }
       }
     } catch (e) {
@@ -446,6 +486,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                         onTestApiKey={(keyId) => handleTestApiKey(p.providerId, keyId)}
                         onViewModels={(keyId, accountName) => handleViewModels(p.providerId, keyId, accountName, p.unitName)}
                         zhipuQuotaOverrides={zhipuQuotaOverrides}
+                        volcTokenOverrides={volcTokenOverrides}
                         currentUserId={user?.id ?? ''}
                         team={team}
                       />
@@ -517,7 +558,11 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                     </thead>
                     <tbody>
                       {models.map((m) => (
-                        <tr key={m.model}>
+                        <tr
+                          key={m.model}
+                          className={m.unavailable ? 'models-row-disabled' : undefined}
+                          title={m.unavailable === 'decommissioned' ? '该模型已被火山平台下架/停用，无法生成' : m.unavailable === 'no_endpoint' ? '该账号无此模型接入点，无法生成；可在开通管理页开通或更换模型' : undefined}
+                        >
                           <td className="models-cell-model">
                             <code className="models-model-code">{m.model}</code>
                           </td>
@@ -567,6 +612,7 @@ function ProviderRow({
   onTestApiKey,
   onViewModels,
   zhipuQuotaOverrides,
+  volcTokenOverrides,
   currentUserId,
   team
 }: {
@@ -587,24 +633,37 @@ function ProviderRow({
   onTestApiKey: (keyId: string) => Promise<void>
   onViewModels: (keyId: string, accountName: string) => Promise<void>
   zhipuQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  volcTokenOverrides: Record<string, { remaining: number; total: number } | null>
   currentUserId: string
   team: { id: string } | null
 }) {
   const isApiKeyProvider = agg.authType === 'apikey'
   const activeBindings = agg.bindings.filter((b) => b.enabled)
   const totalUsed = activeBindings.reduce((s, b) => s + b.used, 0)
-  // 智谱等 API 型厂商：额度以平台真实资源包余额为准，而非静态默认额度；汇总只累计有可用余额的账号
+  // API 型厂商：额度以平台真实资源包余额 / token 汇总为准，而非静态默认日额度；汇总只累计有可用数据的账号
   const isApiQuota = agg.providerId === 'zhipu'
+  const isVolc = agg.providerId === 'volcengine'
   const quotaOf = (keyId: string) =>
-    zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available ? zhipuQuotaOverrides[keyId] : undefined
+    isApiQuota
+      ? zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available
+        ? zhipuQuotaOverrides[keyId]
+        : undefined
+      : isVolc
+        ? volcTokenOverrides[keyId] && volcTokenOverrides[keyId]!.total > 0
+          ? volcTokenOverrides[keyId]
+          : undefined
+        : undefined
   const remaining = activeBindings.reduce(
-    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
+    (s, b) => s + (isApiQuota || isVolc ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
     0
   )
   const totalQuota = activeBindings.reduce(
-    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
+    (s, b) => s + (isApiQuota || isVolc ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
     0
   )
+  // 火山方舟：所有启用账号都未拿到真实 token 汇总时，厂商行总计显示占位（避免展示假的 0/0 或账本日额度）
+  const volcNoQuota =
+    isVolc && activeBindings.length > 0 && activeBindings.every((b) => !(volcTokenOverrides[b.keyId] && volcTokenOverrides[b.keyId]!.total > 0))
   const disabledCount = agg.bindings.length - activeBindings.length
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
@@ -625,7 +684,7 @@ function ProviderRow({
           </span>
         </td>
         <td>{agg.unitName}</td>
-        <td>{remaining} / {totalQuota}</td>
+        <td>{volcNoQuota ? <span className="models-quota-text--dim">—</span> : `${remaining.toLocaleString()} / ${totalQuota.toLocaleString()}`}</td>
         <td className="col-accounts">{agg.boundCount} 个账号{disabledCount > 0 ? `（${disabledCount} 已停用）` : ''}</td>
         <td>
           <span className={'badge ' + badge.cls}>{badge.label}</span>
@@ -721,6 +780,20 @@ function ProviderRow({
                             return (
                               <span>{q?.available ? `${q.remaining} / ${q.total} ${agg.unitName}` : '—'}</span>
                             )
+                          })()
+                        ) : agg.providerId === 'volcengine' ? (
+                          (() => {
+                            const t = volcTokenOverrides[acc.keyId]
+                            // 已取到真实 token 汇总：显示真实额度（剩余 / 总数 token）
+                            if (t && t.total > 0) {
+                              return <span>{t.remaining.toLocaleString()} / {t.total.toLocaleString()} tokens</span>
+                            }
+                            // 拉取完成但未拿到真实额度：显示占位提示，替代账本假额度（50/50 次）
+                            if (t === null) {
+                              return <span className="models-quota-text models-quota-text--dim">额度待查看</span>
+                            }
+                            // 拉取中：短暂沿用旧值避免闪烁
+                            return <span>{acc.remaining} / {acc.dailyTotal} {agg.unitName}</span>
                           })()
                         ) : (
                           `${acc.remaining} / ${acc.dailyTotal} ${agg.unitName}`

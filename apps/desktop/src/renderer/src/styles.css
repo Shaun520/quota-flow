@@ -995,6 +995,28 @@ body {
 .upload-zone .thumb-item:hover .remove-thumb {
   opacity: 1;
 }
+/* API 型厂商（智谱/火山）图片上传中的加载遮罩 */
+.upload-zone .thumb-item .thumb-loading {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.upload-zone .thumb-item .thumb-loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: qf-spin 0.8s linear infinite;
+}
+@keyframes qf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .upload-zone .thumb-add {
   width: 40px;
   height: 40px;
@@ -3055,6 +3077,10 @@ body {
   display: inline-block;
   vertical-align: middle;
   white-space: nowrap;
+}
+/* 不可用模型整行置灰 */
+.models-row-disabled {
+  opacity: 0.55;
 }
 .models-quota-text {
   color: var(--fg);

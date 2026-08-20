@@ -202,7 +202,8 @@ export default function History({
     }
   }, [])
 
-  // 打开详情时，把上传图片的本地路径解析成可预览的 http 地址
+  // 打开详情时，把上传图片解析成可预览的 http 地址。
+  // 兼容两类来源：本地图片副本（userData/images，走本地媒体服务）与公网 https 地址（开放平台 API 上传到 Supabase qf-images 桶）。
   useEffect(() => {
     if (!detail) {
       setDetailImgUrls([])
@@ -210,11 +211,16 @@ export default function History({
       return
     }
     let cancelled = false
-    const names = detail.record.images
-      .map((p) => p.replace(/\\/g, '/').split('/').pop() || '')
-      .filter(Boolean)
+    const paths = detail.record.images.map((p) => p.replace(/\\/g, '/')).filter(Boolean)
     Promise.all(
-      names.map((n) => window.api.media.getImageUrl(n).catch(() => null))
+      paths.map((p) => {
+        // 已是公网 http(s) URL（如 Supabase 公开地址）→ 直接展示，无需本地媒体服务
+        if (/^https?:\/\//i.test(p)) return Promise.resolve(p)
+        // 本地图片副本：取 basename 走本地媒体服务解析
+        const name = p.split('/').pop() || ''
+        if (!name) return Promise.resolve(null)
+        return window.api.media.getImageUrl(name).catch(() => null)
+      })
     )
       .then((urls) => {
         if (!cancelled) setDetailImgUrls(urls.filter((u): u is string => !!u))

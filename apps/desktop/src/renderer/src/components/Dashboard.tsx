@@ -188,6 +188,8 @@ export default function Dashboard({
   const [images, setImages] = useState<string[]>([])
   const [imageFiles, setImageFiles] = useState<File[]>([])
   const [savedImagePaths, setSavedImagePaths] = useState<string[]>([])
+  // 开放平台 API 型厂商（智谱/火山）图片异步上传计数：>0 表示尚有图片在上传，禁用「开始生成」
+  const [uploadingCount, setUpLoadingCount] = useState(0)
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
@@ -491,6 +493,11 @@ export default function Dashboard({
   const handleGenerate = useCallback(async (): Promise<void> => {
     const currentMode = provider === 'dola' ? 'multi_ref' : mode
     if (generating) return
+    // 开放平台 API 型厂商（智谱/火山）：图生/多参考/首尾帧需公网 https 图片，上传未完成时禁用，避免提交空图报错
+    if ((provider === 'zhipu' || provider === 'volcengine') && uploadingCount > 0) {
+      setGenError('图片正在上传中，请稍候再生成')
+      return
+    }
     if (fresh && step === 1) {
       onGoProviders()
       return
@@ -592,7 +599,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, uploadingCount, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -660,21 +667,25 @@ export default function Dashboard({
     fileInputRef.current?.click()
   }, [])
 
-  // 智谱走开放平台 API，图生/多参考/首尾帧的图片必须为公网 https URL：
+  // 开放平台 API 型厂商（智谱 / 火山方舟）的图生/多参考/首尾帧图片必须为公网 https URL：
   // 先立即显示本地预览（blob URL），再逐个后台上传到 qf-images 桶取公开 URL（回填 savedImagePaths 同序号格子）。
-  const appendZhipuImages = useCallback(
+  const appendApiImages = useCallback(
     async (files: File[]) => {
       const base = savedImagePaths.length
       // 预览立刻出现，不等网络上传
       setImages((prev) => [...prev, ...files.map((f) => URL.createObjectURL(f))])
       // 预占储存格保证 savedImagePaths 与 images 序号对齐；上传完成后回填 https URL
       setSavedImagePaths((prev) => [...prev, ...files.map(() => '')])
+      setUpLoadingCount((c) => c + files.length)
       for (let i = 0; i < files.length; i++) {
+        const idx = base + i
         try {
           const url = await uploadReferenceImage(files[i])
-          setSavedImagePaths((prev) => prev.map((p, idx) => (idx === base + i ? url : p)))
+          setSavedImagePaths((prev) => prev.map((p, j) => (j === idx ? url : p)))
         } catch (e) {
           setGenError('图片上传失败：' + (e instanceof Error ? e.message : String(e)))
+        } finally {
+          setUpLoadingCount((c) => Math.max(0, c - 1))
         }
       }
     },
@@ -685,8 +696,8 @@ export default function Dashboard({
     const files = Array.from(e.target.files ?? [])
     const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
     const picked = files.slice(0, remaining)
-    if (provider === 'zhipu') {
-      void appendZhipuImages(picked)
+    if (provider === 'zhipu' || provider === 'volcengine') {
+      void appendApiImages(picked)
       e.target.value = ''
       return
     }
@@ -694,7 +705,7 @@ export default function Dashboard({
     setImages((prev) => [...prev, ...urls])
     setImageFiles((prev) => [...prev, ...picked])
     e.target.value = ''
-  }, [provider, model, savedImagePaths, appendZhipuImages])
+  }, [provider, model, savedImagePaths, appendApiImages])
 
   const onPasteImages = useCallback((e: ReactClipboardEvent<HTMLDivElement>) => {
     const files = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith('image/'))
@@ -702,14 +713,14 @@ export default function Dashboard({
     e.preventDefault()
     const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
     const picked = files.slice(0, remaining)
-    if (provider === 'zhipu') {
-      void appendZhipuImages(picked)
+    if (provider === 'zhipu' || provider === 'volcengine') {
+      void appendApiImages(picked)
       return
     }
     const urls = picked.map((f) => URL.createObjectURL(f))
     setImages((prev) => [...prev, ...urls])
     setImageFiles((prev) => [...prev, ...picked])
-  }, [provider, model, savedImagePaths, appendZhipuImages])
+  }, [provider, model, savedImagePaths, appendApiImages])
 
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
@@ -920,6 +931,11 @@ export default function Dashboard({
                       }}
                     >
                       <img src={src} alt="" />
+                      {idx < savedImagePaths.length && savedImagePaths[idx] === '' && (
+                        <div className="thumb-loading" title="图片上传中…">
+                          <span className="thumb-loading-spinner" />
+                        </div>
+                      )}
                       <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveImage(idx) }}>×</button>
                     </div>
                   ))}
@@ -961,7 +977,7 @@ export default function Dashboard({
             )}
             <button
               className="btn-primary"
-              disabled={generating && cancelling}
+              disabled={(generating && cancelling) || ((provider === 'zhipu' || provider === 'volcengine') && uploadingCount > 0)}
               onClick={() => {
                 if (generating) void handleCancel()
                 else void handleGenerate()

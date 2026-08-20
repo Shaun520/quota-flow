@@ -23,7 +23,7 @@ export const MODELS: Record<string, string[]> = {
   kling: ['可灵-标准', '可灵-大师'],
   hailuo: ['海螺-标准'],
   zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2'],
-  volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v', 'doubao-seedance-1-0-lite-i2v']
+  volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-lite-i2v-250428']
 }
 
 /** 智谱模型展示价格（与主进程 api-branch 保持一致） */
@@ -54,8 +54,8 @@ export const VOLC_MODEL_PRICE: Record<string, string> = {
   'doubao-seedance-1-0-pro-250528': '免费',
   'doubao-seedance-1-5-pro-251215': '免费',
   'doubao-seedance-1-0-pro-fast-251015': '免费',
-  'doubao-seedance-1-0-lite-t2v': '免费',
-  'doubao-seedance-1-0-lite-i2v': '免费'
+  'doubao-seedance-1-0-lite-t2v-250428': '免费',
+  'doubao-seedance-1-0-lite-i2v-250428': '免费'
 }
 
 /** 火山方舟各模型固定生成时长（秒）；以相机生产链路为准，未收录模型走默认档 */
