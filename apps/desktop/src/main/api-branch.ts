@@ -17,7 +17,11 @@ import {
   fetchZhipuQuota,
   zhipuGenerateWithKey,
   volcengineFreeVideoModels,
-  volcengineGenerateWithKey
+  volcengineGenerateWithKey,
+  volcengineGenBlocker,
+  volcengineModelFreeStatus,
+  volcGenTokenEstimate,
+  VOLC_DECOMMISSIONED_MODELS
 } from '@quota-flow/providers'
 import type { VolcengineFreeVideoModel, ZhipuGenerateOptions } from '@quota-flow/providers'
 import { ipcMain, safeStorage } from 'electron'
@@ -34,6 +38,8 @@ export interface ApiGenerateOutcome {
   coverImageUrl?: string
   traceId?: string
   error?: string
+  /** 火山方舟提交失败时，若平台判定模型不可用（无接入点 / 已下架），透出供调度台落库标记 */
+  unavailable?: 'decommissioned' | 'no_endpoint'
 }
 
 export interface ApiGenerateParams {
@@ -65,6 +71,20 @@ export interface ApiGenerationBranch {
     /** 火山方舟：该账号绑定时实时抓到的免费视频模型（优先于固定目录） */
     captured?: VolcengineFreeVideoModel[]
   ): ApiModelInfo[]
+  /**
+   * 多账号选号（可选）：在多个已启用账号中按厂商策略选出最优下标。
+   * 返回下标则 dispatch 改用该账号对应的解密负载；返回 null 由调用方回退默认/首个。
+   * dispatches 中的 plain 已是解密后的加密负载明文。
+   */
+  pick?(
+    keys: Array<{ id: string; accountName: string | null; isDefault: boolean; enabled: boolean; plain: string }>,
+    model: string
+  ): number | null
+  /**
+   * 提交前预检（可选）：账号解密后、向 API 提交之前执行。
+   * 返回 !ok 则在提交前拦截（模型未开通/额度用尽等）。
+   */
+  preflight?(model: string, plain: string, ctx?: { durationSec?: number }): { ok: boolean; reason?: string }
   generate(input: GenerateInput, creds: ApiCredential, params: ApiGenerateParams): Promise<ApiGenerateOutcome>
 }
 
@@ -82,8 +102,12 @@ export interface ApiModelInfo {
   modes: Array<{ value: string; label: string }>
   /** 是否已开通该模型（火山方舟未开通模型提示开通；默认 true） */
   activated?: boolean
-  /** 【每账号】免费 token 额度（火山方舟免费视频模型）：剩余/总数，未抓到为 undefined */
+  /** 每账号免费 token 额度（火山方舟免费视频模型）：剩余/总数，未抓到为 undefined */
   freeQuota?: { remaining?: number; total?: number }
+  /** 模型不可用标记（火山方舟）：平台下架 / 账号无接入点 */
+  unavailable?: 'decommissioned' | 'no_endpoint'
+  /** 不可用原因的展示标签，仅当 unavailable 有值时存在 */
+  unavailableLabel?: string
 }
 
 const ZHIPU_MODEL_COST: Record<string, number> = {
@@ -314,21 +338,59 @@ function makeVolcengineBranch(): ApiGenerationBranch {
       // 免费 token 额度按账号、且无公开 API 可读；实时额度走本地账本，此处返回 null 表示未知。
       return null
     },
+    pick(keys, model) {
+      // 多账号优选：能力分主导（能否开通 + 剩余额度），is_default 仅作同分时的二次兜底，
+      // 确保「默认账号未开通、其它账号已开通」时仍自动选用能生成的账号。
+      // known=false（未知）的候选不因未知加分也不拦截；真正的拦截交给 preflight 依据明确证据处理。
+      try {
+        let bestIdx: number | null = null
+        let bestScore = -Infinity
+        keys.forEach((k, idx) => {
+          const st = volcengineModelFreeStatus(k.plain, model)
+          // 能力分：未开通扣分、已开通与有剩余各加分；未知按 0，不因未知误伤
+          let cap = 0
+          if (st.known) {
+            if (st.activated === true) cap += 1
+            if (st.activated === false) cap -= 2
+            if (typeof st.remaining === 'number') cap += st.remaining > 0 ? 1 : 0
+          }
+          // 能力分占主导权（×10），默认只作为同能力下的平局用户名
+          const score = cap * 10 + (k.isDefault ? 1 : 0)
+          if (score > bestScore) {
+            bestScore = score
+            bestIdx = idx
+          }
+        })
+        return bestIdx
+      } catch {
+        return null
+      }
+    },
+    preflight(model, plain, ctx) {
+      // 硬性防误扣拦截：未开通 / 额度不可确认 / 剩余不足以完成一次生成 一律拦截，绝不让火山补扣账号余额。
+      // （火山无「免费额度不足即拒绝」的服务端开关，免费额度耗尽会强制转按量付费。）
+      return volcengineGenBlocker(plain, model, volcGenTokenEstimate(ctx?.durationSec))
+    },
     catalog(perModelFreeQuota, captured?: VolcengineFreeVideoModel[]) {
       // 优先使用该账号绑定时实时抓到的免费模型目录；未抓到则回退内置固定目录
       const base = Array.isArray(captured) && captured.length > 0 ? captured : freeModels
       // 内置目录按 id 的默认免费额度，作为兜底：账号负载里存的旧模型缺 freeQuota 时，仍能展示具体 token 量
       const defaultQuota = new Map(freeModels.map((m) => [m.id, m.freeQuota]))
-      return base.map((m) => ({
-        model: m.id,
-        priceLabel: m.price,
-        cost: 0,
-        durations: VOLC_ENGINE_MODEL_DURATIONS,
-        size: null,
-        modes: VOLC_ENGINE_MODEL_MODES,
-        activated: m.activated,
-        freeQuota: perModelFreeQuota?.[m.id] ?? m.freeQuota ?? defaultQuota.get(m.id)
-      }))
+      return base.map((m) => {
+        const unavail = m.unavailable ?? (VOLC_DECOMMISSIONED_MODELS.includes(m.id) ? ('decommissioned' as const) : null)
+        return {
+          model: m.id,
+          priceLabel: m.price,
+          cost: 0,
+          durations: VOLC_ENGINE_MODEL_DURATIONS,
+          size: null,
+          modes: VOLC_ENGINE_MODEL_MODES,
+          activated: m.activated,
+          freeQuota: perModelFreeQuota?.[m.id] ?? m.freeQuota ?? defaultQuota.get(m.id),
+          unavailable: unavail ?? undefined,
+          unavailableLabel: unavail === 'decommissioned' ? '已下架' : unavail === 'no_endpoint' ? '无接入点' : undefined
+        }
+      })
     },
     async generate(input, creds, params) {
       if (params.mode !== 'text2video' && params.mode !== 'img2video') {
@@ -355,7 +417,8 @@ function makeVolcengineBranch(): ApiGenerationBranch {
         videoUrl: r.videoUrl,
         coverImageUrl: r.coverImageUrl,
         traceId: r.traceId,
-        error: r.error
+        error: r.error,
+        unavailable: r.unavailable
       }
     }
   }

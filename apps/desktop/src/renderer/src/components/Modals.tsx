@@ -731,6 +731,11 @@ export function AddProviderModal({
     setLoginTempId(null)
     setDupCandidate(null)
     setPendingSave(null)
+    // 清空上一账号残留的控制台捕获上下文（accountId/consoleJwt/models），防止重开/切换厂商时
+    // 把上一账号的 accountId 带入本次保存，导致不同账号被误判为重复账号（指纹退化成同账号级）。
+    setVolcAccountId(null)
+    setConsoleJwt(null)
+    setVolcModels(null)
   }
 
   const saveEncrypted = async (
@@ -949,9 +954,14 @@ export function AddProviderModal({
     setError(null)
     setNotice(null)
     try {
-      // 按账号绑定：先生成绑定 keyId（作为控制台分区与 DB 记录 id），确保登录态存入该账号自己的分区、多账号互不串号
-      let bindId = loginTempId
-      if ((providerId === 'zhipu' || providerId === 'volcengine') && !bindId) {
+      // 按账号绑定：每次「获取 API Key」都生成全新临时 keyId（作为控制台分区与 DB 记录 id），
+      // 确保登录态独立分区、多账号互不串号（避免复用上一账号的分区 localStorage 导致账号标识串号）。
+      // 同时清空上一账号残留的捕获上下文，防止不同账号误判为重复账号。
+      setVolcAccountId(null)
+      setConsoleJwt(null)
+      setVolcModels(null)
+      let bindId: string | null = null
+      if (providerId === 'zhipu' || providerId === 'volcengine') {
         bindId = crypto.randomUUID()
         setLoginTempId(bindId)
       }

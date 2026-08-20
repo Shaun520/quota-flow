@@ -185,8 +185,10 @@ export interface ProvidersResult {
     string,
     { hasSession: boolean; status?: 'alive' | 'expiring' | 'expired'; expMs?: number | null; remainingMs?: number | null }
   >
+  /** 火山方舟账号真实 token 汇总覆盖（keyId -> remaining/total；null 表示已拉取但未拿到真实额度） */
+  volcTokenOverrides: Record<string, { remaining: number; total: number } | null>
   /** 火山方舟额度同步：后台静默抓取该账号最新免费模型额度/开通状态并落库；命中返回新加密负载，未抓到返回 false */
-  refreshVolcengineModelsOnce: (keyId: string) => Promise<string | false>
+  refreshVolcengineModelsOnce: (keyId: string, opts?: { maxStaleMs?: number }) => Promise<string | false>
 }
 
 export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
@@ -203,6 +205,11 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   // 智谱等 API 型厂商账号真实额度覆盖（平台资源包余额），key = keyId
   const [zhipuQuotaOverrides, setZhipuQuotaOverrides] = useState<
     Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  >({})
+  // 火山方舟账号真实 token 汇总覆盖（该账号所有免费模型 freeQuota 之和），key = keyId。
+  // 值为 null 表示已拉取但未拿到真实 token 汇总（用于展示占位，避免误显示账本假额度 50/50）。
+  const [volcTokenOverrides, setVolcTokenOverrides] = useState<
+    Record<string, { remaining: number; total: number } | null>
   >({})
 
   // 单次拉取智谱某账号真实额度（平台资源包余额）并写入覆盖；返回剩余次数（查询失败返回 null）
@@ -355,6 +362,47 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     [user]
   )
 
+  // 拉取火山某账号真实 token 汇总（该账号所有免费模型 freeQuota 之和），并写入覆盖。
+  // 口径与「查看模型」弹窗 ModelsQuotaSummary 一致：聚合 cost 0 且 freeQuota?.total 存在的模型。
+  // 未取到任何真实额度时写 null（前端据此显示占位，而不是账本假额度 50/50）。
+  const fetchVolcTokenSummaryOnce = useCallback(
+    async (keyId: string): Promise<void> => {
+      const svc = getProviderService()
+      if (!svc || !user) return
+      let found = false
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return
+        const res = await window.api.providers.apiModels('volcengine', secret.encrypted_key)
+        const models = res.ok ? res.models : undefined
+        if (Array.isArray(models) && models.length > 0) {
+          let total = 0
+          let remaining = 0
+          // 总数：含所有免费模型（已开通 + 未开通）
+          // 可用：只计已开通（activated !== false）模型的可用量
+          for (const m of models) {
+            if (m.cost === 0 && m.freeQuota && typeof m.freeQuota.total === 'number' && m.freeQuota.total > 0) {
+              total += m.freeQuota.total
+              if (m.activated !== false && typeof m.freeQuota.remaining === 'number') {
+                remaining += m.freeQuota.remaining
+              }
+            }
+          }
+          if (total > 0) {
+            found = true
+            setVolcTokenOverrides((prev) => ({ ...prev, [keyId]: { remaining, total } }))
+          }
+        }
+      } catch {
+        // 拉取失败不阻断
+      }
+      if (!found) {
+        setVolcTokenOverrides((prev) => ({ ...prev, [keyId]: null }))
+      }
+    },
+    [user]
+  )
+
   // 对单个火山账号做一次静默续期：成功则用新加密负载落库并重拉真实额度；全局一次只续一个（共享会话分区）
   const renewVolcSessionOnce = useCallback(
     async (keyId: string, encrypted: string): Promise<boolean> => {
@@ -390,13 +438,14 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   // 命中（抓到新 models）则用重建的加密负载更新 DB 并返回新 encrypted，供「查看模型」即时展示；
   // 未抓到（登录态失效/页面未就绪）保留旧值返回 false，不打断调用方。
   const refreshVolcengineModelsOnce = useCallback(
-    async (keyId: string): Promise<string | false> => {
+    async (keyId: string, opts?: { maxStaleMs?: number }): Promise<string | false> => {
       const svc = getProviderService()
       if (!svc || !user) return false
       try {
         const secret = await svc.getProviderKeySecret(user.id, keyId)
         if (!secret) return false
-        const res = await window.api.providers.volcSyncModels(keyId, secret.encrypted_key)
+        const res = await window.api.providers.volcSyncModels(keyId, secret.encrypted_key, opts?.maxStaleMs)
+        if (res.cached) return false // 命中缓存：数据仍新鲜，无需回写与返回
         if (!res.ok || res.preserved || !res.encrypted) return false
         await svc.refreshProviderKey(user.id, keyId, {
           encryptedKey: res.encrypted,
@@ -458,6 +507,14 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     if (volcKeys.length === 0) return
     volcKeys.forEach((key) => void fetchVolcengineQuotaOnce(key.id))
   }, [user?.id, keys, fetchVolcengineQuotaOnce])
+
+  // 初始化 / 刷新时主动拉取火山各账号真实 token 汇总（供厂商列表行展示，替代账本假额度 50/50）
+  useEffect(() => {
+    if (!user || keys.length === 0) return
+    const volcKeys = keys.filter((k) => k.provider_id === 'volcengine')
+    if (volcKeys.length === 0) return
+    volcKeys.forEach((key) => void fetchVolcTokenSummaryOnce(key.id))
+  }, [user?.id, keys, fetchVolcTokenSummaryOnce])
 
   // 会话内覆盖某账号健康状态（API Key 测试成功/失败后即时反映，不落库）
   const setKeyHealth = useCallback((keyId: string, status: string) => {
@@ -844,6 +901,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     setKeyHealth,
     zhipuSessionStatuses,
     volcSessionStatuses,
+    volcTokenOverrides,
     refreshVolcengineModelsOnce
   }
 }
