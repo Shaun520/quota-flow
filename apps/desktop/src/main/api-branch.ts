@@ -14,6 +14,8 @@ import type { GenerateInput } from './dispatch'
 import { decodeZhipuPayload } from './providers'
 import {
   decodeVolcenginePayload,
+  decodeBailianPayload,
+  isBailianVideoFreeModel,
   fetchZhipuQuota,
   zhipuGenerateWithKey,
   volcengineFreeVideoModels,
@@ -432,6 +434,32 @@ export function registerApiIpc(): void {
   apiIpcRegistered = true
 
   ipcMain.handle('provider:api-models', async (_e, providerId: string, encrypted?: string) => {
+    // 阿里云百炼：展示该账号捕获的免费额度模型明细（freeTiers，来自绑定时的控制台会话捕获快照）
+    if (providerId === 'bailian') {
+      if (!encrypted) return { ok: true, models: [] }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+        const { freeTiers } = decodeBailianPayload(plain)
+        const models: ApiModelInfo[] = (freeTiers ?? [])
+          .filter((t) => isBailianVideoFreeModel(t.model) && !t.expired)
+          .map((t) => ({
+            model: t.model,
+            priceLabel: '免费',
+            cost: 0,
+            durations: [5],
+            size: null,
+            modes: [{ value: 'text2video', label: '文生视频' }],
+            activated: true,
+            freeQuota: {
+              remaining: t.remaining,
+              total: t.total
+            }
+          }))
+        return { ok: true, models }
+      } catch {
+        return { ok: false, error: '解析百炼免费额度失败' }
+      }
+    }
     const branch = API_BRANCHES[providerId]
     if (!branch) return { ok: false, error: '不支持的 API 厂商' }
     // 火山方舟：解密该账号负载里的每模型免费 token 额度 + 实时抓到的模型目录，叠加到目录上展示
