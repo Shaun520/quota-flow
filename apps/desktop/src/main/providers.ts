@@ -15,6 +15,7 @@ import {
   volcengineAuthoritativeIds,
   VOLCENGINE_FREE_NAME_TO_ID
 } from '@quota-flow/providers'
+import { testBailianApiKey, bailianAccountFingerprint } from '@quota-flow/providers'
 import type { VolcengineFreeVideoModel } from '@quota-flow/providers'
 
 /** 对「解密后的明文」仅做透明的 models 不可用标记写入，返回新明文（不触发网络；consoleJwt/accountId 原样保留）。 */
@@ -2358,12 +2359,20 @@ export function initProviders(): void {
             ? await zhipuAccountFingerprint(plain)
             : providerId === 'volcengine'
               ? await volcengineAccountFingerprint(plain)
-              : fingerprintFor(providerId, plain.trim())
+              : providerId === 'bailian'
+                ? await bailianAccountFingerprint(plain)
+                : fingerprintFor(providerId, plain.trim())
         // 火山方舟去重诊断：确认 accountId 是否进链路、指纹是「账号级」还是退化成「Key 哈希」
         if (providerId === 'volcengine') {
           const { accountId } = decodeVolcenginePayload(plain)
           logVolcSync(
             `ENC_VOLC accountId=${accountId ? `YES:${accountId}` : 'NO'} fp_level=${fingerprint ? (accountId ? 'account' : 'key-hash') : 'none'}`
+          )
+        }
+        // 阿里云百炼去重诊断：本期用登录账号（后续会话捕获可升为账号级），当前退化为 Key 哈希
+        if (providerId === 'bailian') {
+          console.log(
+            `[qf-bailian] ENC fp_level=${fingerprint ? 'key-hash' : 'none'} keyLen=${plain.trim().length}`
           )
         }
       }
@@ -2383,7 +2392,11 @@ export function initProviders(): void {
       const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
       const { apiKey } = decodeZhipuPayload(plain)
       if (!apiKey) return { ok: false, error: '未解析到 API Key' }
-      return providerId === 'volcengine' ? await testVolcengineApiKey(apiKey) : await testZhipuApiKey(apiKey)
+      return providerId === 'volcengine'
+        ? await testVolcengineApiKey(apiKey)
+        : providerId === 'bailian'
+          ? await testBailianApiKey(apiKey)
+          : await testZhipuApiKey(apiKey)
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : 'API Key 校验失败' }
     }

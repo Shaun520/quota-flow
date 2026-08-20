@@ -10,7 +10,8 @@ export const PROVIDER_LABEL: Record<string, string> = {
   kling: '可灵',
   hailuo: '海螺',
   zhipu: '智谱（bigmodel）',
-  volcengine: '火山方舟'
+  volcengine: '火山方舟',
+  bailian: '阿里云百炼'
 }
 
 export const MODELS: Record<string, string[]> = {

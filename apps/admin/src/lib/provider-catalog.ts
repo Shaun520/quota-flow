@@ -48,5 +48,10 @@ export const PROVIDER_GENERATION_CATALOG: ProviderGenerationCatalog = {
       "doubao-seedance-1-5-pro-251215",
       "doubao-seedance-1-0-pro-fast-251015"
     ]
+  },
+  // 阿里云百炼（bailian）：首期只做 Key 绑定；视频模型（wan2.7-t2v/i2v）延后，models 留空防 Admin 误配
+  bailian: {
+    modes: ["text2video", "img2video"],
+    models: []
   }
 };

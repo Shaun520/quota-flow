@@ -8,6 +8,7 @@ import { QwenWanProvider } from "./qwen";
 // 注意：保持在源码层再导出（不要只存在于已构建的 dist），否则 rebuild 会把这些导出打穿。
 export * from "./zhipu";
 export * from "./volcengine";
+export * from "./bailian";
 
 export interface ProviderFactoryOptions {
 }
