@@ -175,7 +175,7 @@ export default function Dashboard({
   onMaterialImagesConsumed,
   onRegenerateConsumed
 }: DashboardProps) {
-  const { aggs: provAggs, zhipuQuotaOverrides } = providers
+  const { aggs: provAggs, zhipuQuotaOverrides, volcTokenOverrides } = providers
   const { user, team } = useAuth()
   const { items: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('doubao')
@@ -1064,22 +1064,47 @@ export default function Dashboard({
               <div className="provider-status-list">
                 {visibleAggs.map((p) => {
                   const enabledBindings = p.bindings.filter((b) => b.enabled)
+                  const isVolc = p.providerId === 'volcengine'
                   // 智谱等 API 型厂商：汇总取平台真实资源包余额（而非静态默认额度），生成后自动刷新
                   const quotaOf = (keyId: string) =>
                     zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available
                       ? zhipuQuotaOverrides[keyId]
                       : undefined
+                  // 火山方舟：汇总取账号真实 token 汇总（免费模型 freeQuota 之和），避免显示账本假额度 50/50
+                  const volcQuotaOf = (keyId: string) => {
+                    const v = volcTokenOverrides[keyId]
+                    return v && v.total > 0 ? v : undefined
+                  }
                   const isApiQuota = p.providerId === 'zhipu'
+                  const volcKnown = enabledBindings.some((b) => volcQuotaOf(b.keyId))
                   const used = enabledBindings.reduce((s, b) => s + b.used, 0)
                   const remaining = enabledBindings.reduce(
-                    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
+                    (s, b) =>
+                      s +
+                      (isApiQuota
+                        ? quotaOf(b.keyId)?.remaining ?? 0
+                        : isVolc
+                          ? volcQuotaOf(b.keyId)?.remaining ?? 0
+                          : b.remaining),
                     0
                   )
                   const total = enabledBindings.reduce(
-                    (s, b) => s + (isApiQuota ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
+                    (s, b) =>
+                      s +
+                      (isApiQuota
+                        ? quotaOf(b.keyId)?.total ?? 0
+                        : isVolc
+                          ? volcQuotaOf(b.keyId)?.total ?? 0
+                          : b.dailyTotal),
                     0
                   )
                   const fill = total > 0 ? Math.round((remaining / total) * 100) : 0
+                  // 火山免费 token 数值较大，以 k tokens 为单位展示
+                  const isKTokens = isVolc && total >= 1000
+                  const fmtK = (n: number) => Math.round(n / 1000).toLocaleString()
+                  const quotaText = isKTokens
+                    ? `${fmtK(remaining)}k / ${fmtK(total)}k tokens`
+                    : `${remaining.toLocaleString()} / ${total.toLocaleString()} ${p.unitName}`
                   return (
                     <div className="ps-item" key={p.providerId}>
                       <div className="ps-icon">
@@ -1087,7 +1112,7 @@ export default function Dashboard({
                       </div>
                       <div className="ps-info">
                         <div className="ps-name">{p.name}</div>
-                        <div className="ps-quota">{remaining} / {total} {p.unitName}</div>
+                        <div className="ps-quota">{isVolc && !volcKnown ? '—' : quotaText}</div>
                         {used > 0 && (
                           <div className="quota-bar">
                             <div className="quota-fill" style={{ width: fill + '%' }} />
