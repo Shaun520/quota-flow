@@ -10,7 +10,8 @@ import {
   ratioOptions,
   resolutionOptions,
   uploadHint,
-  zhipuModelDurations
+  zhipuModelDurations,
+  bailianModelDurations
 } from '../spec'
 import { IconInfo, IconMaximize, IconPlay, IconUpload, ProviderIconMark } from './icons'
 import { EmptyState } from './EmptyState'
@@ -212,8 +213,11 @@ export default function Dashboard({
   const caps = providerCaps[provider]
   // 火山方舟：调度台模型列表以「账号绑定时实际抓到的免费模型」为准（优先），未抓到才回退 provider_caps / spec 固定目录
   const [volcModels, setVolcModels] = useState<string[] | null>(null)
+  // 阿里云百炼：调度台模型列表 = 各已启用账号「绑定捕获」的免费/可用视频模型并集（优先），未抓到回退 spec 固定目录
+  const [bailianModels, setBailianModels] = useState<string[] | null>(null)
   const modelList = (p: string): string[] => {
     if (p === 'volcengine' && volcModels && volcModels.length > 0) return volcModels
+    if (p === 'bailian' && bailianModels && bailianModels.length > 0) return bailianModels
     return providerCaps[p]?.models ?? MODELS[p] ?? MODELS.doubao
   }
 
@@ -306,6 +310,36 @@ export default function Dashboard({
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, provAggs, volcModels === null])
+
+  // 阿里云百炼：调度台模型下拉 = 各已启用账号「绑定捕获」的可用视频模型并集（动态，非固定文件/库定义）
+  useEffect(() => {
+    const svc = getProviderService()
+    if (!svc || !user) return
+    const agg = provAggs.find((a) => a.providerId === 'bailian' && a.enabled)
+    if (!agg || agg.bindings.length === 0) {
+      if (bailianModels === null) setBailianModels([])
+      return
+    }
+    const enabled = agg.bindings.filter((b) => b.enabled)
+    if (enabled.length === 0) return
+    let cancelled = false
+    void (async () => {
+      const union = new Set<string>()
+      for (const b of enabled) {
+        try {
+          const secret = await svc.getProviderKeySecret(user.id, b.keyId)
+          if (!secret) continue
+          const res = await window.api.providers.apiModels('bailian', secret.encrypted_key)
+          if (res.ok && res.models) res.models.forEach((m) => m && m.model && union.add(m.model))
+        } catch {
+          // 单个账号抓取失败不影响整体目录
+        }
+      }
+      if (!cancelled) setBailianModels(Array.from(union))
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, provAggs, bailianModels === null])
   const providerDurations = useMemo(() => {
     return new Map(provAggs.map((a) => [a.providerId, a.durations]))
   }, [provAggs])
@@ -313,6 +347,7 @@ export default function Dashboard({
     // 智谱固定生成时长为模型级能力（cogvideox-3 5/10s、Vidu Q1 5s、Vidu 2 4s 等），
     // 与主进程 api-branch 的模型时长校验保持一致，避免 UI 可选但与生成校验冲突。
     if (provider === 'zhipu') return zhipuModelDurations(model)
+    if (provider === 'bailian') return bailianModelDurations(model)
     return providerDurations.get(provider) ?? DEFAULT_SUPPORTED_DURATIONS
   }, [provider, model, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)

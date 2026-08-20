@@ -2837,6 +2837,46 @@ export function initProviders(): void {
     return { ok: true, accountId: res.accountId ?? null, freeTiers: tiers }
   })
 
+  // 阿里云百炼额度刷新：注入账号负载 cookie 重建分区登录态 → 静默重抓控制台最新免费额度 →
+  // 命中则重建负载（保留 apiKey/accountId/cookies）返回新密文 + 聚合额度，渲染层据此落库并刷新展示
+  ipcMain.handle(
+    'provider:bailian-refresh-quota',
+    async (_e, keyId: string, encrypted: string) => {
+      if (!encrypted) return { ok: false, reason: 'no-secret', error: '缺少密钥' }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+        const { apiKey, accountId, freeTiers, cookies } = decodeBailianPayload(plain)
+        if (!apiKey) return { ok: false, reason: 'no-key', error: '未解析到 API Key' }
+        // 先注入账号负载 cookie 重建分区登录态（覆盖重启后会话型 cookie 丢失），再静默重抓
+        const storedCookies = Array.isArray(cookies) && cookies.length > 0 ? cookies : undefined
+        if (storedCookies) await injectBailianConsoleCookies(keyId, storedCookies)
+        const res = await captureBailianConsoleSession({ quiet: true, keyId })
+        if (!res.ok || !res.freeTiersRaw) {
+          return { ok: false, reason: 'capture-failed', error: res.error ?? '未抓到最新免费额度' }
+        }
+        const tiers = parseBailianFreeTierPayload(res.freeTiersRaw)
+        if (tiers === null || tiers.length === 0) {
+          return { ok: true, preserved: true }
+        }
+        // 重建负载：保留原 apiKey/accountId/cookies，替换最新 freeTiers
+        const newAccountId = res.accountId ?? accountId ?? null
+        const newPlain = JSON.stringify({
+          v: 1,
+          apiKey,
+          accountId: newAccountId,
+          freeTiers: tiers,
+          ...(storedCookies ? { cookies: storedCookies } : {})
+        })
+        const newEncrypted = safeStorage.encryptString(newPlain).toString('base64')
+        const quota = aggregateBailianFreeQuota(tiers)
+        console.log(`[qf-bailian] REFRESH key=${keyId} tiers=${tiers.length} remaining=${quota.remaining}`)
+        return { ok: true, encrypted: newEncrypted, freeTiers: tiers, quota }
+      } catch (e) {
+        return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '额度刷新失败' }
+      }
+    }
+  )
+
   // 火山方舟控制台会话状态：视 JWT 的 exp 判定 alive / expiring / expired
   ipcMain.handle(
     'provider:volc-session-status',

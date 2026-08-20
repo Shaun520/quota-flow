@@ -24,7 +24,8 @@ export const MODELS: Record<string, string[]> = {
   kling: ['可灵-标准', '可灵-大师'],
   hailuo: ['海螺-标准'],
   zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2'],
-  volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-lite-i2v-250428']
+  volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-lite-i2v-250428'],
+  bailian: ['wan2.7-t2v-2026-06-12', 'wan2.7-i2v-2026-04-25', 'wan2.7-r2v-2026-06-12']
 }
 
 /** 智谱模型展示价格（与主进程 api-branch 保持一致） */
@@ -67,6 +68,18 @@ export function volcModelDurations(model: string): number[] {
   return VOLC_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
 }
 
+/** 阿里云百炼各模型固定生成时长（秒）；与主进程 api-branch 静态表保持一致 */
+export const BAILIAN_MODEL_DURATIONS: Record<string, number[]> = {
+  'wan2.7-t2v-2026-06-12': [5, 10],
+  'wan2.7-i2v-2026-04-25': [5, 10],
+  'wan2.7-r2v-2026-06-12': [5]
+}
+
+/** 阿里云百炼按模型取有效时长；未收录模型回退默认档 */
+export function bailianModelDurations(model: string): number[] {
+  return BAILIAN_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
+}
+
 export interface DurationOption {
   value: number
   label: string
@@ -107,6 +120,21 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
           { value: 'first_last', label: '首尾帧生成' },
           { value: 'multi_ref', label: '多参考生成' }
         ]
+      default:
+        return []
+    }
+  }
+  if (provider === 'bailian') {
+    switch (model) {
+      case 'wan2.7-t2v-2026-06-12':
+        return [{ value: 'text2video', label: '文生视频' }]
+      case 'wan2.7-i2v-2026-04-25':
+        return [
+          { value: 'img2video', label: '图生视频(首帧)' },
+          { value: 'first_last', label: '首尾帧生成' }
+        ]
+      case 'wan2.7-r2v-2026-06-12':
+        return [{ value: 'multi_ref', label: '参考生视频' }]
       default:
         return []
     }

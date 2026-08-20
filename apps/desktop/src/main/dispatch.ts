@@ -53,6 +53,8 @@ export interface QuotaUpdatedPayload {
   zhipuRefreshKeyId?: string
   /** 火山方舟生成成功后触发：渲染层据此静默同步该账号免费模型真实剩余额度 */
   volcRefreshKeyId?: string
+  /** 阿里云百炼生成成功后触发：渲染层据此静默重抓该账号控制台最新免费额度 */
+  bailianRefreshKeyId?: string
 }
 
 const UA =
@@ -858,7 +860,11 @@ async function runApiBranch(
       reserved: 0,
       refreshed_at: new Date().toISOString()
     },
-    ...(providerId === 'volcengine' ? { volcRefreshKeyId: cand.id } : { zhipuRefreshKeyId: cand.id })
+    ...(providerId === 'volcengine'
+      ? { volcRefreshKeyId: cand.id }
+      : providerId === 'bailian'
+        ? { bailianRefreshKeyId: cand.id }
+        : { zhipuRefreshKeyId: cand.id })
   })
   return { ok: true, jobId: job.id }
 }

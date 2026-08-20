@@ -233,6 +233,282 @@ export function isBailianVideoFreeModel(model: string): boolean {
   return BAILIAN_VIDEO_MODEL_PATTERN.test(model || "");
 }
 
+// ===========================================================================
+// 视频生成数据面（DashScope 异步协议）
+// 依据：阿里云百炼官方文档 + 控制台 API case 页（见 docs/厂商与API平台接入/阿里云百炼视频生成接入方案.md §3）。
+// 注意：字段名以官方权威 case 页实测为准，若 404/400 需在其上核对 input/parameters 结构后再收敛。
+// ===========================================================================
+
+/** 视频生成提交端点（DashScope 异步视频合成）。 */
+export const BAILIAN_VIDEO_SYNTH_BASE_URL =
+  "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis";
+
+/** 视频生成模型类型枚举。 */
+export type BailianVideoMode = "text2video" | "img2video" | "first_last" | "multi_ref";
+
+/** 生成模式 → 单元统一值（0=文生, 1=图生首帧, 2=首尾帧；参考映射到图生/参考语义） */
+export function bailianVideoImageCount(mode: BailianVideoMode): number {
+  switch (mode) {
+    case "first_last":
+      return 2;
+    case "img2video":
+    case "multi_ref":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/** 百炼视频生成静态模型目录（兜底目录；优先用账号捕获的 freeTiers 实时目录）。 */
+export interface BailianVideoModelMeta {
+  /** 模型名：wan2.7-t2v-2026-06-12 等 */
+  model: string;
+  /** 类型：文生 / 首帧图生 / 参考生 */
+  type: "t2v" | "i2v" | "r2v";
+  /** 是否免费（官方实测：t2v/r2v 有免费，i2v 无免费按量付费） */
+  free: boolean;
+  /** 支持时长档位（秒） */
+  durations: number[];
+  /** 分辨率取值（720P/1080P） */
+  resolutions: string[];
+  /** 支持的生成模式 */
+  modes: Array<{ value: BailianVideoMode; label: string }>;
+}
+
+/** 视频生成可选参数（补充 prompt 之外的结构化字段）。 */
+export interface BailianGenerateOptions {
+  mode: BailianVideoMode;
+  model: string;
+  prompt?: string;
+  /** 图生/首尾/参考：公网 https 图片 URL 数组（首帧 1 / 首尾 2 / 参考 1+） */
+  images?: string[];
+  /** 视频时长（秒，整数） */
+  durationSec?: number;
+  /** 分辨率：'720' | '1080'（调度台写法），落 API 时映射为 '720P' / '1080P' */
+  resolution?: string;
+  /** 画幅比例：16:9 / 9:16 / 1:1 / 4:3 / 3:4 */
+  ratio?: string;
+  /** 是否生成有声视频：'on'（默认）/ 'off' */
+  audio?: "on" | "off";
+  /** 附加音频 URL（备用字段，暂不启用） */
+  promptAudioUrl?: string;
+}
+
+export interface BailianGenerateResult {
+  ok: boolean;
+  videoUrl?: string;
+  coverImageUrl?: string;
+  /** 异步任务 task_id */
+  traceId?: string;
+  model: string;
+  error?: string;
+  /** 免费额度用尽（403 AllocationQuota.FreeTierOnly） */
+  freeTierExhausted?: boolean;
+}
+
+/** DashScope 异步视频生成：提交 → 轮询 → 解析视频 URL。
+ *  onProgress 用于桌面调度台实时推送过程提示（提交/轮询阶段）。
+ *  轮询遵守高频轮询约束：固定间隔 ≥10s、带超时上限，不做无痕高频刷。 */
+export async function bailianGenerateWithKey(
+  apiKey: string,
+  opts: BailianGenerateOptions,
+  onProgress?: (message: string) => void,
+): Promise<BailianGenerateResult> {
+  const key = (apiKey ?? "").trim();
+  if (!key) return { ok: false, model: opts.model, error: "阿里云百炼 API Key 缺失" };
+  const startedAt = Date.now();
+  const { mode, model } = opts;
+  const imgs = (opts.images ?? []).filter((u) => /^https?:\/\//i.test(String(u).trim()));
+  const need = bailianVideoImageCount(mode);
+  if (need > 0 && imgs.length < need) {
+    return {
+      ok: false,
+      model,
+      error:
+        need === 2
+          ? "首尾帧生成需要上传首帧和尾帧共 2 张图片"
+          : mode === "multi_ref"
+            ? "参考生视频需要至少上传 1 张参考图"
+            : "图生视频需要至少上传 1 张首帧图片",
+    };
+  }
+
+  // 构建请求体：input + parameters（协议骨架见方案 §3.2，字段名以实测为准）
+  const input: Record<string, unknown> = { prompt: (opts.prompt ?? "").trim() || "生成一段视频" };
+  if (mode === "img2video" && imgs.length >= 1) input["img_url"] = imgs[0];
+  if (mode === "first_last" && imgs.length >= 2) {
+    input["img_url"] = imgs[0];
+    input["img2_url"] = imgs[1];
+  }
+  if (mode === "multi_ref" && imgs.length >= 1) input["img_url"] = imgs[0];
+
+  const parameters: Record<string, unknown> = {};
+  const resMap: Record<string, string> = { "720": "720P", "1080": "1080P" };
+  if (opts.resolution && resMap[opts.resolution]) parameters["resolution"] = resMap[opts.resolution];
+  if (opts.ratio) parameters["ratio"] = opts.ratio;
+  const dur = Number(opts.durationSec);
+  if (Number.isFinite(dur) && dur > 0) parameters["duration"] = dur;
+  // 配音：默认有声；audio='off' 时关配音
+  if ((opts.audio ?? "on") === "off") parameters["with_audio"] = false;
+  parameters["prompt_extend"] = true;
+  parameters["watermark"] = false;
+
+  const body: Record<string, unknown> = { model, input, parameters };
+  const genLog = (msg: string, extra?: unknown): void => {
+    console.log(`[qf-bailian] GEN ${msg}`, extra === undefined ? "" : JSON.stringify(extra));
+  };
+
+  try {
+    onProgress?.(`正在提交到阿里云百炼（${model}）…`);
+    genLog(`submit mode=${mode} model=${model}`, { imgs: imgs.length, resolution: parameters["resolution"], duration: parameters["duration"] });
+    const submit = await fetch(BAILIAN_VIDEO_SYNTH_BASE_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+    const submitRaw: unknown = await submit.json().catch(() => null);
+    const submitData = (submitRaw && typeof submitRaw === "object" ? submitRaw : {}) as Record<string, unknown>;
+    if (!submit.ok) {
+      // 权威区分：免费额度用尽返回 403；其余再透出错误信息
+      const errObj = (submitData["code"] ? submitData : submitData["error"] || submitData["message"]) as
+        | Record<string, unknown>
+        | string
+        | undefined;
+      const code = typeof submitData["code"] === "string" ? submitData["code"] : "";
+      const fullErr = String(
+        typeof errObj === "string"
+          ? errObj
+          : (errObj && typeof errObj === "object" && typeof (errObj as Record<string, unknown>)["message"] === "string"
+              ? (errObj as Record<string, unknown>)["message"]
+              : submitData["message"] ?? `HTTP ${submit.status}`),
+      );
+      const msgText = String(submitData["message"] ?? fullErr);
+      genLog(`submit fail status=${submit.status} code=${code} msg=${msgText}`);
+      if (submit.status === 403 || /AllocationQuota|FreeTier|免费额度.*用完|额度不足|quota.*exhaust/i.test(msgText)) {
+        return {
+          ok: false,
+          model,
+          freeTierExhausted: true,
+          error: "该模型免费额度已用完（是否开启『免费额度用完即停』），请核对账号免费额度后重试",
+        };
+      }
+      return { ok: false, model, error: `阿里云百炼提交失败: ${msgText}${submit.status === 429 ? "（限流，请稍后再试）" : ""}` };
+    }
+    const rawTaskId = submitData["output"] && typeof submitData["output"] === "object"
+      ? (submitData["output"] as Record<string, unknown>)["task_id"]
+      : undefined;
+    const taskId = typeof rawTaskId === "string" && rawTaskId ? rawTaskId : undefined;
+    if (!taskId) {
+      genLog("submit ok but no task_id", submitData);
+      return { ok: false, model, error: "阿里云百炼提交响应缺少 task_id" };
+    }
+
+    onProgress?.("提交成功，正在生成视频…");
+    const poll = await pollBailianTask(key, taskId, { startedAt, model, onProgress });
+    return poll;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    genLog(`uncaught ${msg}`);
+    return { ok: false, model, error: msg };
+  }
+}
+
+/** 轮询配置：固定 ≥10s 间隔 + 超时上限（避免高频轮询） */
+const BAILIAN_POLL_INTERVAL_MS = 10_000;
+const BAILIAN_POLL_MAX = 60; // ≈10 分钟上限
+
+export async function pollBailianTask(
+  apiKey: string,
+  taskId: string,
+  ctx?: { startedAt?: number; model?: string; onProgress?: (msg: string) => void },
+): Promise<BailianGenerateResult> {
+  const model = ctx?.model ?? "";
+  const key = (apiKey ?? "").trim();
+  const startedAt = ctx?.startedAt ?? Date.now();
+  const genLog = (msg: string, extra?: unknown): void => {
+    console.log(`[qf-bailian] GEN ${msg}`, extra === undefined ? "" : JSON.stringify(extra));
+  };
+  let polls = 0;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, BAILIAN_POLL_INTERVAL_MS));
+    polls++;
+    let data: Record<string, unknown>;
+    try {
+      const res = await fetch(`${BAILIAN_TASK_BASE_URL}/${taskId}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      const rawPoll: unknown = await res.json().catch(() => null);
+      data = (rawPoll && typeof rawPoll === "object" ? rawPoll : {}) as Record<string, unknown>;
+    } catch {
+      if (polls >= BAILIAN_POLL_MAX) {
+        return { ok: false, model, error: `阿里云百炼任务轮询超时（约 ${Math.round((Date.now() - startedAt) / 1000)} 秒）` };
+      }
+      continue;
+    }
+    // 归一：优先取 output 内字段（新版），否则顶层（旧式/通用任务查询）
+    const output = (data["output"] && typeof data["output"] === "object")
+      ? (data["output"] as Record<string, unknown>)
+      : (data as Record<string, unknown>);
+    const uuidStatus = String(
+      output["task_status"] ?? output["status"] ?? data["task_status"] ?? data["status"] ?? "UNKNOWN",
+    );
+
+    const isDone = (s: string): boolean => /SUCCEEDED|SUCCESS|COMPLETED/i.test(s);
+    const isFail = (s: string): boolean => /FAILED|FAIL|CANCELLED|CANCEL|TERMINATED|REJECT/i.test(s);
+
+    if (isDone(uuidStatus)) {
+      // 成功视频地址两种结构：新版直接 output.video_url / output.cover_url；旧版 output.results[].url / [].cover_url。
+      const safe = (v: unknown): Record<string, unknown> =>
+        v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+      const directUrl = typeof output["video_url"] === "string" ? String(output["video_url"]) : "";
+      const directCover =
+        typeof output["cover_url"] === "string"
+          ? String(output["cover_url"])
+          : typeof output["cover_image_url"] === "string"
+            ? String(output["cover_image_url"])
+            : "";
+      const resultsRaw = output["results"];
+      const list: Array<unknown> = Array.isArray(resultsRaw)
+        ? (resultsRaw as unknown[])
+        : resultsRaw && typeof resultsRaw === "object"
+          ? [resultsRaw]
+          : [];
+      const listVideo = list.find((it) => typeof safe(it)["url"] === "string");
+      const listCover = list.find((it) => typeof safe(it)["cover_url"] === "string");
+      const video = directUrl || (listVideo ? String(safe(listVideo)["url"]) : "");
+      const cover = directCover || (listCover ? String(safe(listCover)["cover_url"]) : "");
+      if (!video) {
+        genLog(`done but no url status=${uuidStatus}`, data);
+        return { ok: false, model, error: "阿里云百炼任务完成但响应缺少视频 url" };
+      }
+      genLog(`done video_url=${video} polls=${polls}`);
+      return {
+        ok: true,
+        videoUrl: video,
+        coverImageUrl: cover || undefined,
+        traceId: taskId,
+        model,
+      };
+    }
+    if (isFail(uuidStatus)) {
+      const reasonRaw = output["message"] ?? data["message"] ?? output["error"] ?? data["error"] ?? uuidStatus;
+      genLog(`terminal fail status=${uuidStatus}`, data);
+      return { ok: false, model, error: `阿里云百炼任务${String(reasonRaw)}` };
+    }
+    if (polls >= BAILIAN_POLL_MAX) {
+      return { ok: false, model, error: `阿里云百炼任务轮询超时（约 ${Math.round((Date.now() - startedAt) / 1000)} 秒）` };
+    }
+    ctx?.onProgress?.(`视频生成中（${Math.round((Date.now() - startedAt) / 1000)}s）…`);
+  }
+}
+
 /** 校验阿里云百炼 API Key 是否有效（不产生任何生成费用）：
  * 请求一个不存在的只读任务查询端点，用状态码区分鉴权——无效 key 返回 401，有效 key 返回业务错误(404 等)。
  * 仅把 401 视为"无效"，其余 HTTP 响应视为鉴权已通过（Key 有效）。

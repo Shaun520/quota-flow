@@ -179,7 +179,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce, refreshBailianQuotaOnce } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -270,7 +270,16 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
             setModels(newRes.models)
           }
         }
-        // 非火山：无缓存可秒开，同步完成后重新拉取展示最新值
+        // 阿里云百炼：复用账号 cookie 静默重抓控制台最新免费额度 → 用新密文重拉目录刷新最新剩余，对齐火山
+      } else if (providerId === 'bailian') {
+        const fresh = await refreshBailianQuotaOnce(keyId)
+        if (fresh && token === modelsTokenRef.current) {
+          const newRes = await window.api.providers.apiModels(providerId, fresh)
+          if (token === modelsTokenRef.current && newRes.ok && newRes.models) {
+            setModels(newRes.models)
+          }
+        }
+        // 非火山/百炼：无缓存可秒开，同步完成后重新拉取展示最新值
       } else if (cachedRes && (!cachedRes.ok || !cachedRes.models)) {
         const res = await window.api.providers.apiModels(providerId, encrypted)
         if (token === modelsTokenRef.current) {

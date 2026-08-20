@@ -191,6 +191,8 @@ export interface ProvidersResult {
   bailianQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   /** 火山方舟额度同步：后台静默抓取该账号最新免费模型额度/开通状态并落库；命中返回新加密负载，未抓到返回 false */
   refreshVolcengineModelsOnce: (keyId: string, opts?: { maxStaleMs?: number }) => Promise<string | false>
+  /** 阿里云百炼额度刷新：复用该账号 cookie 静默重抓控制台最新免费额度并落库；命中返回新密文，未命中返回 false */
+  refreshBailianQuotaOnce: (keyId: string) => Promise<string | false>
 }
 
 export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
@@ -428,6 +430,32 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       }
     },
     [user]
+  )
+
+  // 阿里云百炼真实额度刷新：主进程复用该账号 cookie 静默重抓控制台最新免费额度；
+  // 命中则用新密文落库并更新聚合展示，返回新密文（供「查看模型」重拉最新目录）；失败回退仅重读快照，返回 false
+  const refreshBailianQuotaOnce = useCallback(
+    async (keyId: string): Promise<string | false> => {
+      const svc = getProviderService()
+      if (!svc || !user) return false
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return false
+        const res = await window.api.providers.bailianRefreshQuota(keyId, secret.encrypted_key)
+        if (res.ok && res.encrypted) {
+          await svc.refreshProviderKey(user.id, keyId, {
+            encryptedKey: res.encrypted,
+            healthStatus: 'healthy'
+          })
+          if (res.quota) setBailianQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
+          return res.encrypted
+        }
+        return await fetchBailianQuotaOnce(keyId).then(() => false)
+      } catch {
+        return false
+      }
+    },
+    [user, fetchBailianQuotaOnce]
   )
 
   // 对单个火山账号做一次静默续期：成功则用新加密负载落库并重拉真实额度；全局一次只续一个（共享会话分区）
@@ -732,6 +760,10 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         // 同步后重拉该账号真实额度，让页面剩余展示即时生效
         void fetchVolcengineQuotaOnce(payload.volcRefreshKeyId)
       }
+      // 阿里云百炼生成完成：静默重抓该账号控制台最新免费额度并落库，让剩余展示即时更新
+      if (payload.bailianRefreshKeyId) {
+        void refreshBailianQuotaOnce(payload.bailianRefreshKeyId)
+      }
       const ledger = payload.ledger
       setLedgers((prev) => {
         const idx = prev.findIndex((l) => l.id === ledger.id)
@@ -743,7 +775,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         return [ledger, ...prev]
       })
     })
-  }, [user?.id, refreshZhipuQuota, refreshVolcengineModelsOnce, fetchVolcengineQuotaOnce])
+  }, [user?.id, refreshZhipuQuota, refreshVolcengineModelsOnce, fetchVolcengineQuotaOnce, refreshBailianQuotaOnce])
 
   // 健康检查：与数据加载解耦，keys 就绪后独立运行（节流 + 并发限制，见 runHealthChecks）
   useEffect(() => {
@@ -938,6 +970,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     volcSessionStatuses,
     volcTokenOverrides,
     bailianQuotaOverrides,
-    refreshVolcengineModelsOnce
+    refreshVolcengineModelsOnce,
+    refreshBailianQuotaOnce
   }
 }

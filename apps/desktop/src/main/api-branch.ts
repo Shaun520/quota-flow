@@ -16,6 +16,8 @@ import {
   decodeVolcenginePayload,
   decodeBailianPayload,
   isBailianVideoFreeModel,
+  bailianGenerateWithKey,
+  bailianVideoImageCount,
   fetchZhipuQuota,
   zhipuGenerateWithKey,
   volcengineFreeVideoModels,
@@ -25,7 +27,7 @@ import {
   volcGenTokenEstimate,
   VOLC_DECOMMISSIONED_MODELS
 } from '@quota-flow/providers'
-import type { VolcengineFreeVideoModel, ZhipuGenerateOptions } from '@quota-flow/providers'
+import type { VolcengineFreeVideoModel, ZhipuGenerateOptions, BailianGenerateOptions, BailianFreeTierSlim } from '@quota-flow/providers'
 import { ipcMain, safeStorage } from 'electron'
 
 /** 解密后的 API 厂商凭证（各厂商子集可不同；这里统一宽松字段） */
@@ -300,10 +302,166 @@ export function makeZhipuBranch(): ApiGenerationBranch {
   }
 }
 
+/**
+ * 阿里云百炼视频生成模型目录（静态兜底表；优先用账号捕获 realtime freeTiers 过滤出的未过期视频模型）。
+ * 成本/时长/模式依据官方与实测（见 docs/厂商与API平台接入/阿里云百炼视频生成接入方案.md §3）：
+ *   wan2.7-t2v-2026-06-12   文生，免费（实测 50 次）
+ *   wan2.7-i2v-2026-04-25   首帧图生 / 首尾帧，付费按量（无免费）
+ *   wan2.7-r2v-2026-06-12   参考生，免费（实测 50 次）
+ */
+const BAILIAN_VIDEO_MODELS: Array<{
+  model: string
+  type: 't2v' | 'i2v' | 'r2v'
+  free: boolean
+  durations: number[]
+  priceLabel: string
+  cost: number
+  modes: Array<{ value: string; label: string }>
+}> = [
+  {
+    model: 'wan2.7-t2v-2026-06-12',
+    type: 't2v',
+    free: true,
+    durations: [5, 10],
+    priceLabel: '免费',
+    cost: 0,
+    modes: [{ value: 'text2video', label: '文生视频' }]
+  },
+  {
+    model: 'wan2.7-i2v-2026-04-25',
+    type: 'i2v',
+    free: false,
+    durations: [5, 10],
+    priceLabel: '按量付费',
+    cost: 1,
+    modes: [
+      { value: 'img2video', label: '图生视频(首帧)' },
+      { value: 'first_last', label: '首尾帧生成' }
+    ]
+  },
+  {
+    model: 'wan2.7-r2v-2026-06-12',
+    type: 'r2v',
+    free: true,
+    durations: [5],
+    priceLabel: '免费',
+    cost: 0,
+    modes: [{ value: 'multi_ref', label: '参考生视频' }]
+  }
+]
+
+function makeBailianBranch(): ApiGenerationBranch {
+  return {
+    id: 'bailian',
+    displayName: '阿里云百炼',
+    unitName: '次',
+    parseCredentials(decrypted) {
+      try {
+        const { apiKey } = decodeBailianPayload(decrypted)
+        return apiKey ? { apiKey } : null
+      } catch {
+        return null
+      }
+    },
+    cost(model) {
+      return BAILIAN_VIDEO_MODELS.find((m) => m.model === model)?.cost ?? 1
+    },
+    supportedDurations(model = 'wan2.7-t2v-2026-06-12') {
+      return BAILIAN_VIDEO_MODELS.find((m) => m.model === model)?.durations ?? [5]
+    },
+    async remaining() {
+      // 真实按次免费额度随账号 payload freeTiers 快照展示；此处返回 null 表示未知（不做公开 API 实时查询）。
+      return null
+    },
+    preflight() {
+      // t2v/r2v 免费额度用尽由服务端 403 FreeTierOnly 兜底，不做客户端暴力拦截；
+      // i2v 无免费为按量付费，dispatch 无「继续」确认入口，故用 catalog 的「按量付费」标签提示，不硬拦（避免生成死路）。
+      return { ok: true }
+    },
+    catalog(_perModelFreeQuota, captured?) {
+      // captured 传 freeTiers（payload 捕获快照）时按「未过期的视频生成模型」优先展示（口径与「查看模型」一致）
+      if (Array.isArray(captured) && captured.length > 0) {
+        const tiers = captured as unknown as BailianFreeTierSlim[]
+        const live = tiers.filter((t) => isBailianVideoFreeModel(t.model) && !t.expired)
+        if (live.length > 0) {
+          return live.map((t) => {
+            const meta = BAILIAN_VIDEO_MODELS.find((m) => m.model === t.model)
+            return {
+              model: t.model,
+              priceLabel: meta?.priceLabel ?? '免费',
+              cost: meta?.cost ?? 0,
+              durations: meta?.durations ?? [5],
+              size: null,
+              modes: meta?.modes ?? [{ value: 'text2video', label: '文生视频' }],
+              activated: true,
+              freeQuota: { remaining: t.remaining, total: t.total }
+            }
+          })
+        }
+      }
+      // 回退内置静态目录
+      return BAILIAN_VIDEO_MODELS.map((m) => ({
+        model: m.model,
+        priceLabel: m.priceLabel,
+        cost: m.cost,
+        durations: m.durations,
+        size: null,
+        modes: m.modes,
+        activated: true
+      }))
+    },
+    async generate(input, creds, params) {
+      const imgs = (params.images ?? []).filter((u) => /^https?:\/\//i.test(u))
+      const needed = bailianVideoImageCount(params.mode)
+      if (needed > 0 && imgs.length < needed) {
+        return {
+          ok: false,
+          error:
+            needed === 2
+              ? '首尾帧生成需要上传首帧和尾帧共 2 张图片'
+              : params.mode === 'multi_ref'
+                ? '参考生视频需要至少上传 1 张参考图'
+                : '图生视频需要至少上传 1 张首帧图片'
+        }
+      }
+      // 视频参数追加进 prompt（时长/尺寸/画幅/配音），对齐智谱 generate 既有做法
+      const paramNotes: string[] = []
+      const size =
+        input.resolution === '1080' ? '1920x1080' : input.resolution === '720' ? '1280x720' : undefined
+      if (size) paramNotes.push(`画面尺寸 ${size}`)
+      if (input.ratio) paramNotes.push(`画幅 ${input.ratio}`)
+      paramNotes.push(`视频时长 ${params.durationSec} 秒`)
+      paramNotes.push(input.audio === 'off' ? '无配音' : '带配音')
+      let prompt = params.prompt
+      if (paramNotes.length && params.prompt) prompt = `${params.prompt}（视频参数：${paramNotes.join('、')}）`
+
+      const opts: BailianGenerateOptions = {
+        mode: params.mode,
+        model: params.model,
+        prompt,
+        images: imgs,
+        durationSec: params.durationSec,
+        resolution: input.resolution,
+        ratio: input.ratio,
+        audio: input.audio === 'off' ? 'off' : 'on'
+      }
+      const r = await bailianGenerateWithKey(creds.apiKey, opts, params.onProgress)
+      return {
+        ok: r.ok,
+        videoUrl: r.videoUrl,
+        coverImageUrl: r.coverImageUrl,
+        traceId: r.traceId,
+        error: r.error ?? (r.freeTierExhausted ? '该模型免费额度已用完，请核对账号免费额度后重试' : undefined)
+      }
+    }
+  }
+}
+
 /** 已注册的 API 生成分支（key = providerId） */
 export const API_BRANCHES: Record<string, ApiGenerationBranch> = {
   zhipu: makeZhipuBranch(),
-  volcengine: makeVolcengineBranch()
+  volcengine: makeVolcengineBranch(),
+  bailian: makeBailianBranch()
 }
 
 /** 火山方舟免费视频模型默认时长（未收录固定时长走通用档） */

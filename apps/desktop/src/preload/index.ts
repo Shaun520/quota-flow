@@ -107,6 +107,8 @@ export interface QuotaUpdatedPayload {
   zhipuRefreshKeyId?: string
   /** 火山方舟生成成功后触发：据此静默同步该账号免费模型的真实剩余额度 */
   volcRefreshKeyId?: string
+  /** 阿里云百炼生成成功后触发：据此静默重抓该账号控制台最新免费额度 */
+  bailianRefreshKeyId?: string
 }
 
 /** 智谱平台资源包余额（fetch-quota 返回） */
@@ -319,6 +321,20 @@ export interface DesktopApi {
       reason?: string
       error?: string
     }>
+    /**
+     * 指定阿里云百炼账号额度刷新：复用该账号负载 cookie 重建分区登录态，静默重抓控制台最新免费额度，
+     * 命中则返回重建后的新加密负载（encrypted）+ 聚合额度（quota），供调用方落库并刷新展示；
+     * 未抓到（登录态失效/页面未就绪）返回 {ok:true, preserved:true} 保留旧值。
+     */
+    bailianRefreshQuota: (keyId: string, encrypted: string) => Promise<{
+      ok: boolean
+      encrypted?: string
+      freeTiers?: BailianFreeTier[]
+      quota?: { available: boolean; total: number; remaining: number; expired?: boolean }
+      preserved?: boolean
+      reason?: string
+      error?: string
+    }>
   }
   cookieRenew: {
     configure: (config: CookieRenewConfig) => Promise<{ ok: boolean; error?: string }>
@@ -473,6 +489,16 @@ const api: DesktopApi = {
         models?: VolcengineCapturedModel[]
         preserved?: boolean
         cached?: boolean
+        reason?: string
+        error?: string
+      }>,
+    bailianRefreshQuota: (keyId, encrypted) =>
+      ipcRenderer.invoke('provider:bailian-refresh-quota', keyId, encrypted) as Promise<{
+        ok: boolean
+        encrypted?: string
+        freeTiers?: BailianFreeTier[]
+        quota?: { available: boolean; total: number; remaining: number; expired?: boolean }
+        preserved?: boolean
         reason?: string
         error?: string
       }>
