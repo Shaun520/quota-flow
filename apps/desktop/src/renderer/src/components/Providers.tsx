@@ -179,7 +179,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, setKeyHealth, refreshVolcengineModelsOnce } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -240,13 +240,13 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
     setModels(null)
     setModelsLabel(accountName)
     setModelsProviderId(providerId)
-    setModelsQuota(zhipuQuotaOverrides[keyId] ?? null)
+    setModelsQuota(providerId === 'bailian' ? (bailianQuotaOverrides[keyId] ?? null) : (zhipuQuotaOverrides[keyId] ?? null))
     setModelsUnit(unitName)
     setModelsLoading(true)
     try {
       let encrypted: string | undefined
-      // 火山方舟：取该账号密钥负载，供主进程读取每模型免费 token 额度
-      if (providerId === 'volcengine') {
+      // 火山方舟 / 阿里云百炼：取该账号密钥负载，供主进程读取每模型免费额度（火山 token / 百炼 freeTiers）
+      if (providerId === 'volcengine' || providerId === 'bailian') {
         const svc = getProviderService()
         if (svc && user) {
           const secret = await svc.getProviderKeySecret(user.id, keyId)
@@ -487,6 +487,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                         onViewModels={(keyId, accountName) => handleViewModels(p.providerId, keyId, accountName, p.unitName)}
                         zhipuQuotaOverrides={zhipuQuotaOverrides}
                         volcTokenOverrides={volcTokenOverrides}
+                        bailianQuotaOverrides={bailianQuotaOverrides}
                         currentUserId={user?.id ?? ''}
                         team={team}
                       />
@@ -613,6 +614,7 @@ function ProviderRow({
   onViewModels,
   zhipuQuotaOverrides,
   volcTokenOverrides,
+  bailianQuotaOverrides,
   currentUserId,
   team
 }: {
@@ -634,15 +636,17 @@ function ProviderRow({
   onViewModels: (keyId: string, accountName: string) => Promise<void>
   zhipuQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   volcTokenOverrides: Record<string, { remaining: number; total: number } | null>
+  bailianQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   currentUserId: string
   team: { id: string } | null
 }) {
   const isApiKeyProvider = agg.authType === 'apikey'
   const activeBindings = agg.bindings.filter((b) => b.enabled)
   const totalUsed = activeBindings.reduce((s, b) => s + b.used, 0)
-  // API 型厂商：额度以平台真实资源包余额 / token 汇总为准，而非静态默认日额度；汇总只累计有可用数据的账号
+  // API 型厂商：额度以平台真实资源包余额 / token 汇总 / 账号级免费额度聚合为准，而非静态默认日额度；汇总只累计有可用数据的账号
   const isApiQuota = agg.providerId === 'zhipu'
   const isVolc = agg.providerId === 'volcengine'
+  const isBailian = agg.providerId === 'bailian'
   const quotaOf = (keyId: string) =>
     isApiQuota
       ? zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available
@@ -652,13 +656,17 @@ function ProviderRow({
         ? volcTokenOverrides[keyId] && volcTokenOverrides[keyId]!.total > 0
           ? volcTokenOverrides[keyId]
           : undefined
-        : undefined
+        : isBailian
+          ? bailianQuotaOverrides[keyId] && bailianQuotaOverrides[keyId].available
+            ? bailianQuotaOverrides[keyId]
+            : undefined
+          : undefined
   const remaining = activeBindings.reduce(
-    (s, b) => s + (isApiQuota || isVolc ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
+    (s, b) => s + (isApiQuota || isVolc || isBailian ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
     0
   )
   const totalQuota = activeBindings.reduce(
-    (s, b) => s + (isApiQuota || isVolc ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
+    (s, b) => s + (isApiQuota || isVolc || isBailian ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
     0
   )
   // 火山方舟：所有启用账号都未拿到真实 token 汇总时，厂商行总计显示占位（避免展示假的 0/0 或账本日额度）
@@ -795,6 +803,13 @@ function ProviderRow({
                             // 拉取中：短暂沿用旧值避免闪烁
                             return <span>{acc.remaining} / {acc.dailyTotal} {agg.unitName}</span>
                           })()
+                        ) : agg.providerId === 'bailian' ? (
+                          (() => {
+                            const q = bailianQuotaOverrides[acc.keyId]
+                            return (
+                              <span>{q?.available ? `${q.remaining} / ${q.total} ${agg.unitName}` : '—'}</span>
+                            )
+                          })()
                         ) : (
                           `${acc.remaining} / ${acc.dailyTotal} ${agg.unitName}`
                         )}
@@ -825,7 +840,7 @@ function ProviderRow({
                         )}
                       </td>
                       <td>
-                        {!isApiKeyProvider || agg.providerId === 'zhipu' || agg.providerId === 'volcengine' ? (
+                        {!isApiKeyProvider || agg.providerId === 'zhipu' || agg.providerId === 'volcengine' || agg.providerId === 'bailian' ? (
                           <>
                             <button
                               className="btn-sm"

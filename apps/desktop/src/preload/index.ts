@@ -145,6 +145,16 @@ export interface VolcengineCapturedModel {
   freeQuota?: { remaining?: number; total?: number }
 }
 
+/** 阿里云百炼免费额度单模型条目（会话捕获，账号级聚合展示） */
+export interface BailianFreeTier {
+  model: string
+  total: number
+  remaining: number
+  expired: boolean
+  expiredAtMs: number | null
+  status: string
+}
+
 /** 智谱控制台会话状态（依据 consoleJwt 的 JWT exp 判定），供自动续期调度参考 */
 export interface ZhipuSessionStatusResult {
   hasSession: boolean
@@ -273,6 +283,11 @@ export interface DesktopApi {
      * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
      */
     captureVolcengineSession: (keyId?: string) => Promise<{ ok: boolean; consoleJwt?: string; accountId?: string; models?: VolcengineCapturedModel[]; source?: 'console' | 'fallback'; error?: string }>
+    /**
+     * 捕获阿里云百炼控制台登录会话：账号 PK + 免费额度整表快照（解析为归一化条目）
+     * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
+     */
+    captureBailianSession: (keyId?: string) => Promise<{ ok: boolean; accountId?: string | null; freeTiers?: BailianFreeTier[]; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; error?: string }>
     /**
      * 读取指定火山方舟账号的控制台会话状态（依据 consoleJwt 的 JWT exp 判定 alive / expiring / expired）
      */
@@ -431,6 +446,13 @@ const api: DesktopApi = {
         accountId?: string
         models?: VolcengineCapturedModel[]
         source?: 'console' | 'fallback'
+        error?: string
+      }>,
+    captureBailianSession: (keyId) =>
+      ipcRenderer.invoke('provider:capture-bailian-session', keyId) as Promise<{
+        ok: boolean
+        accountId?: string | null
+        freeTiers?: BailianFreeTier[]
         error?: string
       }>,
     volcSessionStatus: (keyId, encrypted) =>

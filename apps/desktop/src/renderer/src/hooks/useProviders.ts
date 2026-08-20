@@ -187,6 +187,8 @@ export interface ProvidersResult {
   >
   /** 火山方舟账号真实 token 汇总覆盖（keyId -> remaining/total；null 表示已拉取但未拿到真实额度） */
   volcTokenOverrides: Record<string, { remaining: number; total: number } | null>
+  /** 阿里云百炼各账号真实免费额度聚合覆盖（keyId -> 账号级剩余/总量），随绑定时的控制台会话捕获落库 */
+  bailianQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   /** 火山方舟额度同步：后台静默抓取该账号最新免费模型额度/开通状态并落库；命中返回新加密负载，未抓到返回 false */
   refreshVolcengineModelsOnce: (keyId: string, opts?: { maxStaleMs?: number }) => Promise<string | false>
 }
@@ -210,6 +212,10 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   // 值为 null 表示已拉取但未拿到真实 token 汇总（用于展示占位，避免误显示账本假额度 50/50）。
   const [volcTokenOverrides, setVolcTokenOverrides] = useState<
     Record<string, { remaining: number; total: number } | null>
+  >({})
+  // 阿里云百炼各账号真实免费额度聚合覆盖（keyId -> 账号级剩余/总量），随绑定时的控制台会话捕获落库
+  const [bailianQuotaOverrides, setBailianQuotaOverrides] = useState<
+    Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   >({})
 
   // 单次拉取智谱某账号真实额度（平台资源包余额）并写入覆盖；返回剩余次数（查询失败返回 null）
@@ -403,6 +409,27 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     [user]
   )
 
+  // 单次拉取阿里云百炼某账号真实免费额度聚合（payload 中的账号级快照）并写入覆盖；未取到返回 false
+  const fetchBailianQuotaOnce = useCallback(
+    async (keyId: string): Promise<boolean> => {
+      const svc = getProviderService()
+      if (!svc || !user) return false
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return false
+        const res = await window.api.providers.fetchQuota('bailian', secret.encrypted_key)
+        if (res.ok && res.quota) {
+          setBailianQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
+          return true
+        }
+        return false
+      } catch {
+        return false
+      }
+    },
+    [user]
+  )
+
   // 对单个火山账号做一次静默续期：成功则用新加密负载落库并重拉真实额度；全局一次只续一个（共享会话分区）
   const renewVolcSessionOnce = useCallback(
     async (keyId: string, encrypted: string): Promise<boolean> => {
@@ -515,6 +542,14 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     if (volcKeys.length === 0) return
     volcKeys.forEach((key) => void fetchVolcTokenSummaryOnce(key.id))
   }, [user?.id, keys, fetchVolcTokenSummaryOnce])
+
+  // 初始化 / 刷新时主动拉取阿里云百炼各账号真实免费额度聚合（payload 账号级快照）
+  useEffect(() => {
+    if (!user || keys.length === 0) return
+    const bailianKeys = keys.filter((k) => k.provider_id === 'bailian')
+    if (bailianKeys.length === 0) return
+    bailianKeys.forEach((key) => void fetchBailianQuotaOnce(key.id))
+  }, [user?.id, keys, fetchBailianQuotaOnce])
 
   // 会话内覆盖某账号健康状态（API Key 测试成功/失败后即时反映，不落库）
   const setKeyHealth = useCallback((keyId: string, status: string) => {
@@ -902,6 +937,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     zhipuSessionStatuses,
     volcSessionStatuses,
     volcTokenOverrides,
+    bailianQuotaOverrides,
     refreshVolcengineModelsOnce
   }
 }

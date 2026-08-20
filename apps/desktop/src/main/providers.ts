@@ -15,8 +15,15 @@ import {
   volcengineAuthoritativeIds,
   VOLCENGINE_FREE_NAME_TO_ID
 } from '@quota-flow/providers'
-import { testBailianApiKey, bailianAccountFingerprint } from '@quota-flow/providers'
-import type { VolcengineFreeVideoModel } from '@quota-flow/providers'
+import {
+  testBailianApiKey,
+  bailianAccountFingerprint,
+  decodeBailianPayload,
+  parseBailianFreeTierPayload,
+  aggregateBailianFreeQuota,
+  isBailianVideoFreeModel
+} from '@quota-flow/providers'
+import type { VolcengineFreeVideoModel, BailianStoredCookie } from '@quota-flow/providers'
 
 /** 对「解密后的明文」仅做透明的 models 不可用标记写入，返回新明文（不触发网络；consoleJwt/accountId 原样保留）。 */
 export function markVolcModelUnavailable(
@@ -78,6 +85,7 @@ export type ProviderId =
   | 'dola'
   | 'kling'
   | 'hailuo'
+  | 'bailian'
 
 interface ProviderSite {
   loginUrl?: string
@@ -117,6 +125,11 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   hailuo: {
     loginUrl: 'https://hailuoai.com/video',
     healthUrl: 'https://hailuoai.com/'
+  },
+  // 阿里云百炼：bailian 为 apikey 厂商，走 openProviderSite 通用分支打开 API Key 管理页
+  bailian: {
+    loginUrl: 'https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key',
+    healthUrl: 'https://bailian.console.aliyun.com/'
   }
 }
 
@@ -282,7 +295,7 @@ async function injectCookies(
         value: c.value,
         httpOnly: c.httpOnly,
         secure: c.secure,
-        expirationDate: c.expires > 0 ? Math.floor(c.expires / 1000) : undefined
+        expirationDate: typeof c.expires === 'number' && c.expires > 0 ? Math.floor(c.expires / 1000) : undefined
       })
     } catch {
       // 单条失败不阻塞其余注入
@@ -731,7 +744,8 @@ async function openProviderSite(
   keyId: string,
   encryptedKey?: string
 ): Promise<{ ok: boolean; error?: string }> {
-  // 智谱（bigmodel）/ 火山方舟（volcengine）：打开该账号控制台，使用按账号隔离的分区免重复登录且不串号
+  // 智谱（bigmodel）/ 火山方舟（volcengine）/ 阿里云百炼（bailian）：
+  // 打开该账号控制台，使用按账号隔离的分区免重复登录且不串号
   let url: string | undefined
   let partition: string
   let injectableEncrypted: string | undefined
@@ -741,6 +755,24 @@ async function openProviderSite(
   } else if (providerId === 'volcengine') {
     url = VOLC_CONSOLE_URL
     partition = partitionFor(providerId, keyId)
+  } else if (providerId === 'bailian') {
+    // 复用绑定时捕获会话所在分区（persist:qf-bailian-console:<keyId>），打开即带已登录会话；每账号独立分区不串号
+    url = BAILIAN_CONSOLE_URL
+    partition = bailianConsolePartitionFor(keyId)
+    injectableEncrypted = encryptedKey
+    // 诊断：确认登录 cookie 是否真的落在该账号控制台分区（用于排查「进入官网未登录」）
+    try {
+      const diagSes = session.fromPartition(partition)
+      const diagCks = await diagSes.cookies.get({ url: BAILIAN_CONSOLE_URL })
+      console.log(
+        `[qf-bailian] OPEN-SITE keyId=${keyId} partition=${partition} cookies=${diagCks.length} names=[${diagCks
+          .slice(0, 8)
+          .map((c) => c.name)
+          .join(',')}]`
+      )
+    } catch {
+      /* 诊断失败不影响打开官网 */
+    }
   } else {
     const site = providerSite(providerId)
     url = site?.loginUrl || site?.healthUrl
@@ -762,8 +794,27 @@ async function openProviderSite(
   // 智谱走共享控制台分区，无需注入账号级 cookie；其余厂商按账号分区并注入 cookie
   if (injectableEncrypted) {
     try {
-      const parsed = parseStoredCredentials(injectableEncrypted, providerId)
-      if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
+      if (providerId === 'bailian') {
+        // 百炼把「进入官网」落在其控制台持久分区，重启后 persist 分区可能未留存登录 cookie，
+        // 从加密负载中读取绑定时持久化的控制台 cookie 重新注入，重建登录态（不覆盖目标分区已有 cookie）
+        let payloadCookies = 0
+        try {
+          const plain = safeStorage.decryptString(Buffer.from(injectableEncrypted, 'base64'))
+          const d = decodeBailianPayload(plain)
+          payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
+          const before = await collectBailianConsoleCookies(keyId)
+          if (payloadCookies > 0) await injectBailianConsoleCookies(keyId, d.cookies!)
+          const after = await collectBailianConsoleCookies(keyId)
+          console.log(
+            `[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} before=${before.length} after=${after.length}`
+          )
+        } catch (e) {
+          console.log(`[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
+        }
+      } else {
+        const parsed = parseStoredCredentials(injectableEncrypted, providerId)
+        if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
+      }
     } catch {
       // 解密失败时仍尝试打开官网，至少让用户看到站点本身。
     }
@@ -2335,6 +2386,310 @@ sample:(function(){
   })
 }
 
+// ── 阿里云百炼控制台会话捕获（复用智谱/火山内核：独立分区 + 注入 hook 抓响应 + localStorage 兜底）──
+// 默认落点：API Key 管理页（tab=model#/api-key，用户最熟悉，方便复制/校验 Key）。
+// 捕获两样东西（需用户切到免费额度页 costing-balance/free-quota?modelType=Vision 后由注入脚本抓取）：
+//   1) accountId（阿里云账号 PK）→ 账号级去重指纹键（免费额度按账号共享，见方案 §6.1）
+//   2) freeTierQuotas（真实免费额度）→ 账号级聚合展示（剩余/总量）
+// 鉴权：页面内 fetch/XHR 依赖控制台会话 cookie + 页面 SDK 计算注入的 sec_token，故无法由主进程/裸
+//   API Key 重放，只能在本捕获窗口页面上下文内 hook 网络响应 + 读 localStorage 缓存整表（页面自身缓存
+//   CacheByUId-CURRENT_PK-<accountId>-free_quota_<ModelType>）。
+const BAILIAN_CONSOLE_URL = "https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key"
+// 免费额度页（用于注入提示与跳转引导；捕获监听即针对该页响应的 queryFreeTierQuotaAsyn）
+const BAILIAN_FREE_QUOTA_URL =
+  "https://bailian.console.aliyun.com/cn-beijing?tab=costing-balance#/costing-balance/free-quota?modelType=Vision"
+const BAILIAN_CONSOLE_PARTITION = "persist:qf-bailian-console"
+/** 百炼控制台分区按账号隔离：persist:qf-bailian-console[:keyId]，避免多账号串会话 */
+function bailianConsolePartitionFor(keyId?: string): string {
+  return keyId ? `${BAILIAN_CONSOLE_PARTITION}:${keyId}` : BAILIAN_CONSOLE_PARTITION
+}
+function bailianConsoleSession(keyId?: string): Electron.Session {
+  return session.fromPartition(bailianConsolePartitionFor(keyId))
+}
+
+const BAILIAN_CONSOLE_ORIGIN = 'https://bailian.console.aliyun.com'
+
+/** 读取百炼控制台分区 cookie（供持久化/回注入，跨重启重建登录态） */
+async function collectBailianConsoleCookies(keyId?: string): Promise<ProviderCookie[]> {
+  const ses = session.fromPartition(bailianConsolePartitionFor(keyId))
+  const all = await ses.cookies.get({})
+  return exportCookies(all)
+}
+
+/** 向百炼控制台分区回注入 cookie（与网页厂商 injectCookies 同构，但定向到控制台分区） */
+async function injectBailianConsoleCookies(keyId: string, cookies: BailianStoredCookie[]): Promise<void> {
+  const ses = session.fromPartition(bailianConsolePartitionFor(keyId))
+  ses.setUserAgent(CHROME_UA)
+  for (const c of cookies) {
+    try {
+      await ses.cookies.set({
+        url: `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '') || BAILIAN_CONSOLE_ORIGIN.replace(/^https?:\/\//, '')}${c.path || '/'}`,
+        domain: c.domain || undefined,
+        name: c.name,
+        value: c.value,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        expirationDate: typeof c.expires === 'number' && c.expires > 0 ? Math.floor(c.expires / 1000) : undefined
+      })
+    } catch {
+      // 单条失败不阻塞其余注入
+    }
+  }
+}
+/** 静默捕获（续期/刷新额度）最长等待 */
+const BAILIAN_QUIET_WAIT_MS = 5000
+
+/**
+ * 绑定捕获时的控制台 cookie 缓存（按账号 accountId 暂存）。
+ * 用途：渲染层把捕获结果落库负载时可能因状态/旧 bundle 丢 cookies，加密兜底合并这里最近的捕获结果，
+ * 确保登录 cookie 一定随负载持久化，供「进入官网」跨重启重新注入。
+ */
+const bailianCapturedCookies = new Map<string, BailianStoredCookie[]>()
+
+export async function captureBailianConsoleSession(opts?: {
+  /** 静默捕获：不显示窗口、不要求点按钮，抓到数据或超时即自动返回 */
+  quiet?: boolean
+  /** 绑定/续期所属账号 keyId：隔离登录态，避免多账号串会话 */
+  keyId?: string
+}): Promise<{
+  ok: boolean
+  accountId?: string
+  freeTiersRaw?: string
+  source?: 'console' | 'cache' | 'none'
+  cookies?: ProviderCookie[]
+  error?: string
+}> {
+  const quiet = !!opts?.quiet
+  const optKeyId = opts?.keyId
+  const winKey = `${quiet ? 'bailian-console-quiet' : 'bailian-console'}:${optKeyId ?? 'shared'}`
+  const existing = loginWindows.get(winKey)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return { ok: false, error: quiet ? '百炼会话捕获进行中' : '百炼控制台窗口已打开' }
+  }
+  // 首次绑定清空登录态避免残留；静默复用已登录 cookie，跳过清空
+  if (!quiet) {
+    try {
+      await bailianConsoleSession(optKeyId).clearStorageData()
+    } catch {}
+  }
+  const ses = bailianConsoleSession(optKeyId)
+
+  // 主窗口（可见）：落 API Key 管理页，用户在此登录并复制/校验 API Key
+  const win = new BrowserWindow({
+    width: 1024,
+    height: 768,
+    minWidth: 840,
+    minHeight: 620,
+    title: '⋮⋮  Quota-Flow · 阿里云百炼控制台',
+    autoHideMenuBar: true,
+    backgroundColor: '#ffffff',
+    show: !quiet,
+    paintWhenInitiallyHidden: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      session: ses
+    }
+  })
+  win.webContents.setUserAgent(CHROME_UA)
+  loginWindows.set(winKey, win)
+  void win.loadURL(BAILIAN_CONSOLE_URL).catch(() => {})
+
+  // 隐藏捕获窗口：同一 partition 共用登录态（cookie），落免费额度页(视觉模型)，
+  // 页面 SDK 自动计算 sec_token 并发起 queryFreeTierQuotaAsyn，由注入脚本抓整表快照——用户无需手动切页
+  const capWin = new BrowserWindow({
+    width: 1024,
+    height: 768,
+    show: false,
+    paintWhenInitiallyHidden: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      session: ses
+    }
+  })
+  capWin.webContents.setUserAgent(CHROME_UA)
+  void capWin.loadURL(BAILIAN_FREE_QUOTA_URL).catch(() => {})
+
+  // ── 捕获窗口注入：仅做数据 hook（fetch/XHR + localStorage 兜底），隐藏窗口不含 UI ──
+  const CAPTURE_INJECT = `(() => {
+    if (window.__QUOTA_FLOW_BAILIAN_CAP__) return;
+    window.__QUOTA_FLOW_BAILIAN_CAP__ = true;
+    window.__QB_FREE_TIERS_RAW__ = null;
+    window.__QB_ACCOUNT__ = null;
+    const setRaw = (text) => { try { if (typeof text === 'string' && text.length > 30 && (text.indexOf('freeTierQuot') > -1 || text.indexOf('quotaTotal') > -1)) { window.__QB_FREE_TIERS_RAW__ = text; } } catch (_) {} };
+    const ACCT_FROM_KEY = /CURRENT_PK[-_](\\d{6,20})/;
+    const ACCT_FROM_VAL = /["']?(?:accountId|userId|user_id|account_id|uid)["']?\\s*[:=]\\s*["']?(\\d{6,20})/i;
+    const setAccount = (source) => { try { if (window.__QB_ACCOUNT__) return; const m = String(source || '').match(ACCT_FROM_KEY) || String(source || '').match(ACCT_FROM_VAL); if (m && m[1]) window.__QB_ACCOUNT__ = m[1]; } catch (_) {} };
+    const ingest = (url, text) => { try { if (/queryFreeTierQuota/i.test(String(url || ''))) { setRaw(text); setAccount(text); } } catch (_) {} };
+    const origFetch = window.fetch;
+    if (origFetch) { window.fetch = function (...args) { const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || ''; const p = origFetch.apply(this, args); try { p.then((resp) => { try { resp.clone().text().then((txt) => ingest(url, txt)); } catch (_) {} }).catch(() => {}); } catch (_) {} return p; }; }
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (m, u) { try { window.__QB_XHR__ = String(u || ''); } catch (_) {} return origOpen.apply(this, arguments); };
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (...rest) { try { if (window.__QB_XHR__) { const self = this; const u = window.__QB_XHR__; this.addEventListener('load', function () { try { const t = self.responseText || ''; ingest(u, t); } catch (_) {} }); } } catch (_) {} return origSend.apply(this, rest); };
+    const scanStorage = () => { try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i) || ''; const v = localStorage.getItem(k) || ''; if (/free_quota|freeTier|CacheByUId/.test(k)) { setRaw(v); setAccount(k); } } } catch (_) {} };
+    window.__QB_SCAN__ = setInterval(scanStorage, 1200);
+    scanStorage();
+  })()`
+  const injectCap = (): void => {
+    void capWin.webContents.executeJavaScript(CAPTURE_INJECT).catch(() => {})
+  }
+  capWin.webContents.on('did-finish-load', () => {
+    setTimeout(injectCap, 500)
+  })
+  if (quiet) setTimeout(injectCap, 700)
+
+  // ── 主窗口注入：可拖拽提示条 + 「已捕获返回」按钮（数据在隐藏捕获窗口自动抓取）──
+  const UI_INJECT = `(() => {
+    if (window.__QUOTA_FLOW_BAILIAN_UI__) return;
+    window.__QUOTA_FLOW_BAILIAN_UI__ = true;
+    window.__QB_UI_SUBMIT__ = false;
+    const bar = document.createElement('div');
+    bar.id = 'qf-bailian-bar';
+    bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:440px;';
+    bar.innerHTML =
+      '<div id="qf-bailian-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
+      '<span id="qf-bailian-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
+      '<span>Quota-Flow · 阿里云百炼控制台</span>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+      '<span style="flex:1;min-width:0;color:#c4c8d0;font-size:12px;line-height:1.4;">请在页面登录并复制 API Key，免费额度已由后台自动捕获；返回请点击下方按钮</span>' +
+      '<button id="qf-bailian-return" style="flex-shrink:0;padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;white-space:nowrap;">已捕获返回</button>' +
+      '</div>';
+    document.body.appendChild(bar);
+    document.getElementById('qf-bailian-return').addEventListener('click', () => { window.__QB_UI_SUBMIT__ = true; });
+    let dragging = false, offX = 0, offY = 0;
+    const grip = document.getElementById('qf-bailian-grip');
+    const header = document.getElementById('qf-bailian-header');
+    const barEl = document.getElementById('qf-bailian-bar');
+    const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
+    if (grip) grip.addEventListener('mousedown', startDrag);
+    if (header) header.addEventListener('mousedown', startDrag);
+    document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
+    document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
+  })()`
+  const injectUI = (): void => {
+    void win.webContents.executeJavaScript(UI_INJECT).catch(() => {})
+  }
+  win.webContents.on('did-finish-load', () => {
+    setTimeout(injectUI, 500)
+  })
+
+  return new Promise<{
+    ok: boolean
+    accountId?: string
+    freeTiersRaw?: string
+    source?: 'console' | 'cache' | 'none'
+    cookies?: ProviderCookie[]
+    error?: string
+  }>((resolve) => {
+      let finished = false
+      let renewTimeout: NodeJS.Timeout | null = null
+      const done = (result: {
+        ok: boolean
+        accountId?: string
+        freeTiersRaw?: string
+        source?: 'console' | 'cache' | 'none'
+        cookies?: ProviderCookie[]
+        error?: string
+      }): void => {
+        if (finished) return
+        finished = true
+        clearInterval(pollTimer)
+        if (renewTimeout) clearTimeout(renewTimeout)
+        if (!win.isDestroyed()) win.destroy()
+        if (!capWin.isDestroyed()) capWin.destroy()
+        loginWindows.delete(winKey)
+        resolve(result)
+      }
+      win.on('closed', () => {
+        clearInterval(pollTimer)
+        if (renewTimeout) clearTimeout(renewTimeout)
+        try {
+          void win.webContents.executeJavaScript('clearInterval(window.__QB_UI_SCAN__)').catch(() => {})
+        } catch {}
+        if (!capWin.isDestroyed()) capWin.destroy()
+        if (loginWindows.get(winKey) === win) loginWindows.delete(winKey)
+        if (!finished) {
+          finished = true
+          resolve({ ok: false, error: '窗口已关闭' })
+        }
+      })
+
+      if (quiet) {
+        renewTimeout = setTimeout(() => {
+          done({ ok: true, source: 'none' })
+        }, BAILIAN_QUIET_WAIT_MS)
+      }
+
+      const readCapExpr =
+        'window.__QB_FREE_TIERS_RAW__ ? [window.__QB_ACCOUNT__ || null, window.__QB_FREE_TIERS_RAW__] : null'
+      const readUIExpr = 'window.__QB_UI_SUBMIT__ || false'
+      let reloadTick = 0
+      const pollTimer = setInterval(() => {
+        if (win.isDestroyed() || capWin.isDestroyed()) return
+        reloadTick = (reloadTick + 1) % 15 // 每 ~10.5s 一轮；登录前捕获窗口可能未授权跳走，周期刷新以带登录态重请求
+        Promise.all([
+          capWin.webContents.executeJavaScript(readCapExpr).catch(() => null),
+          quiet ? Promise.resolve(true) : win.webContents.executeJavaScript(readUIExpr).catch(() => false)
+        ])
+          .then(([capVal, uiGo]) => {
+            const val = capVal as [string | null, string] | null
+            if (!val) {
+              // 登录前窗口常无额度数据：非静默下周期 reload 捕获窗口，用户在主窗口登录后 cookie 生效即可抓到
+              if (!quiet && reloadTick === 0) {
+                try {
+                  void capWin.webContents.reload()
+                } catch {}
+              }
+              return
+            }
+            const [accountId, raw] = val
+            const hasData = typeof raw === 'string' && raw.length > 30
+            if (!hasData) {
+              if (quiet) return
+              // 用户已点「已捕获返回」但未抓到额度：提示而非静默失败
+              if (uiGo) done({ ok: false, error: '未捕获到免费额度数据，请确认已在页面登录成功再重试' })
+              return
+            }
+            if (!quiet && !uiGo) return // 数据已就绪但用户尚未点返回，继续等待
+            console.log(
+              `[qf-bailian] CAPTURE ok accountId=${accountId ? `YES:${accountId}` : 'NO'} rawLen=${raw.length} quiet=${quiet}`
+            )
+            // 捕获成功后读取该账号控制台分区的登录 cookie，随负载持久化，供「进入官网」跨重启重建登录态
+            void Promise.resolve()
+              .then(() => collectBailianConsoleCookies(optKeyId))
+              .then((cookies) => {
+                console.log(`[qf-bailian] CAPTURE cookies=${cookies.length}`)
+                // 最近一次成功捕获的 cookie 按 accountId 缓存，供后续 provider:encrypt 兜底合并进负载
+                if (accountId && cookies.length > 0) bailianCapturedCookies.set(accountId, cookies)
+                done({
+                  ok: true,
+                  accountId: accountId ?? undefined,
+                  freeTiersRaw: raw,
+                  source: accountId ? 'console' : 'cache',
+                  cookies
+                })
+              })
+              .catch(() => {
+                done({
+                  ok: true,
+                  accountId: accountId ?? undefined,
+                  freeTiersRaw: raw,
+                  source: accountId ? 'console' : 'cache'
+                })
+              })
+          })
+          .catch(() => {})
+      }, 700)
+    }
+  )
+}
+
 let registered = false
 
 export function initProviders(): void {
@@ -2348,7 +2703,27 @@ export function initProviders(): void {
   ipcMain.handle('provider:encrypt', async (_e, providerId: string, plain: string) => {
     if (typeof plain !== 'string') return { encrypted: '' }
     try {
-      const encrypted = safeStorage.encryptString(plain).toString('base64')
+      // 百炼兜底：若捕获时返回的 cookies 未随渲染层负载写进来（旧 bundle/状态丢失），
+      // 用缓存里最近一次成功捕获的同账号 cookies 合并后再加密，保证登录 cookie 一定落库
+      let payloadPlain = plain
+      if (providerId === 'bailian') {
+        const trimmedP = (plain || '').trim()
+        if (trimmedP.startsWith('{')) {
+          const d = decodeBailianPayload(trimmedP)
+          if (d.accountId && (!Array.isArray(d.cookies) || d.cookies.length === 0)) {
+            const live = bailianCapturedCookies.get(d.accountId)
+            if (live && live.length > 0) {
+              try {
+                const obj = JSON.parse(trimmedP)
+                obj.cookies = live
+                payloadPlain = JSON.stringify(obj)
+                console.log(`[qf-bailian] ENC mergeCapturedCookies accountId=${d.accountId} n=${live.length}`)
+              } catch {}
+            }
+          }
+        }
+      }
+      const encrypted = safeStorage.encryptString(payloadPlain).toString('base64')
       // apikey 型厂商：指纹用于去重。
       // 智谱：同一账号可有多个 API Key，优先按 customerId 生成账号级指纹（同账号不同 Key 去重）；
       //       拿不到 customerId（无会话 / 查询失败）时回退按 API Key 明文哈希，避免误拦截。
@@ -2369,10 +2744,10 @@ export function initProviders(): void {
             `ENC_VOLC accountId=${accountId ? `YES:${accountId}` : 'NO'} fp_level=${fingerprint ? (accountId ? 'account' : 'key-hash') : 'none'}`
           )
         }
-        // 阿里云百炼去重诊断：本期用登录账号（后续会话捕获可升为账号级），当前退化为 Key 哈希
+        // 阿里云百炼去重诊断：payload 带 accountId（会话捕获）时按「账号级」指纹去重，否则退化为 Key 哈希
         if (providerId === 'bailian') {
           console.log(
-            `[qf-bailian] ENC fp_level=${fingerprint ? 'key-hash' : 'none'} keyLen=${plain.trim().length}`
+            `[qf-bailian] ENC fp_level=${fingerprint ? (decodeBailianPayload(plain || '').accountId ? 'account' : 'key-hash') : 'none'} keyLen=${plain.trim().length}`
           )
         }
       }
@@ -2402,10 +2777,20 @@ export function initProviders(): void {
     }
   })
 
-  // API Key 型厂商真实额度查询：解密后取 apiKey + consoleJwt，调对应控制台接口拿资源包余额
+  // API Key 型厂商真实额度查询：解密后取 apiKey + consoleJwt，调对应控制台接口拿资源包余额；
+  // 百炼免费额度为一次性 90 天快照，随绑定时的控制台会话捕获落库（账号级聚合功耗，见方案 §6.1）
   ipcMain.handle('provider:fetch-quota', async (_e, providerId: string, encrypted: string) => {
     if (!encrypted) return { ok: false, error: '缺少密钥' }
     try {
+      if (providerId === 'bailian') {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { freeTiers } = decodeBailianPayload(plain)
+        // 展示口径：只统计视频生成模型且未过期的免费额度，与「查看模型」明细口径一致
+        const tiers = (freeTiers ?? []).filter(
+          (t) => isBailianVideoFreeModel(t.model) && !t.expired
+        )
+        return { ok: true, quota: aggregateBailianFreeQuota(tiers) }
+      }
       const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
       const { apiKey, consoleJwt } = decodeZhipuPayload(plain)
       if (!apiKey) return { ok: false, error: '未解析到 API Key' }
@@ -2433,6 +2818,23 @@ export function initProviders(): void {
       keyId: typeof keyId === 'string' && keyId ? keyId : undefined,
       targetUrl: VOLC_OPEN_MANAGEMENT_URL
     })
+  })
+
+  // 百炼控制台会话捕获：按账号 keyId 弹出对应分区控制台窗口，捕获账号 PK + 免费额度整表快照，
+  // 并把原始额度文本解析为归一化条目返回（随加密 payload 落库，供账号级去重 + 聚合总额展示）
+  ipcMain.handle('provider:capture-bailian-session', async (_e, keyId?: string) => {
+    const res = await captureBailianConsoleSession({
+      keyId: typeof keyId === 'string' && keyId ? keyId : undefined
+    })
+    if (!res.ok) return { ok: false, error: res.error }
+    const tiers = res.freeTiersRaw ? parseBailianFreeTierPayload(res.freeTiersRaw) : null
+    if (tiers === null || tiers.length === 0) {
+      return { ok: false, error: '未捕获到有效免费额度，请确认已打开「免费额度」视觉模型页' }
+    }
+    console.log(
+      `[qf-bailian] CAPTURE parsed accountId=${res.accountId ?? 'NO'} tiers=${tiers.length} remaining=${aggregateBailianFreeQuota(tiers).remaining}`
+    )
+    return { ok: true, accountId: res.accountId ?? null, freeTiers: tiers }
   })
 
   // 火山方舟控制台会话状态：视 JWT 的 exp 判定 alive / expiring / expired

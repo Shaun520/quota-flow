@@ -8,7 +8,7 @@ import { ensureFreshSession } from '../auth/session'
 import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
 import type { TeamContext } from '@quota-flow/db-supabase'
-import type { VolcengineCapturedModel } from '../../../preload'
+import type { VolcengineCapturedModel, BailianFreeTier } from '../../../preload'
 import desktopPackage from '../../../../package.json'
 
 export interface UpdaterStatusView {
@@ -667,6 +667,14 @@ export function AddProviderModal({
   const [volcAccountId, setVolcAccountId] = useState<string | null>(null)
   // 火山方舟绑定时控制台抓到的免费视频模型（含每账号 token 额度），随加密负载持久化供「查看模型」展示
   const [volcModels, setVolcModels] = useState<VolcengineCapturedModel[] | null>(null)
+  // 阿里云百炼账号标识：从控制台 costing-balance 页捕获，保存时并入 payload 作为账号级去重依据
+  const [bailianAccountId, setBailianAccountId] = useState<string | null>(null)
+  // 阿里云百炼免费额度整表快照：从控制台捕获并解析，随加密负载持久化供账号级聚合展示
+  const [bailianFreeTiers, setBailianFreeTiers] = useState<BailianFreeTier[] | null>(null)
+  // 阿里云百炼控制台登录 cookie：捕获时随负载持久化，供「进入官网」跨重启重建登录态
+  const [bailianCookies, setBailianCookies] = useState<
+    Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }> | null
+  >(null)
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -899,12 +907,21 @@ export function AddProviderModal({
     setStatus('logging')
     try {
       const trimmed = apiKey.trim()
-      // 智谱 / 火山方舟：如有已捕获的控制台会话令牌(consoleJwt)或账号标识(volcAccountId)，并入结构化 payload，
-      // 供主进程生成「账号级」去重指纹（同账号不同 Key 去重）。
-      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine'
+      // 智谱 / 火山方舟 / 阿里云百炼：如有捕获的控制台会话令牌(consoleJwt)、账号标识(volcAccountId/bailianAccountId)
+      // 或免费额度快照，并入结构化 payload，供主进程生成「账号级」去重指纹 + 账号级聚合额度展示
+      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian'
+      const isBailian = providerId === 'bailian'
       const raw =
-        isApiProvider && (consoleJwt || volcAccountId || (providerId === 'volcengine' && volcModels?.length))
-          ? JSON.stringify({ v: 1, apiKey: trimmed, consoleJwt, accountId: volcAccountId, models: providerId === 'volcengine' ? (volcModels ?? []) : undefined })
+        isApiProvider && (consoleJwt || volcAccountId || bailianAccountId || (providerId === 'volcengine' && volcModels?.length) || (isBailian && (bailianFreeTiers?.length || bailianCookies?.length)))
+          ? JSON.stringify({
+              v: 1,
+              apiKey: trimmed,
+              consoleJwt,
+              accountId: isBailian ? bailianAccountId : volcAccountId,
+              models: providerId === 'volcengine' ? (volcModels ?? []) : undefined,
+              freeTiers: isBailian ? (bailianFreeTiers ?? undefined) : undefined,
+              cookies: isBailian ? (bailianCookies ?? undefined) : undefined
+            })
           : trimmed
       const enc = await window.api.providers.encrypt(selected.providerId, raw)
       if (!enc.encrypted) {
@@ -949,7 +966,8 @@ export function AddProviderModal({
     }
   }
 
-  // 智谱 / 火山方舟「获取 API Key」：打开对应控制台会话窗口以捕获 consoleJwt；用户在窗口内复制 API Key
+  // 智谱 / 火山方舟 / 阿里云百炼「获取 API Key」：打开对应控制台会话窗口以捕获会话/账号/免费额度；
+  // 用户在窗口内复制 API Key 后返回弹窗粘贴并保存
   const openGetApiKey = async (): Promise<void> => {
     setError(null)
     setNotice(null)
@@ -960,28 +978,49 @@ export function AddProviderModal({
       setVolcAccountId(null)
       setConsoleJwt(null)
       setVolcModels(null)
+      setBailianAccountId(null)
+      setBailianFreeTiers(null)
+      setBailianCookies(null)
       let bindId: string | null = null
-      if (providerId === 'zhipu' || providerId === 'volcengine') {
+      if (providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian') {
         bindId = crypto.randomUUID()
         setLoginTempId(bindId)
       }
-      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine'
-      // 火山方舟走独立的会话捕获入口（partition/注入与智谱隔离）
-      const volcRes = providerId === 'volcengine'
-        ? await window.api.providers.captureVolcengineSession(bindId ?? undefined)
-        : null
-      const finalRes: { ok: boolean; consoleJwt?: string; accountId?: string; models?: VolcengineCapturedModel[]; source?: 'console' | 'fallback'; error?: string } = volcRes
+      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian'
+      const isBailian = providerId === 'bailian'
+      // 火山方舟 / 百炼走独立会话捕获入口（partition/注入与智谱隔离）
+      const apiRes =
+        providerId === 'volcengine'
+          ? await window.api.providers.captureVolcengineSession(bindId ?? undefined)
+          : isBailian
+            ? await window.api.providers.captureBailianSession(bindId ?? undefined)
+            : null
+      const finalRes: { ok: boolean; consoleJwt?: string; accountId?: string | null; models?: VolcengineCapturedModel[]; freeTiers?: BailianFreeTier[]; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; source?: 'console' | 'fallback'; error?: string } = apiRes
         ?? (isApiProvider
           ? await window.api.providers.captureZhipuSession(bindId ?? undefined)
           : { ok: false, error: '该厂商不支持控制台会话捕获' })
       if (finalRes.ok) {
         if (finalRes.consoleJwt) setConsoleJwt(finalRes.consoleJwt)
-        if (finalRes.accountId) setVolcAccountId(finalRes.accountId)
+        if (finalRes.accountId) {
+          if (isBailian) setBailianAccountId(finalRes.accountId)
+          else setVolcAccountId(finalRes.accountId)
+        }
         // 「绑定即抓模型」：火山方舟在控制台页面抓到免费视频模型清单，提示用户并暂存随负载持久化
         if (providerId === 'volcengine' && Array.isArray(finalRes.models) && finalRes.models.length > 0) {
           const n = finalRes.models.length
           setVolcModels(finalRes.models)
           setNotice(finalRes.source === 'console' ? `已识别 ${n} 个免费视频模型（控制台抓取）` : `已识别 ${n} 个免费视频模型`)
+        }
+        // 「绑定即抓额度」：百炼在控制台抓到免费额度整表快照，提示用户并暂存随负载持久化（账号级聚合展示）
+        if (isBailian && Array.isArray(finalRes.freeTiers) && finalRes.freeTiers.length > 0) {
+          const n = finalRes.freeTiers.length
+          const total = finalRes.freeTiers.reduce((s, t) => s + (Number(t.remaining) || 0), 0)
+          setBailianFreeTiers(finalRes.freeTiers)
+          setNotice(`已捕获账号免费额度：${n} 个模型，剩余合计 ${total.toLocaleString()} 次`)
+        }
+        // 暂存百炼控制台登录 cookie：捕获成功即随负载持久化，供「进入官网」跨重启重建登录态
+        if (isBailian && Array.isArray(finalRes.cookies) && finalRes.cookies.length > 0) {
+          setBailianCookies(finalRes.cookies)
         }
       } else if (finalRes.error) {
         setError(finalRes.error)
@@ -1296,7 +1335,7 @@ export function AddProviderModal({
               <button className="btn-sm" onClick={() => void testApiKeyInput()} disabled={saving}>
                 测试 API Key
               </button>
-              {(providerId === 'zhipu' || providerId === 'volcengine') && (
+              {(providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian') && (
                 <button className="btn-sm primary" onClick={() => void openGetApiKey()} disabled={saving}>
                   获取 API Key
                 </button>

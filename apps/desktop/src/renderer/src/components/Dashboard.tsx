@@ -175,7 +175,7 @@ export default function Dashboard({
   onMaterialImagesConsumed,
   onRegenerateConsumed
 }: DashboardProps) {
-  const { aggs: provAggs, zhipuQuotaOverrides, volcTokenOverrides } = providers
+  const { aggs: provAggs, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides } = providers
   const { user, team } = useAuth()
   const { items: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('doubao')
@@ -1065,6 +1065,7 @@ export default function Dashboard({
                 {visibleAggs.map((p) => {
                   const enabledBindings = p.bindings.filter((b) => b.enabled)
                   const isVolc = p.providerId === 'volcengine'
+                  const isBailian = p.providerId === 'bailian'
                   // 智谱等 API 型厂商：汇总取平台真实资源包余额（而非静态默认额度），生成后自动刷新
                   const quotaOf = (keyId: string) =>
                     zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available
@@ -1075,6 +1076,11 @@ export default function Dashboard({
                     const v = volcTokenOverrides[keyId]
                     return v && v.total > 0 ? v : undefined
                   }
+                  // 阿里云百炼：汇总取账号级免费额度聚合（会话捕获快照）
+                  const bailianQuotaOf = (keyId: string) =>
+                    bailianQuotaOverrides[keyId] && bailianQuotaOverrides[keyId].available
+                      ? bailianQuotaOverrides[keyId]
+                      : undefined
                   const isApiQuota = p.providerId === 'zhipu'
                   const volcKnown = enabledBindings.some((b) => volcQuotaOf(b.keyId))
                   const used = enabledBindings.reduce((s, b) => s + b.used, 0)
@@ -1085,7 +1091,9 @@ export default function Dashboard({
                         ? quotaOf(b.keyId)?.remaining ?? 0
                         : isVolc
                           ? volcQuotaOf(b.keyId)?.remaining ?? 0
-                          : b.remaining),
+                          : isBailian
+                            ? bailianQuotaOf(b.keyId)?.remaining ?? 0
+                            : b.remaining),
                     0
                   )
                   const total = enabledBindings.reduce(
@@ -1095,7 +1103,9 @@ export default function Dashboard({
                         ? quotaOf(b.keyId)?.total ?? 0
                         : isVolc
                           ? volcQuotaOf(b.keyId)?.total ?? 0
-                          : b.dailyTotal),
+                          : isBailian
+                            ? bailianQuotaOf(b.keyId)?.total ?? 0
+                            : b.dailyTotal),
                     0
                   )
                   const fill = total > 0 ? Math.round((remaining / total) * 100) : 0
