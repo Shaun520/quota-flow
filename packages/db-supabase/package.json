@@ -12,7 +12,11 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate:schema": "node scripts/supabase-migrate.mjs schema",
+    "migrate:data": "node scripts/supabase-migrate.mjs data",
+    "migrate:storage": "node scripts/supabase-migrate.mjs storage",
+    "migrate:all": "node scripts/supabase-migrate.mjs all"
   },
   "devDependencies": {
     "tsup": "^8.3.0",

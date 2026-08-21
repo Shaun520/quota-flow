@@ -25,6 +25,7 @@ data/*-api-key
 apps/desktop/.env
 .env
 test.json
+*.env.migrate
 
 # 桌面端构建产物
 apps/desktop/out/
