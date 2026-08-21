@@ -277,6 +277,8 @@ export function useAuth(): AuthResult {
     const auth = getAuthService()
     if (auth) await auth.signOut()
     await window.api.auth.clearSession()
+    // 登出/换账号：主进程密钥分区缓存全清，避免旧账号密钥残留复用于下一账号
+    await window.api.keysCache.clear()
     setUser(null)
     setTeam(null)
     setError(null)

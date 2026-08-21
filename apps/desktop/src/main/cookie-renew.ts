@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSupabaseClient, ProviderService } from '@quota-flow/db-supabase'
 import { encryptCookies, providerSite, visitAndCapture } from './providers'
+import { cachedListProviderKeysWithSecrets, invalidateKeysByKeyId } from './query-cache'
 
 /** Cookie 自动续命：每日 03:00 全量访问厂商站点保活 + 临近过期的账号提前续命（详见 docs/桌面端/厂商与绑定/Cookie续命设计.md） */
 
@@ -101,7 +102,7 @@ async function tick(): Promise<void> {
     })
     providerSvc = new ProviderService(client)
 
-    const keys = await providerSvc.listProviderKeysWithSecrets(config.userId)
+    const keys = await cachedListProviderKeysWithSecrets(client, config.userId)
     const candidates = keys.filter((k) => {
       if (k.auth_type === 'apikey') return false // 无 cookie 会话
       if (k.enabled === false) return false
@@ -132,10 +133,13 @@ async function tick(): Promise<void> {
             expiresAt: res.expiresAt ? new Date(res.expiresAt).toISOString() : null,
             healthStatus: 'healthy'
           })
+          // 密钥/过期时间已刷新，失效缓存避免续命后仍复用旧 cookie
+          invalidateKeysByKeyId(key.id)
           failCount.delete(key.id)
           renewed += 1
         } else if (res.status === 'expired') {
           await providerSvc.updateHealth(config.userId, key.id, 'expired')
+          invalidateKeysByKeyId(key.id)
           expiredCount += 1
         } else {
           failCount.set(key.id, (failCount.get(key.id) ?? 0) + 1)

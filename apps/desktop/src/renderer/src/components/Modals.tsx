@@ -780,6 +780,7 @@ export function AddProviderModal({
             await window.api.providers.migratePartition(providerId, loginTempId, refreshKeyId)
           } catch {}
         }
+        void window.api.keysCache.invalidate({ keyId: refreshKeyId })
         const target = existingKeys.find((k) => k.id === refreshKeyId)
         setNotice(`已刷新账号「${target?.accountName ?? '未命名账号'}」的登录态（保留原账号记录）`)
         setSaving(false)
@@ -840,6 +841,8 @@ export function AddProviderModal({
           teamId: targetTeamId
         })
       }
+      // 新账号入库：按 owner scope 失效，让下次生成选号能读到新增 key
+      void window.api.keysCache.invalidate({ userId, teamId: targetTeamId ?? undefined })
     } catch (e) {
       setError(errMsg(e))
       setSaving(false)
@@ -866,6 +869,7 @@ export function AddProviderModal({
         healthStatus: 'healthy',
         accountFingerprint: pendingSave.accountFingerprint ?? null
       })
+      void window.api.keysCache.invalidate({ keyId: refreshKeyId })
       if (loginTempId) {
         try {
           await window.api.providers.migratePartition(providerId, loginTempId, refreshKeyId)
@@ -1082,6 +1086,7 @@ export function AddProviderModal({
             healthStatus: 'healthy',
             accountFingerprint: fingerprint ?? null
           })
+          void window.api.keysCache.invalidate({ keyId: target.id })
           if (loginTempId) {
             try {
               await window.api.providers.migratePartition(selected.providerId, loginTempId, target.id)

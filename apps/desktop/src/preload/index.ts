@@ -200,8 +200,10 @@ export interface GenerateRequest {
   resolution?: string
   audio?: string
   ratio?: string
-  /** 本地图片路径（图生视频） */
+  /** 历史入库/本地展示用的图片：本地路径或公网 URL */
   images?: string[]
+  /** 厂商 API 用的参考图公网 https URL（仅 API 型厂商上传） */
+  imageUrls?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -341,6 +343,12 @@ export interface DesktopApi {
     setEnabled: (enabled: boolean) => Promise<{ ok: boolean; state: CookieRenewState }>
     getState: () => Promise<CookieRenewState>
   }
+  keysCache: {
+    /** 渲染层密钥写点成功后失效对应分区；keyId 优先，缺省按 userId/teamId 整 scope 失效 */
+    invalidate: (opts: { keyId?: string; userId?: string; teamId?: string }) => Promise<void>
+    /** 登出/换账号时全清主进程密钥分区缓存 */
+    clear: () => Promise<void>
+  }
   updater: {
     check: () => Promise<UpdaterStatus>
     download: () => Promise<UpdaterStatus>
@@ -356,6 +364,17 @@ export interface DesktopApi {
   }
   files: {
     getPath: (file: File) => string
+  }
+  storage: {
+    /**
+     * 上传参考图到 GitHub 公开仓库并返回 jsDelivr CDN 公网 https URL（替代原 Supabase qf-images）
+     * @param input 文件字节（ArrayBuffer）与 MIME/扩展名
+     */
+    uploadImage: (input: { bytes: ArrayBuffer; contentType: string; ext: string }) => Promise<{ url: string }>
+    /** 保存参考图本地副本到 userData/images，供历史详情离线回显 */
+    saveImageLocal: (input: { bytes: ArrayBuffer; ext: string }) => Promise<{ path: string }>
+    /** 读取本地图片字节（历史「重新生成」重传参考图用） */
+    readImageLocal: (path: string) => Promise<ArrayBuffer>
   }
   materials: {
     list: () => Promise<MaterialRecord[]>
@@ -508,6 +527,10 @@ const api: DesktopApi = {
     setEnabled: (enabled) => ipcRenderer.invoke('cookie-renew:set-enabled', enabled) as Promise<{ ok: boolean; state: CookieRenewState }>,
     getState: () => ipcRenderer.invoke('cookie-renew:get-state') as Promise<CookieRenewState>
   },
+  keysCache: {
+    invalidate: (o) => ipcRenderer.invoke('keys-cache-invalidate', o) as Promise<void>,
+    clear: () => ipcRenderer.invoke('keys-cache-clear') as Promise<void>
+  },
   updater: {
     check: () => ipcRenderer.invoke('updater:check') as Promise<UpdaterStatus>,
     download: () => ipcRenderer.invoke('updater:download') as Promise<UpdaterStatus>,
@@ -542,6 +565,13 @@ const api: DesktopApi = {
   },
   files: {
     getPath: (file) => webUtils.getPathForFile(file)
+  },
+  storage: {
+    uploadImage: (input) =>
+      ipcRenderer.invoke('storage:upload-image', input) as Promise<{ url: string }>,
+    saveImageLocal: (input) =>
+      ipcRenderer.invoke('storage:save-image-local', input) as Promise<{ path: string }>,
+    readImageLocal: (path) => ipcRenderer.invoke('storage:read-image-local', path) as Promise<ArrayBuffer>
   },
   materials: {
     list: () => ipcRenderer.invoke('materials:list') as Promise<MaterialRecord[]>,

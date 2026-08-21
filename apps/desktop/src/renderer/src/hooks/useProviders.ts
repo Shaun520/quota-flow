@@ -97,8 +97,9 @@ let healthCheckUserId: string | null = null
 const zhipuRenewAt = new Map<string, number>()
 /** 全局续期进行中标记：控制台会话分区共享，同一时刻只允许一个账号续期，避免隐藏窗口互抢 */
 let zhipuRenewInFlight = false
-/** 会话状态扫描周期（毫秒） */
-const ZHIPU_SESSION_SCAN_MS = 60 * 1000
+/** 会话状态扫描周期（毫秒）；智谱/火山共用。续期实现以 ZHIPU_RENEW_RETRY_MS 节流，
+ * 此扫描仅是「检测会话是否需要续期」，降到 3 分钟不影响续期及时性，却能减少轮询请求量。 */
+const ZHIPU_SESSION_SCAN_MS = 3 * 60 * 1000
 /** 同一账号两次续期尝试的最小间隔（毫秒）；续期成功或失败都以此节流 */
 const ZHIPU_RENEW_RETRY_MS = 3 * 60 * 1000
 
@@ -277,6 +278,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
             encryptedKey: res.encrypted,
             healthStatus: 'healthy'
           })
+          void window.api.keysCache.invalidate({ keyId })
         }
         setZhipuSessionStatuses((prev) => ({
           ...prev,
@@ -447,6 +449,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
             encryptedKey: res.encrypted,
             healthStatus: 'healthy'
           })
+          void window.api.keysCache.invalidate({ keyId })
           if (res.quota) setBailianQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
           return res.encrypted
         }
@@ -473,6 +476,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
             encryptedKey: res.encrypted,
             healthStatus: 'healthy'
           })
+          void window.api.keysCache.invalidate({ keyId })
         }
         setVolcSessionStatuses((prev) => ({
           ...prev,
@@ -508,6 +512,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
           // 同步回填账号级指纹：抓到的 accountId 稳定后重算指纹入库，同账号多 Key 共享，去重提示才命中
           accountFingerprint: res.accountFingerprint ?? null
         })
+        void window.api.keysCache.invalidate({ keyId })
         return res.encrypted
       } catch {
         return false
@@ -859,6 +864,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         const res = await window.api.providers.healthCheck(providerId, secret.encrypted_key)
         const status = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, Date.now())
         await svc.updateHealth(user.id, keyId, status)
+        void window.api.keysCache.invalidate({ keyId })
         // 手动测试同样计入节流窗口，避免随后自动检查重复触发
         healthCheckAt.set(keyId, Date.now())
         // 会话内即时覆盖展示，无需全量重拉
@@ -877,6 +883,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       try {
         const trimmed = name.trim()
         await svc.updateAccountName(user.id, keyId, trimmed)
+        void window.api.keysCache.invalidate({ keyId })
         setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, account_name: trimmed } : k)))
       } catch (e) {
         setError(errMsg(e))
@@ -891,6 +898,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       if (!svc || !user) return
       try {
         await svc.setDefaultKey(user.id, providerId, keyId)
+        void window.api.keysCache.invalidate({ keyId })
         setKeys((prev) =>
           prev.map((k) => (k.provider_id === providerId ? { ...k, is_default: k.id === keyId } : k))
         )
@@ -907,6 +915,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       if (!svc || !user) return
       try {
         await svc.setEnabled(user.id, keyId, enabled)
+        void window.api.keysCache.invalidate({ keyId })
         setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, enabled } : k)))
       } catch (e) {
         setError(errMsg(e))
@@ -921,6 +930,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       if (!svc || !user) return
       try {
         await svc.removeProviderKey(user.id, keyId)
+        void window.api.keysCache.invalidate({ keyId })
         setKeys((prev) => prev.filter((k) => k.id !== keyId))
       } catch (e) {
         setError(errMsg(e))
@@ -935,6 +945,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       if (!svc || !user) return
       try {
         await svc.setProviderKeyScope(keyId, teamId)
+        void window.api.keysCache.invalidate({ keyId })
         setKeys((prev) => {
           const next = prev.map((k) => (k.id === keyId ? { ...k, team_id: teamId } : k))
           if (viewScope === 'personal') return next.filter((k) => !k.team_id)
