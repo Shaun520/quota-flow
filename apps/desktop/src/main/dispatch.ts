@@ -42,6 +42,14 @@ export interface GenerateInput {
   images?: string[]
   /** 厂商 API 用的参考图公网 https URL（仅 API 型厂商上传；历史展示不依赖它） */
   imageUrls?: string[]
+  /** 参考生（r2v）本地视频参考副本：本地路径会复制到 userData/videos 供历史回显 */
+  videos?: string[]
+  /** 参考生（r2v）公网 https 视频 URL 数组（bailian 等合入 input.media reference_video） */
+  videoUrls?: string[]
+  /** 文生视频音频参考的公网 https URL（bailian 等透传 input.audio_url） */
+  audioUrl?: string
+  /** 音频本地副本路径（历史回显/重新生成回填）；公网 http(s) URL 原样保留 */
+  audioLocalPath?: string
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -131,6 +139,32 @@ function persistJobImages(images: string[], jobId: string): string[] {
     } catch {}
   }
   return jobImages
+}
+
+/**
+ * 参考生（r2v）参考视频本地副本持久化为历史上存储（供历史详情回显，不依赖外网）：
+ *  - 本地路径 → 复制一份到 userData/videos 存本地路径；
+ *  - http(s) 公网 URL → 原样保留。
+ * 沿用 persistJobImages 模式，仅扩展名为 mp4 时走视频目录。
+ */
+function persistJobVideos(videos: string[], jobId: string): string[] {
+  const jobVideos: string[] = []
+  if (!videos || videos.length === 0) return jobVideos
+  const videoDir = join(app.getPath('userData'), 'videos')
+  mkdirSync(videoDir, { recursive: true })
+  for (let i = 0; i < videos.length; i++) {
+    const vid = videos[i]
+    try {
+      if (/^https?:\/\//i.test(vid)) {
+        jobVideos.push(vid)
+        continue
+      }
+      const dest = join(videoDir, `${jobId}-${i}.mp4`)
+      copyFileSync(vid, dest)
+      jobVideos.push(dest)
+    } catch {}
+  }
+  return jobVideos
 }
 
 /** 下载视频到 userData/videos/<jobId>.mp4（生成后立即落盘，避免签名 URL 过期） */
@@ -667,12 +701,18 @@ async function runApiBranch(
 
   // 图片本地副本随任务持久化，历史详情离线回显；公网 http(s) URL 原样保留（兼容旧记录）
   const jobImages = persistJobImages(input.images ?? [], job.id)
+  // 参考生（r2v）参考视频本地副本随任务持久化，历史详情离线回显；公网 http(s) URL 原样保留
+  const jobVideos = persistJobVideos(input.videos ?? [], job.id)
   const jobOptions: Record<string, unknown> = {
     mode: input.mode,
     model,
     durationSec: input.durationSec
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
+  if (jobVideos.length > 0) jobOptions.videos = jobVideos
+  // 音频本地副本/公网 URL 记录进 options，历史回显与重新生成回填用（本地路径与公网 URL 均原样保留）
+  if (input.audioLocalPath) jobOptions.audioLocalPath = input.audioLocalPath
+  if (input.audioUrl) jobOptions.audioUrl = input.audioUrl
 
   // 按厂商把密钥过滤下推到 SQL，只回传该厂商行，避免整表拉取 encrypted_key 大字段
   const keys = input.teamId
@@ -783,6 +823,9 @@ async function runApiBranch(
     prompt: input.prompt,
     // 图生/首尾/参考生图片为前端上传后的公网 https URL（imageUrls）；厂商不依赖历史本地展示路径
     images: input.imageUrls ?? input.images ?? [],
+    // 参考生（r2v）视频为前端上传后的公网 https URL（videoUrls）；厂商不依赖历史本地展示路径
+    videos: input.videoUrls ?? input.videos ?? [],
+    audioUrl: input.audioUrl,
     durationSec: input.durationSec,
     onProgress: (msg) => emit({ jobId: job.id, status: 'running', stage: 'progress', message: msg })
   }
@@ -811,9 +854,9 @@ async function runApiBranch(
       completedAt: new Date().toISOString()
     })
     emit({ jobId: job.id, status: 'failed', message: err })
-    // 生成失败也延迟清理参考图公网 URL：厂商已不会再拉取，避免残留撑大 GitHub 仓库
+    // 生成失败也延迟清理参考图/音频公网 URL：厂商已不会再拉取，避免残留撑大 GitHub 仓库
     setTimeout(() => {
-      void deleteImages(input.imageUrls ?? []).catch(() => {})
+      void deleteImages([...(input.imageUrls ?? []), ...(input.audioUrl ? [input.audioUrl] : [])]).catch(() => {})
     }, 10 * 60 * 1000)
     return { ok: false, jobId: job.id, error: err }
   }
@@ -850,10 +893,10 @@ async function runApiBranch(
     data: { resultUrl, cost, localPath, accountId: cand.id }
   })
 
-  // 参考图公网 URL 仅供生成瞬间给厂商拉取；生成成功后延迟清理，避免日积月累撑大 GitHub 仓库。
+  // 参考图/音频公网 URL 仅供生成瞬间给厂商拉取；生成成功后延迟清理，避免日积月累撑大 GitHub 仓库。
   // 本地历史副本（userData/images）不受影响；延迟给用户留出「成功后再点一次生成」的窗口。
   setTimeout(() => {
-    void deleteImages(input.imageUrls ?? []).catch(() => {})
+    void deleteImages([...(input.imageUrls ?? []), ...(input.audioUrl ? [input.audioUrl] : [])]).catch(() => {})
   }, 10 * 60 * 1000)
 
   // 火山方舟生成成功 → 自愈清除该模型的历史不可用标记（平台恢复可用即重新放行）

@@ -84,6 +84,41 @@ function startMediaServer(): Promise<number> {
       }
       const server = createServer((req, res) => {
         const path = (req.url || '').split('?')[0]
+        // 参考生（r2v）参考视频副本：userData/videos/<jobId>-<i>.mp4，Range 支持
+        const serveVideo = (file: string): void => {
+          if (!existsSync(file)) {
+            res.writeHead(404)
+            res.end()
+            return
+          }
+          const size = statSync(file).size
+          res.setHeader('Content-Type', 'video/mp4')
+          res.setHeader('Accept-Ranges', 'bytes')
+          const range = req.headers.range
+          if (range) {
+            const m = /bytes=(\d*)-(\d*)/.exec(range)
+            const start = m && m[1] ? parseInt(m[1], 10) : 0
+            const end = m && m[2] ? parseInt(m[2], 10) : size - 1
+            res.writeHead(206, {
+              'Content-Range': `bytes ${start}-${end}/${size}`,
+              'Content-Length': end - start + 1
+            })
+            createReadStream(file, { start, end }).pipe(res)
+          } else {
+            res.writeHead(200, { 'Content-Length': size })
+            createReadStream(file).pipe(res)
+          }
+        }
+        if (path.startsWith('/ref-videos/')) {
+          const name = path.slice('/ref-videos/'.length)
+          if (!/^[0-9a-fA-F-]+-\d+\.mp4$/.test(name)) {
+            res.writeHead(400)
+            res.end()
+            return
+          }
+          serveVideo(join(videosDir, name))
+          return
+        }
         if (path.startsWith('/images/')) {
           const name = path.slice('/images/'.length)
           if (!/^[0-9a-fA-F-]+-\d+\.(png|jpe?g|gif|webp)$/i.test(name)) {
@@ -286,6 +321,14 @@ app.whenReady().then(() => {
     }
     const port = await startMediaServer()
     return `http://127.0.0.1:${port}/images/${name}`
+  })
+
+  ipcMain.handle('media:get-ref-video-url', async (_e, name: unknown) => {
+    if (typeof name !== 'string' || !/^[0-9a-fA-F-]+-\d+\.mp4$/.test(name)) {
+      throw new Error('invalid ref video name')
+    }
+    const port = await startMediaServer()
+    return `http://127.0.0.1:${port}/ref-videos/${name}`
   })
 
   ipcMain.handle('media:show-in-folder', (_e, filePath: unknown) => {

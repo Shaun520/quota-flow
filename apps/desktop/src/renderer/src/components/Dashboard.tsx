@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import type { ClipboardEvent as ReactClipboardEvent } from 'react'
+import type { ChangeEvent as ReactChangeEvent, ClipboardEvent as ReactClipboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   DEFAULT_SUPPORTED_DURATIONS,
@@ -11,7 +11,8 @@ import {
   resolutionOptions,
   uploadHint,
   zhipuModelDurations,
-  bailianModelDurations
+  bailianModelDurations,
+  bailianModelInputs
 } from '../spec'
 import { IconInfo, IconMaximize, IconPlay, IconUpload, ProviderIconMark } from './icons'
 import { EmptyState } from './EmptyState'
@@ -28,11 +29,66 @@ import { getInitialShowWebview } from './Modals'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
 import type { ProviderCaps, ProviderCapsMap } from '../hooks/useProviderCaps'
 import { imageContentType, prepareReferenceImage } from '../utils/uploadImage'
+import AudioCropModal from './AudioCropModal'
 
 const VIP = false
 
 /** 需要通过公网 https URL 才能做图生/参考的 API 型厂商（历史图生记录重新生成时需重传本地图取新 URL） */
-const API_IMAGE_PROVIDERS = ['zhipu', 'volcengine']
+const API_IMAGE_PROVIDERS = ['zhipu', 'volcengine', 'bailian']
+
+// 文生视频音频参考：扩展名 → MIME（与 github-upload 的 EXT_RE 及本地副本保存共用）
+const AUDIO_TYPES: Record<string, string> = {
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg',
+  aac: 'audio/aac', webm: 'audio/webm', flac: 'audio/flac', mp4: 'audio/mp4'
+}
+
+function audioExt(name: string): string {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(name)
+  return m ? m[1].toLowerCase() : 'm4a'
+}
+
+/** 探测本地音频文件时长（秒）。利用浏览器 <audio> 解码头信息，避免上传后才因超限报错。
+ *  对无法解析的格式返回 null（由后端兜底），返回值可直接与厂商上限比较。 */
+async function probeAudioDuration(file: File): Promise<number | null> {
+  return new Promise<number | null>((resolve) => {
+    try {
+      const url = URL.createObjectURL(file)
+      const audio = new Audio()
+      audio.preload = 'metadata'
+      audio.src = url
+      audio.onloadedmetadata = () => {
+        const d = Number.isFinite(audio.duration) ? audio.duration : null
+        URL.revokeObjectURL(url)
+        resolve(d)
+      }
+      audio.onerror = () => {
+        URL.revokeObjectURL(url)
+        resolve(null)
+      }
+      // 兜底：最多等 3s，防止极端格式卡死
+      setTimeout(() => { URL.revokeObjectURL(url); resolve(null) }, 3000)
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+/** PCM 采样数据（含声道/采样率信息）序列化为标准 WAV 字节流（16bit PCM）——已迁移至 AudioCropModal */
+// （原 encodeWav/clipAudioTo30s 已移除，裁剪交互由 AudioCropModal 承担）
+
+// 参考生（r2v）参考视频：扩展名 → MIME（与 github-upload 的 EXT_RE 及本地副本保存共用）
+const VIDEO_TYPES: Record<string, string> = {
+  mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v',
+  webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo'
+}
+
+function videoExt(name: string): string {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(name)
+  return m ? m[1].toLowerCase() : 'mp4'
+}
+
+/** 参考生（r2v）可上传的参考视频上限（官方媒体合计 ≤5，预留图片并行，固定给 3 个视频位） */
+const MAX_REF_VIDEOS = 3
 
 function maxImageUploadCount(provider: string, model: string): number {
   // 智谱按模型能力限制图片上传数量：图生视频1张、首尾帧2张、Vidu 2参考生视频最多5张
@@ -121,6 +177,10 @@ export interface RegenerateDraft {
   ratio: string
   mode: string
   images: string[]
+  /** 文生视频音频参考的本地副本路径（重新生成时用于重传取新公网 URL） */
+  audioLocalPath?: string | null
+  /** 文生视频音频参考的公网 https URL（旧记录兼容，地址如已删则按本地副本重传） */
+  audioUrl?: string | null
 }
 
 function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
@@ -145,8 +205,8 @@ function visibleModeOptions(
   caps?: ProviderCaps
 ): Array<{ value: string; label: string }> {
   const base = providerModeOptions(provider, model).filter((option) => {
-    if (option.value === 't2v') return features['dispatch.text2video']
-    if (option.value === 'img') return features['dispatch.img2video']
+    if (option.value === 't2v' || option.value === 'text2video') return features['dispatch.text2video']
+    if (option.value === 'img' || option.value === 'img2video') return features['dispatch.img2video']
     if (option.value === 'multi_ref') return features['dispatch.multi_ref']
     if (option.value === 'first_last') return features['dispatch.first_last']
     if (option.value === 'first_frame') return features['dispatch.first_frame']
@@ -184,7 +244,7 @@ export default function Dashboard({
   const { items: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('doubao')
   const [model, setModel] = useState(MODELS.doubao[0])
-  const [mode, setMode] = useState('t2v')
+  const [mode, setMode] = useState('text2video')
   const [duration, setDuration] = useState(5)
   const [resolution, setResolution] = useState('720')
   const [audio, setAudio] = useState('on')
@@ -196,6 +256,34 @@ export default function Dashboard({
   const [apiImageUrls, setApiImageUrls] = useState<string[]>([])
   // 开放平台 API 型厂商（智谱/火山）图片异步上传计数：>0 表示尚有图片在上传，禁用「开始生成」
   const [uploadingCount, setUpLoadingCount] = useState(0)
+  // 文生视频（bailian）音频参考：公网 https URL 透传厂商 + 本地副本供历史回显/重新生成回填
+  const [audioName, setAudioName] = useState('')
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [audioLocalPath, setAudioLocalPath] = useState<string | null>(null)
+  const [audioUploading, setAudioUploading] = useState(false)
+  // 音频裁剪弹窗：文件时长超过厂商上限时弹出，让用户自行拖选起止区间后上传
+  const [cropAudio, setCropAudio] = useState<{ file: File; duration: number } | null>(null)
+  // 参考生（r2v）参考视频：仅 multi_ref 的百炼 r2v 模型开放。
+  //   refVideoPreviews   展示用 URL（新选=blob；重新生成回填=本地媒体服务 URL）
+  //   refVideoLocalPaths 本地副本路径（随任务入库，历史回显/重新生成回填）
+  //   refVideoUrls       公网 https URL（透传厂商 input.media reference_video）
+  //   refVideoNames      文件名（供展示/删除）
+  const [refVideoPreviews, setRefVideoPreviews] = useState<string[]>([])
+  const [refVideoLocalPaths, setRefVideoLocalPaths] = useState<string[]>([])
+  const [refVideoUrls, setRefVideoUrls] = useState<string[]>([])
+  const [refVideoNames, setRefVideoNames] = useState<string[]>([])
+  const [refVideoUploading, setRefVideoUploading] = useState(false)
+  const [refVideoPreviewing, setRefVideoPreviewing] = useState<string | null>(null)
+  // 参考生（r2v）统一上传框的素材添加顺序：把图片（img）与视频（vid）交错排列成一行，保证点击顺序与视觉一致。
+  //   每个条目记录 {k: 'img' | 'vid', i: 在该类型数组内的下标}；删除时会自动重排同类条目下标。
+  type RefOrderEntry = { k: 'img'; i: number } | { k: 'vid'; i: number }
+  const [refItemOrder, setRefItemOrder] = useState<RefOrderEntry[]>([])
+  const totalRefItemCount = savedImagePaths.length + refVideoLocalPaths.length
+  // 自定义深色音频播放器状态（替换原生 <audio controls> 白底风格）
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [audioPlaying, setAudioPlaying] = useState(false)
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0)
+  const [audioDuration, setAudioDuration] = useState(0)
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
@@ -213,6 +301,7 @@ export default function Dashboard({
   const [preview, setPreview] = useState<{ id: string; src: string } | null>(null)
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const refVideoInputRef = useRef<HTMLInputElement>(null)
 
   // Admin 厂商级生成能力：命中 provider_caps 时该厂商模式/模型以配置为准，缺省回退硬编码默认
   const caps = providerCaps[provider]
@@ -237,7 +326,7 @@ export default function Dashboard({
     const nextModes = visibleModeOptions(nextProvider, nextModel, features, providerCaps[nextProvider])
     const nextMode = nextModes.some((m) => m.value === normalizedMode)
       ? normalizedMode
-      : (nextModes[0]?.value ?? 't2v')
+      : (nextModes[0]?.value ?? 'text2video')
 
     setProvider(nextProvider)
     setModel(nextModel)
@@ -251,6 +340,10 @@ export default function Dashboard({
     setSavedImagePaths(regenerateDraft.images ?? [])
     setApiImageUrls([])
     setImages([])
+    // 音频回填：本地副本路径就地保留；公网 https URL 若记录存在则直接复用，供重传判定
+    setAudioName('')
+    setAudioUrl(regenerateDraft.audioUrl ?? null)
+    setAudioLocalPath(regenerateDraft.audioLocalPath ?? null)
     setGenError(null)
     setGenFailed(false)
 
@@ -286,6 +379,22 @@ export default function Dashboard({
         })
         .catch(() => {})
     }
+    // 百炼文生音频参考：有本地副本则重传取新公网 URL（原 https URL 生成后已删），供生成时透传 input.audio_url
+    const audioLocal = regenerateDraft.audioLocalPath ?? null
+    if (nextProvider === 'bailian' && normalizedMode === 't2v' && audioLocal) {
+      const aExt = audioExt(audioLocal)
+      window.api.storage
+        .readImageLocal(audioLocal)
+        .then(async (bytes) => {
+          const { url } = await window.api.storage.uploadImage({ bytes, contentType: AUDIO_TYPES[aExt] ?? 'audio/mpeg', ext: aExt })
+          if (cancelled) return
+          setAudioUrl(url)
+          setAudioName(audioLocal.split(/[\\/]/).pop() || '')
+        })
+        .catch(() => {
+          // 本地副本不可读（已被清理）时保持无音频状态，不阻断重新生成
+        })
+    }
     onRegenerateConsumed?.()
     return () => {
       cancelled = true
@@ -300,7 +409,7 @@ export default function Dashboard({
     // 素材图是本地路径；仅当素材给了公开 https URL 时才可作 API 厂商参考图透传（否则生成走本地路径）
     setApiImageUrls((prev) => [...prev, ...materialImages.filter((m) => /^https?:\/\//i.test(m.url)).map((m) => m.url)])
     const validModes = visibleModeOptions(provider, model, features, caps)
-    const imageMode = validModes.find((m) => ['multi_ref', 'img', 'first_last', 'first_frame'].includes(m.value))
+    const imageMode = validModes.find((m) => ['multi_ref', 'img', 'img2video', 'first_last', 'first_frame'].includes(m.value))
     if (imageMode && imageMode.value !== mode) setMode(imageMode.value)
     onMaterialImagesConsumed?.()
   }, [materialImages, provider, model, features, caps, mode, onMaterialImagesConsumed])
@@ -359,7 +468,11 @@ export default function Dashboard({
           const secret = await svc.getProviderKeySecret(user.id, b.keyId)
           if (!secret) continue
           const res = await window.api.providers.apiModels('bailian', secret.encrypted_key)
-          if (res.ok && res.models) res.models.forEach((m) => m && m.model && union.add(m.model))
+          if (res.ok && res.models)
+            res.models.forEach((m) => {
+              // detect/专用模型（unavailable='no_endpoint'）只进「查看模型」，不进调度台可生成列表
+              if (m && m.model && m.unavailable !== 'no_endpoint') union.add(m.model)
+            })
         } catch {
           // 单个账号抓取失败不影响整体目录
         }
@@ -388,6 +501,238 @@ export default function Dashboard({
   const ratios = ratioOptions(provider)
   const cost = computeCost(provider, model, duration, resolution)
   const upload = uploadHint(provider, mode)
+  // 文生视频（bailian）音频参考能力：仅当属百炼且当前为文生视频（text2video）模型且能力卡含 Audio 时开放音频上传
+  // 注意：mode 用长键（text2video/img2video），而非短键（t2v/img），与 providerModeOptions 下拉 value 一致
+  const t2vSupportsAudio = provider === 'bailian' && mode === 'text2video' && bailianModelInputs(model).includes('Audio')
+  // 参考生（r2v）视频参考：仅当属百炼且当前为 multi_ref（参考生）且模型能力卡含 Video 时开放视频上传
+  const r2vVideoActive = provider === 'bailian' && mode === 'multi_ref' && bailianModelInputs(model).includes('Video')
+
+  // 音频上传：走与图片一致的 GitHub+jsDelivr https 链，公网 URL 供生成时透传厂商，本地副本供历史回显/回填
+  const uploadAudio = useCallback(
+    async (bytes: ArrayBuffer, ext: string): Promise<{ url: string; localPath: string }> => {
+      const { url } = await window.api.storage.uploadImage({
+        bytes,
+        contentType: AUDIO_TYPES[ext] ?? 'audio/mpeg',
+        ext: ext || 'm4a'
+      })
+      const { path } = await window.api.storage.saveImageLocal({ bytes, ext: ext || 'm4a' })
+      return { url, localPath: path }
+    },
+    []
+  )
+  const onPickAudio = useCallback(
+    async (e: ReactChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file) return
+      const ext = audioExt(file.name)
+      // 立即设置文件名 + 进入上传中状态，让用户马上看到 loading UI（而非等上传完成才显示）
+      setAudioName(file.name)
+      setAudioUrl(null)
+      setAudioLocalPath(null)
+      setAudioUploading(true)
+      try {
+        // 超长音频：弹出裁剪窗让用户自行拖选起止区间（自动限制在 30s 内），确认后再上传
+        const dur = await probeAudioDuration(file)
+        if (dur != null && dur > 30) {
+          setCropAudio({ file, duration: dur })
+          return
+        }
+        const bytes = await file.arrayBuffer()
+        const { url, localPath } = await uploadAudio(bytes, ext)
+        setAudioUrl(url)
+        setAudioLocalPath(localPath)
+      } catch (err) {
+        setAudioName('')
+        setGenError('音频上传失败：' + (err instanceof Error ? err.message : String(err)))
+      } finally {
+        setAudioUploading(false)
+      }
+    },
+    [uploadAudio]
+  )
+  const handleCropDone = useCallback(
+    async (bytes: ArrayBuffer, _start: number, _end: number): Promise<void> => {
+      setAudioUploading(true)
+      try {
+        const { url, localPath } = await uploadAudio(bytes, 'wav')
+        setAudioUrl(url)
+        setAudioLocalPath(localPath)
+        setCropAudio(null)
+      } catch (err) {
+        setAudioName('')
+        setGenError('音频上传失败：' + (err instanceof Error ? err.message : String(err)))
+      } finally {
+        setAudioUploading(false)
+      }
+    },
+    [uploadAudio]
+  )
+  const handleCropCancel = useCallback((): void => {
+    setCropAudio(null)
+    if (audioUploading) setAudioUploading(false)
+  }, [audioUploading])
+  const onRemoveAudio = useCallback((): void => {
+    setAudioName('')
+    setAudioUrl(null)
+    setAudioLocalPath(null)
+    setAudioPlaying(false)
+    setAudioCurrentTime(0)
+    setAudioDuration(0)
+  }, [])
+
+  // 参考视频（r2v）上传：与图片/音频一致走 GitHub+jsDelivr https 链，
+  // 公网 URL（refVideoUrls）透传厂商 input.media，本地副本（refVideoLocalPaths）供历史回显/重新生成回填
+  const uploadRefVideo = useCallback(
+    async (file: File): Promise<{ url: string; localPath: string }> => {
+      const ext = videoExt(file.name)
+      const bytes = await file.arrayBuffer()
+      const { url } = await window.api.storage.uploadImage({
+        bytes,
+        contentType: VIDEO_TYPES[ext] ?? 'video/mp4',
+        ext: ext === 'm4v' ? 'm4v' : 'mp4'
+      })
+      const { path } = await window.api.storage.saveImageLocal({ bytes, ext: 'mp4' })
+      return { url, localPath: path }
+    },
+    []
+  )
+  const onPickRefVideo = useCallback(
+    async (e: ReactChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file) return
+      const remaining = Math.max(0, MAX_REF_VIDEOS - refVideoLocalPaths.length)
+      if (remaining <= 0) return
+      // 先展示本地预览 + 进入上传态，避免等 HTTPS 完成才有反馈
+      setRefVideoPreviews((prev) => [...prev, URL.createObjectURL(file)])
+      setRefVideoLocalPaths((prev) => [...prev, ''])
+      setRefVideoUrls((prev) => [...prev, ''])
+      setRefVideoNames((prev) => [...prev, file.name])
+      setRefVideoUploading(true)
+      try {
+        const { url, localPath } = await uploadRefVideo(file)
+        setRefVideoLocalPaths((prev) => prev.map((p, i) => (i === prev.length - 1 ? localPath : p)))
+        setRefVideoUrls((prev) => prev.map((u, i) => (i === prev.length - 1 ? url : u)))
+      } catch (err) {
+        setGenError('参考视频上传失败：' + (err instanceof Error ? err.message : String(err)))
+        setRefVideoPreviews((prev) => prev.slice(0, -1))
+        setRefVideoLocalPaths((prev) => prev.slice(0, -1))
+        setRefVideoUrls((prev) => prev.slice(0, -1))
+        setRefVideoNames((prev) => prev.slice(0, -1))
+      } finally {
+        setRefVideoUploading(false)
+      }
+    },
+    [refVideoLocalPaths.length, uploadRefVideo]
+  )
+  const onRemoveRefVideo = useCallback((idx: number): void => {
+    setRefVideoPreviews((prev) => prev.filter((_, i) => i !== idx))
+    setRefVideoLocalPaths((prev) => prev.filter((_, i) => i !== idx))
+    setRefVideoUrls((prev) => prev.filter((_, i) => i !== idx))
+    setRefVideoNames((prev) => prev.filter((_, i) => i !== idx))
+  }, [])
+  const clearRefVideos = useCallback((): void => {
+    setRefVideoPreviews([])
+    setRefVideoLocalPaths([])
+    setRefVideoUrls([])
+    setRefVideoNames([])
+  }, [])
+  // 清空所有参考素材（图片 + 视频 + 顺序），用于切厂商/切模型/重置
+  const clearAllRefAssets = useCallback((): void => {
+    setImages([])
+    setImageFiles([])
+    setSavedImagePaths([])
+    setApiImageUrls([])
+    clearRefVideos()
+    setRefItemOrder([])
+  }, [clearRefVideos])
+
+  // ===== 参考生（r2v）统一素材框：图片 + 视频 混合上传、一行预览 =====
+  const refMixedInputRef = useRef<HTMLInputElement>(null)
+
+  // 视频上传辅助（独立于图片上传，避免依赖 appendApiImages 声明位置）
+  const appendVideoAsRef = useCallback(async (file: File): Promise<void> => {
+    // 先登记占位条目（下标为当前 refVideoLocalPaths.length，即即将追加的位置）
+    const newIdx = refVideoLocalPaths.length
+    setRefVideoPreviews((prev) => [...prev, URL.createObjectURL(file)])
+    setRefVideoLocalPaths((prev) => [...prev, ''])
+    setRefVideoUrls((prev) => [...prev, ''])
+    setRefVideoNames((prev) => [...prev, file.name])
+    setRefItemOrder((prev) => [...prev, { k: 'vid', i: newIdx }])
+    setRefVideoUploading(true)
+    try {
+      const { url, localPath } = await uploadRefVideo(file)
+      setRefVideoLocalPaths((prev) => prev.map((p, i) => (i === newIdx ? localPath : p)))
+      setRefVideoUrls((prev) => prev.map((u, i) => (i === newIdx ? url : u)))
+    } catch (err) {
+      setGenError('参考视频上传失败：' + (err instanceof Error ? err.message : String(err)))
+      setRefVideoPreviews((prev) => prev.filter((_, i) => i !== newIdx))
+      setRefVideoLocalPaths((prev) => prev.filter((_, i) => i !== newIdx))
+      setRefVideoUrls((prev) => prev.filter((_, i) => i !== newIdx))
+      setRefVideoNames((prev) => prev.filter((_, i) => i !== newIdx))
+      setRefItemOrder((prev) => prev.filter((e) => !(e.k === 'vid' && e.i === newIdx)))
+    } finally {
+      setRefVideoUploading(false)
+    }
+  }, [refVideoLocalPaths.length, uploadRefVideo])
+
+  // 音频播放器控制：用隐藏 <audio> 实现深色自定义 UI（替换原生白底控件）
+  const toggleAudioPlay = useCallback(() => {
+    const el = audioRef.current
+    if (!el) return
+    if (el.paused) {
+      el.play().catch(() => { /* ignore */ })
+    } else {
+      el.pause()
+    }
+  }, [])
+
+  const seekAudio = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const el = audioRef.current
+    if (!el || !audioDuration) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+    el.currentTime = pct * audioDuration
+  }, [audioDuration])
+
+  // 音频事件同步 React 状态
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el) return
+    const onPlay = () => setAudioPlaying(true)
+    const onPause = () => setAudioPlaying(false)
+    const onTime = () => setAudioCurrentTime(el.currentTime)
+    const onLoaded = () => setAudioDuration(el.duration || 0)
+    const onEnded = () => { setAudioPlaying(false); setAudioCurrentTime(0) }
+    el.addEventListener('play', onPlay)
+    el.addEventListener('pause', onPause)
+    el.addEventListener('timeupdate', onTime)
+    el.addEventListener('loadedmetadata', onLoaded)
+    el.addEventListener('ended', onEnded)
+    return () => {
+      el.removeEventListener('play', onPlay)
+      el.removeEventListener('pause', onPause)
+      el.removeEventListener('timeupdate', onTime)
+      el.removeEventListener('loadedmetadata', onLoaded)
+      el.removeEventListener('ended', onEnded)
+    }
+  }, [audioUrl])
+
+  // 音频 URL 变化时重置播放状态
+  useEffect(() => {
+    setAudioPlaying(false)
+    setAudioCurrentTime(0)
+    setAudioDuration(0)
+  }, [audioUrl])
+
+  // 音频时间格式化
+  const fmtTime = (s: number): string => {
+    if (!isFinite(s) || s <= 0) return '0:00'
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
 
   // 调度台状态面板不展示后台已停用的厂商，避免出现置灰/停用态干扰调度信息。
   const visibleAggs = useMemo(() => provAggs.filter((p) => p.enabled !== false), [provAggs])
@@ -408,12 +753,10 @@ export default function Dashboard({
       setProvider(next)
       setModel(nextModel)
       const nextModes = visibleModeOptions(next, nextModel, features, providerCaps[next])
-      setMode(nextModes[0]?.value ?? 't2v')
-      setImages([])
-      setImageFiles([])
-      setSavedImagePaths([])
+      setMode(nextModes[0]?.value ?? 'text2video')
+      clearAllRefAssets()
     }
-  }, [providerOptions, provider, features, providerCaps])
+  }, [providerOptions, provider, features, providerCaps, clearAllRefAssets])
 
   useEffect(() => {
     if (!durations.some((d) => d.value === duration)) {
@@ -440,10 +783,8 @@ export default function Dashboard({
   useEffect(() => {
     const validModes = visibleModeOptions(provider, model, features, caps).map((m) => m.value)
     if (!validModes.includes(mode)) {
-      setMode(validModes[0] ?? 't2v')
-      setImages([])
-      setImageFiles([])
-      setSavedImagePaths([])
+      setMode(validModes[0] ?? 'text2video')
+      clearAllRefAssets()
     }
   }, [provider, model, mode, features, caps])
 
@@ -542,17 +883,18 @@ export default function Dashboard({
 
   // 预览浮层：Esc 关闭
   useEffect(() => {
-    if (!preview && !imagePreview && !promptPreview) return
+    if (!preview && !imagePreview && !promptPreview && !refVideoPreviewing) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setPreview(null)
         setImagePreview(null)
         setPromptPreview(false)
+        setRefVideoPreviewing(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [preview, imagePreview, promptPreview])
+  }, [preview, imagePreview, promptPreview, refVideoPreviewing])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
     const currentMode = provider === 'dola' ? 'multi_ref' : mode
@@ -560,6 +902,16 @@ export default function Dashboard({
     // 开放平台 API 型厂商（智谱/火山）：图生/多参考/首尾帧需公网 https 图片，上传未完成时禁用，避免提交空图报错
     if ((provider === 'zhipu' || provider === 'volcengine') && uploadingCount > 0) {
       setGenError('图片正在上传中，请稍候再生成')
+      return
+    }
+    // 文生视频音频参考上传中：避免空参提交（透传 input.audio_url 需要其公网 URL 就绪）
+    if (audioUploading) {
+      setGenError('音频正在上传中，请稍候再生成')
+      return
+    }
+    // 参考生（r2v）参考视频上传中：避免空参提交（透传 input.media 需要公网 URL 就绪）
+    if (refVideoUploading) {
+      setGenError('参考视频正在上传中，请稍候再生成')
       return
     }
     if (fresh && step === 1) {
@@ -581,13 +933,13 @@ export default function Dashboard({
       return
     }
     const imageCount = savedImagePaths.length + imageFiles.length
-    // 文生视频需图片：排除 t2v（网页厂商）与 text2video（智谱 API）两种文案枚举
-    if (currentMode !== 't2v' && currentMode !== 'text2video' && imageCount === 0) {
+    // 文生视频需图片：排除 t2v（网页厂商）与 text2video（智谱 API）两种文案枚举；参考生（r2v）允许视频替代图片故一并放行
+    if (currentMode !== 't2v' && currentMode !== 'text2video' && imageCount === 0 && !(r2vVideoActive && refVideoLocalPaths.length > 0)) {
       const modeLabel = visibleModeOptions(provider, model, features, caps).find((m) => m.value === currentMode)?.label ?? '多参考'
       setGenError(`${modeLabel}需要至少上传一张素材图片`)
       return
     }
-    if (currentMode === 'img' && imageCount === 0) {
+    if ((currentMode === 'img' || currentMode === 'img2video') && imageCount === 0) {
       setGenError('图生视频需要先上传图片')
       return
     }
@@ -641,11 +993,20 @@ export default function Dashboard({
         resolution,
         audio,
         ratio,
-        images: currentMode === 't2v' && provider !== 'yuanbao'
+        images: (currentMode === 'text2video' || currentMode === 't2v') && provider !== 'yuanbao'
           ? []
           : [...savedImagePaths, ...imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean)].slice(0, maxImageUploadCount(provider, model)),
         // 厂商 API 用图片仅取公网 https URL（API 型厂商图生参考图）；WebView 厂商不传，主进程回退 images
         imageUrls: apiImageUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u)),
+        // 文生视频音频参考：公网 https URL 透传厂商（input.audio_url）+ 本地副本供历史回显/重新生成回填。
+        // 仅当当前模型能力卡明确暴露 Audio 时才随生成下发，避免残留音频状态误发到不支持（或字段未确认）的模型。
+        audioUrl: t2vSupportsAudio ? (audioUrl ?? undefined) : undefined,
+        audioLocalPath: t2vSupportsAudio ? (audioLocalPath ?? undefined) : undefined,
+        // 参考生（r2v）参考视频：videos=本地副本路径（历史回显/回填），videoUrls=公网 https URL（透传厂商 input.media reference_video）。
+        videos: r2vVideoActive ? refVideoLocalPaths.filter(Boolean) : undefined,
+        videoUrls: r2vVideoActive
+          ? refVideoUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u))
+          : undefined,
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -665,7 +1026,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, apiImageUrls, uploadingCount, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, apiImageUrls, uploadingCount, audioUploading, audioUrl, audioLocalPath, t2vSupportsAudio, r2vVideoActive, refVideoLocalPaths, refVideoUrls, refVideoUploading, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -703,29 +1064,31 @@ export default function Dashboard({
     const nextModel = modelList(value)[0] ?? MODELS.doubao[0]
     setModel(nextModel)
     const nextModes = visibleModeOptions(value, nextModel, features, providerCaps[value])
-    setMode(nextModes[0]?.value ?? 't2v')
-    setImages([])
-    setImageFiles([])
-    setSavedImagePaths([])
+    setMode(nextModes[0]?.value ?? 'text2video')
+    clearAllRefAssets()
   }
 
   const onModeChange = (value: string): void => {
     setMode(value)
-    if (value === 't2v' && provider !== 'yuanbao') {
+    // 文生视频（text2video）模式清空图片：图片上传区已隐藏，残留图片需一并清掉
+    if ((value === 'text2video' || value === 't2v') && provider !== 'yuanbao') {
       setImages([])
       setImageFiles([])
       setSavedImagePaths([])
+      setRefItemOrder((prev) => prev.filter((e) => e.k !== 'img'))
     }
+    // 非参考生（multi_ref）模式清空参考视频，避免切走后残留视频参考串场
+    if (value !== 'multi_ref') clearRefVideos()
+    // 切走参考生时同时清空整个素材顺序，避免遗留跨模式的旧顺序条目
+    if (value !== 'multi_ref' && r2vVideoActive) setRefItemOrder([])
   }
 
   const onModelChange = (value: string): void => {
     setModel(value)
     const nextModes = visibleModeOptions(provider, value, features, caps)
     if (!nextModes.some((m) => m.value === mode)) {
-      setMode(nextModes[0]?.value ?? 't2v')
-      setImages([])
-      setImageFiles([])
-      setSavedImagePaths([])
+      setMode(nextModes[0]?.value ?? 'text2video')
+      clearAllRefAssets()
     }
   }
 
@@ -774,7 +1137,7 @@ export default function Dashboard({
     const files = Array.from(e.target.files ?? [])
     const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
     const picked = files.slice(0, remaining)
-    if (provider === 'zhipu' || provider === 'volcengine') {
+    if (API_IMAGE_PROVIDERS.includes(provider)) {
       void appendApiImages(picked)
       e.target.value = ''
       return
@@ -791,7 +1154,7 @@ export default function Dashboard({
     e.preventDefault()
     const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
     const picked = files.slice(0, remaining)
-    if (provider === 'zhipu' || provider === 'volcengine') {
+    if (API_IMAGE_PROVIDERS.includes(provider)) {
       void appendApiImages(picked)
       return
     }
@@ -809,6 +1172,115 @@ export default function Dashboard({
       return prev.filter((_, i) => i !== idx - savedImagePaths.length)
     })
   }, [savedImagePaths])
+
+  // ===== 参考生（r2v）统一素材框：图片 + 视频 混合上传、一行预览（依赖 appendApiImages 声明在此之后）=====
+
+  // 单张图片 → 追加到图片数组并登记为 img 条目
+  //   关键：refItemOrder 条目必须在 savedImagePaths 占位符推入的**同一帧**登记，
+  //   否则 loading 判断 savedImagePaths[i]==='' 会因上传已完成而为 false
+  const appendImageAsRef = useCallback(async (file: File): Promise<void> => {
+    const beforeCount = savedImagePaths.length
+    if (!API_IMAGE_PROVIDERS.includes(provider)) {
+      // 非 API 厂商：直接走本地预览路径
+      const url = URL.createObjectURL(file)
+      setImages((prev) => [...prev, url])
+      setImageFiles((prev) => [...prev, file])
+      setRefItemOrder((prev) => [...prev, { k: 'img', i: images.length }])
+      return
+    }
+    // API 厂商（如 bailian）：appendApiImages 的前三 setState（images/savedImagePaths/apiImageUrls）
+    //   在**首次 await 之前同步执行**，所以这里紧接其后同步登记 refItemOrder 条目即可拿到占位符帧
+    void appendApiImages([file])
+    setRefItemOrder((prev) => {
+      if (prev.some((e) => e.k === 'img' && e.i === beforeCount)) return prev
+      return [...prev, { k: 'img', i: beforeCount }]
+    })
+  }, [provider, savedImagePaths.length, images.length, appendApiImages])
+
+  // 统一 pick 入口：按 MIME 分类分发到图片/视频上传
+  const onPickRefMixed = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    let remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+    const picked = files.slice(0, remaining)
+    for (const f of picked) {
+      if (remaining <= 0) break
+      if (f.type.startsWith('video/')) {
+        await appendVideoAsRef(f)
+        remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+      } else if (f.type.startsWith('image/')) {
+        await appendImageAsRef(f)
+        remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+      }
+    }
+  }, [provider, model, totalRefItemCount, appendVideoAsRef, appendImageAsRef])
+
+  // 统一 paste 入口
+  const onPasteRefMixed = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const files = Array.from(e.clipboardData.files ?? [])
+    if (files.length === 0) return
+    e.preventDefault()
+    void (async () => {
+      let remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+      for (const f of files) {
+        if (remaining <= 0) break
+        if (f.type.startsWith('video/')) {
+          await appendVideoAsRef(f)
+        } else if (f.type.startsWith('image/')) {
+          await appendImageAsRef(f)
+        } else {
+          continue
+        }
+        remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+      }
+    })()
+  }, [provider, model, totalRefItemCount, appendVideoAsRef, appendImageAsRef])
+
+  // 统一 drop 入口
+  const handleRefMixedDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(e.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    let remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+    for (const f of files) {
+      if (remaining <= 0) break
+      if (f.type.startsWith('video/')) {
+        await appendVideoAsRef(f)
+      } else if (f.type.startsWith('image/')) {
+        await appendImageAsRef(f)
+      } else {
+        continue
+      }
+      remaining = Math.max(0, MAX_REF_VIDEOS + maxImageUploadCount(provider, model) - totalRefItemCount)
+    }
+  }, [provider, model, totalRefItemCount, appendVideoAsRef, appendImageAsRef])
+
+  // 从统一素材框按顺序删除一个条目（自动维护同类条目下标）
+  const onRemoveRefMixed = useCallback((orderIdx: number): void => {
+    setRefItemOrder((prev) => {
+      const entry = prev[orderIdx]
+      if (!entry) return prev
+      if (entry.k === 'img') {
+        const i = entry.i
+        setImages((p) => p.filter((_, j) => j !== i))
+        setImageFiles((p) => p.filter((_, j) => j !== i))
+        setSavedImagePaths((p) => p.filter((_, j) => j !== i))
+        setApiImageUrls((p) => p.filter((_, j) => j !== i))
+      } else {
+        const i = entry.i
+        setRefVideoPreviews((p) => p.filter((_, j) => j !== i))
+        setRefVideoLocalPaths((p) => p.filter((_, j) => j !== i))
+        setRefVideoUrls((p) => p.filter((_, j) => j !== i))
+        setRefVideoNames((p) => p.filter((_, j) => j !== i))
+      }
+      // 从顺序数组里删除该条目，并把同类后续条目下标 -1
+      return prev
+        .filter((_, idx) => idx !== orderIdx)
+        .map((e) => {
+          if (e.k === entry.k && e.i > entry.i) return { ...e, i: e.i - 1 }
+          return e
+        })
+    })
+  }, [])
 
   return (
     <div className={'dashboard-wrap' + (banner ? ' has-banner' : '')}>
@@ -990,7 +1462,156 @@ export default function Dashboard({
             ) : null}
           </div>
 
-          {(mode !== 't2v' || provider === 'yuanbao') && (
+          {t2vSupportsAudio && (
+            <div className={'audio-upload' + (audioName ? ' has-audio' : '')}>
+              {audioUploading ? (
+                // 上传中占位：立即显示文件名 + loading 动效，避免用户看到空白无反馈
+                <div className="audio-player audio-loading">
+                  <div className="audio-play-btn" style={{ background: 'var(--border)', cursor: 'wait' }}>
+                    <span className="thumb-loading-spinner" />
+                  </div>
+                  <div className="audio-info">
+                    <span className="audio-name" title={audioName || ''}>{audioName || '上传中...'}</span>
+                    <div className="audio-progress">
+                      <div className="audio-progress-bar" style={{ width: '30%', animation: 'audio-loading 1.4s ease-in-out infinite' }} />
+                    </div>
+                    <span className="audio-time">上传中</span>
+                  </div>
+                </div>
+              ) : audioName && audioUrl ? (
+                <>
+                  {/* 隐藏原生 audio 元素，用自定义深色 UI 控制播放，避免白底控件破坏暗色主题 */}
+                  <audio ref={audioRef} src={audioUrl} preload="metadata" style={{ display: 'none' }} />
+                  <div className="audio-player" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className={'audio-play-btn' + (audioPlaying ? ' playing' : '')}
+                      onClick={toggleAudioPlay}
+                      title={audioPlaying ? '暂停' : '播放'}
+                    >
+                      {audioPlaying ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <rect x="6" y="4" width="4" height="16" rx="1" />
+                          <rect x="14" y="4" width="4" height="16" rx="1" />
+                        </svg>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      )}
+                    </button>
+                    <div className="audio-info">
+                      <span className="audio-name" title={audioName}>{audioName}</span>
+                      <div className="audio-progress" onClick={seekAudio}>
+                        <div
+                          className="audio-progress-bar"
+                          style={{ width: `${audioDuration > 0 ? (audioCurrentTime / audioDuration) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <span className="audio-time">
+                        {fmtTime(audioCurrentTime)} / {fmtTime(audioDuration)}
+                      </span>
+                    </div>
+                    <button className="audio-remove-btn" onClick={onRemoveAudio} title="移除音频">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <label className="upload-zone audio-zone">
+                  <IconUpload size={14} />
+                  <span className="upload-text">仅支持上传音频作为参考</span>
+                  {audioUploading && <span className="thumb-loading-spinner" />}
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    style={{ display: 'none' }}
+                    onChange={onPickAudio}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          {/* 参考生（r2v）且模型含 Video 能力：合并图片/视频上传为**一个**统一素材框，预览一行按添加顺序排列。
+          其余场景继续沿用默认图片上传框 */}
+          {r2vVideoActive ? (
+            <div
+              className={'upload-zone ref-mixed-zone' + (totalRefItemCount > 0 ? ' has-images' : '')}
+              onClick={() => refMixedInputRef.current?.click()}
+              onPaste={onPasteRefMixed}
+              onDragOver={(e) => { e.preventDefault() }}
+              onDrop={(e) => { e.preventDefault(); void handleRefMixedDrop(e) }}
+            >
+              {totalRefItemCount > 0 ? (
+                <div className="thumb-strip">
+                  {refItemOrder.map((entry, orderIdx) => {
+                    if (entry.k === 'img') {
+                      const src = images[entry.i]
+                      const uploading = entry.i < savedImagePaths.length && savedImagePaths[entry.i] === ''
+                      return (
+                        <div
+                          className="thumb-item"
+                          key={'img-' + orderIdx}
+                          title="点击预览图片"
+                          style={{ cursor: 'pointer' }}
+                          onClick={(e) => { e.stopPropagation(); if (src) setImagePreview(src) }}
+                        >
+                          <img src={src} alt="" />
+                          {uploading && (
+                            <div className="thumb-loading" title="图片上传中…">
+                              <span className="thumb-loading-spinner" />
+                            </div>
+                          )}
+                          <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveRefMixed(orderIdx) }}>×</button>
+                        </div>
+                      )
+                    }
+                    // video
+                    const vIdx = entry.i
+                    const vSrc = refVideoPreviews[vIdx]
+                    const vUploading = refVideoUploading && refVideoLocalPaths[vIdx] === ''
+                    return (
+                      <div
+                        className="thumb-item ref-video-item"
+                        key={'vid-' + orderIdx}
+                        title="点击预览视频"
+                        style={{ cursor: 'pointer' }}
+                        onClick={(e) => { e.stopPropagation(); if (vSrc) setRefVideoPreviewing(vSrc) }}
+                      >
+                        <video src={vSrc} muted preload="metadata" />
+                        {vUploading && (
+                          <div className="thumb-loading" title="视频上传中…">
+                            <span className="thumb-loading-spinner" />
+                          </div>
+                        )}
+                        <span className="thumb-play-mask"><IconPlay size={18} /></span>
+                        <button className="remove-thumb" onClick={(e) => { e.stopPropagation(); onRemoveRefMixed(orderIdx) }}>×</button>
+                      </div>
+                    )
+                  })}
+                  {totalRefItemCount < MAX_REF_VIDEOS + maxImageUploadCount(provider, model) && (
+                    <div className="thumb-add">+</div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <IconUpload size={16} />
+                  <span className="upload-text">拖拽图片 / 视频到此处（多参考生成，最多 {MAX_REF_VIDEOS + maxImageUploadCount(provider, model)} 个）</span>
+                </>
+              )}
+              <input
+                ref={refMixedInputRef}
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={onPickRefMixed}
+              />
+            </div>
+          ) : ((mode !== 'text2video' || provider === 'yuanbao') && !t2vSupportsAudio && (
             <div
               className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
               onClick={onPickFiles}
@@ -1037,7 +1658,7 @@ export default function Dashboard({
                 onChange={onFilesSelected}
               />
             </div>
-          )}
+          ))}
 
           <div className="generate-actions">
             {genError && (
@@ -1056,7 +1677,7 @@ export default function Dashboard({
             )}
             <button
               className="btn-primary"
-              disabled={(generating && cancelling) || ((provider === 'zhipu' || provider === 'volcengine') && uploadingCount > 0)}
+              disabled={(generating && cancelling) || ((provider === 'zhipu' || provider === 'volcengine') && uploadingCount > 0) || audioUploading || refVideoUploading}
               onClick={() => {
                 if (generating) void handleCancel()
                 else void handleGenerate()
@@ -1323,6 +1944,16 @@ export default function Dashboard({
           document.body
         )}
 
+      {/* 音频裁剪弹窗：超长参考音频让用户自行拖选起止区间 */}
+      {cropAudio && (
+        <AudioCropModal
+          file={cropAudio.file}
+          duration={cropAudio.duration}
+          onCancel={handleCropCancel}
+          onConfirm={async (bytes) => { await handleCropDone(bytes, 0, 0) }}
+        />
+      )}
+
       {/* 预览浮层：网格不动，仅浮层内播放（避免竖屏视频撑高整行卡片） */}
       {preview && (
         <div
@@ -1348,6 +1979,50 @@ export default function Dashboard({
             />
             <button
               onClick={() => setPreview(null)}
+              style={{
+                position: 'absolute',
+                top: -40,
+                right: 0,
+                color: '#fff',
+                background: 'rgba(255,255,255,0.16)',
+                border: 'none',
+                borderRadius: 6,
+                padding: '4px 10px',
+                cursor: 'pointer',
+                fontSize: 13
+              }}
+            >
+              ✕ 关闭
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 参考视频预览浮层 */}
+      {refVideoPreviewing && (
+        <div
+          className="video-preview-overlay"
+          onClick={() => setRefVideoPreviewing(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.78)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24
+          }}
+        >
+          <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+            <video
+              src={refVideoPreviewing}
+              controls
+              autoPlay
+              style={{ maxWidth: 'min(92vw, 860px)', maxHeight: '82vh', display: 'block', borderRadius: 10 }}
+            />
+            <button
+              onClick={() => setRefVideoPreviewing(null)}
               style={{
                 position: 'absolute',
                 top: -40,

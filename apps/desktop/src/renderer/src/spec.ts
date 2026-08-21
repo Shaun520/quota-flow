@@ -68,16 +68,129 @@ export function volcModelDurations(model: string): number[] {
   return VOLC_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
 }
 
-/** 阿里云百炼各模型固定生成时长（秒）；与主进程 api-branch 静态表保持一致 */
+/**
+ * 阿里云百炼各模型有效时长档（秒）；与主进程 bailianModelCap 能力卡口径保持一致。
+ * 来源：官网能力卡（wan2.6 最高 15s / wan2.5 10s / 参考生 5/10s / 其余默认 5/10s）。
+ */
 export const BAILIAN_MODEL_DURATIONS: Record<string, number[]> = {
+  'wan2.7-t2v': [5, 10],
+  'wan2.7-t2v-2026-04-25': [5, 10],
   'wan2.7-t2v-2026-06-12': [5, 10],
+  'wan2.7-i2v': [5, 10],
   'wan2.7-i2v-2026-04-25': [5, 10],
-  'wan2.7-r2v-2026-06-12': [5]
+  'wan2.7-r2v': [5, 10],
+  'wan2.7-r2v-2026-06-12': [5, 10],
+  'wan2.6-t2v': [5, 10, 15],
+  'wan2.6-i2v': [5, 10, 15],
+  'wan2.6-i2v-flash': [5, 10, 15],
+  'wan2.6-r2v': [5, 10],
+  'wan2.6-r2v-flash': [5, 10],
+  'wan2.5-t2v-preview': [5, 10],
+  'wan2.5-i2v-preview': [5, 10],
+  'wan2.2-t2v-plus': [5],
+  'wan2.2-i2v-plus': [5],
+  'wan2.2-i2v-flash': [5],
+  'wan2.2-kf2v-flash': [5],
+  'wanx2.1-t2v-plus': [5],
+  'wanx2.1-t2v-turbo': [5],
+  'wanx2.1-i2v-plus': [5],
+  'wanx2.1-i2v-turbo': [5],
+  'wanx2.1-kf2v-plus': [5],
+  'happyhorse-1.0-t2v': [5, 10],
+  'happyhorse-1.1-t2v': [5, 10],
+  'happyhorse-1.0-i2v': [5, 10],
+  'happyhorse-1.1-i2v': [5, 10],
+  'happyhorse-1.0-r2v': [5, 10],
+  'happyhorse-1.1-r2v': [5, 10]
 }
 
-/** 阿里云百炼按模型取有效时长；未收录模型回退默认档 */
+/** 阿里云百炼按模型名取有效时长档；未收录模型回退默认档（统一按官方能力卡，不再按 r2v 特殊 5s） */
 export function bailianModelDurations(model: string): number[] {
-  return BAILIAN_MODEL_DURATIONS[model] ?? DEFAULT_SUPPORTED_DURATIONS
+  return BAILIAN_MODEL_DURATIONS[model ?? ''] ?? DEFAULT_SUPPORTED_DURATIONS
+}
+
+/**
+ * 阿里云百炼各模型可用的生成模式（渲染层能力卡）。
+ * 与主进程 bailianModelCap 的 BAILIAN_VERIFIED_CAP.modes 口径完全一致：
+ * 依据官网能力卡「输入模态/输出模态」逐模型标注，而非仅看 t2v/i2v 命名段，
+ * 避免模式下拉落到裸 value 't2v' 或对同名家族快照（如 wan2.7-t2v=Audio+Text、
+ * wan2.7-t2v-2026-06-12=Text+Image）误判。detect/special 专用模型不做直接生成入口。
+ */
+const BAILIAN_MODEL_MODES: Record<string, Array<{ value: string; label: string }>> = {
+  // ---- wan2.7（Audio+Text→Video；2026-06-12 快照为 Text+Image→Video）----
+  'wan2.7-t2v': [{ value: 'text2video', label: '文生视频' }],
+  'wan2.7-t2v-2026-04-25': [{ value: 'text2video', label: '文生视频' }],
+  'wan2.7-t2v-2026-06-12': [{ value: 'text2video', label: '文生视频' }],
+  'wan2.7-i2v': [
+    { value: 'img2video', label: '图生视频(首帧)' },
+    { value: 'first_last', label: '首尾帧生成' }
+  ],
+  'wan2.7-i2v-2026-04-25': [
+    { value: 'img2video', label: '图生视频(首帧)' },
+    { value: 'first_last', label: '首尾帧生成' }
+  ],
+  'wan2.7-r2v': [{ value: 'multi_ref', label: '多参考模式' }],
+  'wan2.7-r2v-2026-06-12': [{ value: 'multi_ref', label: '多参考模式' }],
+  // ---- wan2.6（Text/Image+Audio→Video+Audio，最高 15s；图生官方为「基于首帧」，不做首尾帧）----
+  'wan2.6-t2v': [{ value: 'text2video', label: '文生视频' }],
+  'wan2.6-i2v': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'wan2.6-i2v-flash': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'wan2.6-r2v': [{ value: 'multi_ref', label: '多参考模式' }],
+  'wan2.6-r2v-flash': [{ value: 'multi_ref', label: '多参考模式' }],
+  // ---- wan2.5 preview ----
+  'wan2.5-t2v-preview': [{ value: 'text2video', label: '文生视频' }],
+  'wan2.5-i2v-preview': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  // ---- wan2.2 ----
+  'wan2.2-t2v-plus': [{ value: 'text2video', label: '文生视频' }],
+  'wan2.2-i2v-plus': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'wan2.2-i2v-flash': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'wan2.2-kf2v-flash': [{ value: 'first_last', label: '首尾帧生成' }],
+  // ---- wanx2.1 ----
+  'wanx2.1-t2v-plus': [{ value: 'text2video', label: '文生视频' }],
+  'wanx2.1-t2v-turbo': [{ value: 'text2video', label: '文生视频' }],
+  'wanx2.1-i2v-plus': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'wanx2.1-i2v-turbo': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'wanx2.1-kf2v-plus': [{ value: 'first_last', label: '首尾帧生成' }],
+  // ---- happyhorse ----
+  'happyhorse-1.0-t2v': [{ value: 'text2video', label: '文生视频' }],
+  'happyhorse-1.1-t2v': [{ value: 'text2video', label: '文生视频' }],
+  'happyhorse-1.0-i2v': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'happyhorse-1.1-i2v': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'happyhorse-1.0-r2v': [{ value: 'multi_ref', label: '多参考模式' }],
+  'happyhorse-1.1-r2v': [{ value: 'multi_ref', label: '多参考模式' }]
+}
+
+/**
+ * 阿里云百炼 t2v（文生视频）模型可对外暴露的输入能力（渲染层唯一口径）。
+ * 口径 =「用户可见的能力 = 能正确传参的模型」（measure-before-hardcode）：
+ * 与主进程 BAILIAN_VERIFIED_CAP 的 input 一致，但剔除字段未实测确认的模态
+ * （未确认就下发会把错误字段发给厂商）：
+ *   - wan2.7 系列音频已确认 `input.audio_url`（官方文生视频 API 参考 + SDK 示例）→ 暴露 'Audio'；
+ *   - wan2.7-t2v-2026-06-12 能力卡虽标 Text+Image，但官方「文生视频 API 参考」仅 input.audio_url，
+ *     无图片 media 传参字段 → 不暴露 'Image'（t2v 图片本轮不做）；其音频同样走 audio_url → 暴露 'Audio'；
+ *   - wan2.6-t2v / wan2.5-t2v-preview 旧协议音频字段未确认 → 不暴露 'Audio'。
+ * 用于驱动音频/图片上传区显隐；未收录 t2v 默认 ['Text']，不误开放任何上传入口。
+ */
+export function bailianModelInputs(model: string): string[] {
+  switch (model ?? '') {
+    case 'wan2.7-t2v':
+    case 'wan2.7-t2v-2026-04-25':
+    case 'wan2.7-t2v-2026-06-12':
+      return ['Audio', 'Text']
+    // 参考生（r2v）：实测（2026-08-21）确认当前账号/地域的 r2v 快照其 media[]
+    // 仅接受图片格式（jpeg/jpg/png/bmp/webp），不接受 mp4 视频（报「format mp4 is not supported」）。
+    // 因此只暴露 Image，驱动 multi_ref 上传区仅开放「参考图片」（多图），不开放视频入口。
+    // 说明：官方通用文档示例含 reference_video，但与本实测口径冲突，以实测为准（见 measure-before-hardcode）。
+    case 'wan2.7-r2v':
+    case 'wan2.7-r2v-2026-06-12':
+    case 'wan2.6-r2v':
+    case 'wan2.6-r2v-flash':
+    case 'happyhorse-1.0-r2v':
+    case 'happyhorse-1.1-r2v':
+      return ['Text', 'Image']
+    default:
+      return ['Text']
+  }
 }
 
 export interface DurationOption {
@@ -125,19 +238,28 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
     }
   }
   if (provider === 'bailian') {
-    switch (model) {
-      case 'wan2.7-t2v-2026-06-12':
-        return [{ value: 'text2video', label: '文生视频' }]
-      case 'wan2.7-i2v-2026-04-25':
-        return [
-          { value: 'img2video', label: '图生视频(首帧)' },
-          { value: 'first_last', label: '首尾帧生成' }
-        ]
-      case 'wan2.7-r2v-2026-06-12':
-        return [{ value: 'multi_ref', label: '参考生视频' }]
-      default:
-        return []
+    // 调度台模型来自账号免费额度快照，模式优先按 BAILIAN_MODEL_MODES 能力卡精确匹配，
+    // 未收录模型再按命名段回溯（r2v·refer=参考生 / kf2v=首尾帧 / i2v=图生 / t2v=文生）。
+    // 归属与主进程 bailianModelCap 完全一致，避免下拉落到裸 value 't2v'。
+    const m = model ?? ''
+    // t2v 标签动态附加能力提示：暴露 Audio 的模型（当前 wan2.7 系列，见 bailianModelInputs）
+    // 显示「支持音频参考」，与音频上传区和主进程能力卡口径一致，避免用户误以为文生视频不能传音频。
+    const t2vSuffix = bailianModelInputs(m).includes('Audio') ? '（支持音频参考）' : ''
+    const t2v = () => ({ value: 'text2video', label: `文生视频${t2vSuffix}` })
+    const exact = BAILIAN_MODEL_MODES[m]
+    if (exact) return exact.map((o) => (o.value === 'text2video' ? t2v() : o))
+    if (/(^|[_-])r2v([_-]|$)/i.test(m) || /refer/i.test(m)) {
+      return [{ value: 'multi_ref', label: '多参考模式' }]
     }
+    if (/(^|[_-])kf2v([_-]|$)/i.test(m) || /start-end/i.test(m)) {
+      return [{ value: 'first_last', label: '首尾帧生成' }]
+    }
+    if (/(^|[_-])i2v([_-]|$)/i.test(m)) {
+      return [{ value: 'img2video', label: '图生视频(首帧)' }]
+    }
+    if (/(^|[_-])t2v([_-]|$)/i.test(m)) return [t2v()]
+    // 兜底：识别不出类型的百炼视频模型统一按「文生视频」，避免下拉落到裸 value 't2v'
+    return [t2v()]
   }
   if (provider === 'qwenwan') {
     if (model === '万相 2.7') {
@@ -265,11 +387,23 @@ export function uploadHint(provider: string, mode: string): string {
     }
     return map[mode] ?? '文生视频无需上传素材'
   }
+  if (provider === 'bailian') {
+    // 百炼各模式显式映射，避免默认「文生视频无需上传素材」误导用户
+    const map: Record<string, string> = {
+      text2video: '文生视频无需上传素材',
+      img2video: '图生视频需上传 1 张首帧图片',
+      first_last: '首尾帧生成需上传首帧和尾帧共 2 张图片',
+      multi_ref: '多参考模式最多上传 5 张参考图',
+    }
+    return map[mode] ?? '拖拽图片到此处，最多 5 张'
+  }
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'doubao' && mode === 'multi_ref') return '上传图片作为参考（最多 10 张）'
   if (mode === 'multi_ref') return '拖拽图片 / 视频到此处（多参考生成，最多 5 个）'
-  if (mode === 'img' || mode === 'first_last' || mode === 'first_frame') return '拖拽图片到此处，最多 5 张，或点击选择文件'
+  // 图生视频/首尾帧/首帧：提示需要图片素材
+  if (mode === 'img' || mode === 'img2video' || mode === 'first_last' || mode === 'first_frame')
+    return '拖拽图片到此处，最多 5 张，或点击选择文件'
   return '文生视频无需上传素材'
 }
 

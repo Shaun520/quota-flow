@@ -204,6 +204,14 @@ export interface GenerateRequest {
   images?: string[]
   /** 厂商 API 用的参考图公网 https URL（仅 API 型厂商上传） */
   imageUrls?: string[]
+  /** 参考生（r2v）本地视频参考副本：本地路径或公网 URL */
+  videos?: string[]
+  /** 参考生（r2v）公网 https 视频 URL 数组（bailian 合入 input.media reference_video） */
+  videoUrls?: string[]
+  /** 文生视频音频参考的公网 https URL（bailian 透传 input.audio_url） */
+  audioUrl?: string
+  /** 音频本地副本路径（历史回显/重新生成回填） */
+  audioLocalPath?: string
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -385,6 +393,7 @@ export interface DesktopApi {
   media: {
     getUrl: (name: string) => Promise<string>
     getImageUrl: (name: string) => Promise<string>
+    getRefVideoUrl: (name: string) => Promise<string>
     showInFolder: (filePath: string) => Promise<{ ok: boolean; error?: string }>
   }
   watermark: {
@@ -582,6 +591,7 @@ const api: DesktopApi = {
   media: {
     getUrl: (name) => ipcRenderer.invoke('media:get-url', name) as Promise<string>,
     getImageUrl: (name) => ipcRenderer.invoke('media:get-image-url', name) as Promise<string>,
+    getRefVideoUrl: (name) => ipcRenderer.invoke('media:get-ref-video-url', name) as Promise<string>,
     showInFolder: (filePath) =>
       ipcRenderer.invoke('media:show-in-folder', filePath) as Promise<{ ok: boolean; error?: string }>
   },
