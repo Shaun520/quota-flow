@@ -9,6 +9,7 @@ import { errMsg } from '../utils/error'
 import type { AuthUser } from '../hooks/useAuth'
 import type { TeamContext } from '@quota-flow/db-supabase'
 import type { VolcengineCapturedModel, BailianFreeTier } from '../../../preload'
+import type { TokenhubFreeVideoModel, TokenhubModelQuota } from '@quota-flow/providers'
 import desktopPackage from '../../../../package.json'
 
 export interface UpdaterStatusView {
@@ -675,6 +676,16 @@ export function AddProviderModal({
   const [bailianCookies, setBailianCookies] = useState<
     Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }> | null
   >(null)
+  // 腾讯云 TokenHub 主账号标识 uin：从控制台会话捕获，保存时并入 payload 作为账号级去重依据（免费积分按 Uin 共享）
+  const [tkhAccountId, setTkhAccountId] = useState<string | null>(null)
+  // 腾讯云 TokenHub 控制台登录 cookie：捕获时随负载持久化，供「进入官网」跨重启重建登录态
+  const [tkhCookies, setTkhCookies] = useState<
+    Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }> | null
+  >(null)
+  // 腾讯云 TokenHub 每模型免费额度：从控制台 DescribeModelEndpointList(VISION) 捕获，随负载持久化供「查看模型」展示
+  const [tkhModels, setTkhModels] = useState<
+    Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }> | null
+  >(null)
   const [apiKey, setApiKey] = useState('')
   const [accountName, setAccountName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -744,6 +755,7 @@ export function AddProviderModal({
     setVolcAccountId(null)
     setConsoleJwt(null)
     setVolcModels(null)
+    setTkhAccountId(null)
   }
 
   const saveEncrypted = async (
@@ -923,18 +935,28 @@ export function AddProviderModal({
       const trimmed = apiKey.trim()
       // 智谱 / 火山方舟 / 阿里云百炼：如有捕获的控制台会话令牌(consoleJwt)、账号标识(volcAccountId/bailianAccountId)
       // 或免费额度快照，并入结构化 payload，供主进程生成「账号级」去重指纹 + 账号级聚合额度展示
-      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian'
+      const isApiProvider =
+        providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian' || providerId === 'tokenhub'
       const isBailian = providerId === 'bailian'
+      const isTokenhub = providerId === 'tokenhub'
       const raw =
-        isApiProvider && (consoleJwt || volcAccountId || bailianAccountId || (providerId === 'volcengine' && volcModels?.length) || (isBailian && (bailianFreeTiers?.length || bailianCookies?.length)))
+        isApiProvider &&
+          (consoleJwt ||
+            volcAccountId ||
+            bailianAccountId ||
+            tkhAccountId ||
+            (providerId === 'volcengine' && volcModels?.length) ||
+            (isTokenhub && tkhModels?.length) ||
+            (isBailian && (bailianFreeTiers?.length || bailianCookies?.length)))
           ? JSON.stringify({
               v: 1,
               apiKey: trimmed,
               consoleJwt,
               accountId: isBailian ? bailianAccountId : volcAccountId,
-              models: providerId === 'volcengine' ? (volcModels ?? []) : undefined,
+              uin: isTokenhub ? (tkhAccountId ?? undefined) : undefined,
+              models: isTokenhub ? (tkhModels ?? undefined) : providerId === 'volcengine' ? (volcModels ?? []) : undefined,
               freeTiers: isBailian ? (bailianFreeTiers ?? undefined) : undefined,
-              cookies: isBailian ? (bailianCookies ?? undefined) : undefined
+              cookies: isBailian ? (bailianCookies ?? undefined) : isTokenhub ? (tkhCookies ?? undefined) : undefined
             })
           : trimmed
       const enc = await window.api.providers.encrypt(selected.providerId, raw)
@@ -995,21 +1017,27 @@ export function AddProviderModal({
       setBailianAccountId(null)
       setBailianFreeTiers(null)
       setBailianCookies(null)
+      setTkhAccountId(null)
+      setTkhCookies(null)
+      setTkhModels(null)
       let bindId: string | null = null
-      if (providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian') {
+      if (providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian' || providerId === 'tokenhub') {
         bindId = crypto.randomUUID()
         setLoginTempId(bindId)
       }
-      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian'
+      const isApiProvider = providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian' || providerId === 'tokenhub'
       const isBailian = providerId === 'bailian'
-      // 火山方舟 / 百炼走独立会话捕获入口（partition/注入与智谱隔离）
+      const isTokenhub = providerId === 'tokenhub'
+      // 火山方舟 / 百炼 / 腾讯云TokenHub 走独立会话捕获入口（partition/注入与智谱隔离）
       const apiRes =
         providerId === 'volcengine'
           ? await window.api.providers.captureVolcengineSession(bindId ?? undefined)
           : isBailian
             ? await window.api.providers.captureBailianSession(bindId ?? undefined)
-            : null
-      const finalRes: { ok: boolean; consoleJwt?: string; accountId?: string | null; models?: VolcengineCapturedModel[]; freeTiers?: BailianFreeTier[]; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; source?: 'console' | 'fallback'; error?: string } = apiRes
+            : isTokenhub
+              ? await window.api.providers.captureTokenhubSession(bindId ?? undefined)
+              : null
+      const finalRes: { ok: boolean; consoleJwt?: string; accountId?: string | null; uin?: string | null; models?: (VolcengineCapturedModel | (TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }))[]; freeTiers?: BailianFreeTier[]; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; source?: 'console' | 'fallback'; error?: string } = apiRes
         ?? (isApiProvider
           ? await window.api.providers.captureZhipuSession(bindId ?? undefined)
           : { ok: false, error: '该厂商不支持控制台会话捕获' })
@@ -1018,6 +1046,21 @@ export function AddProviderModal({
         if (finalRes.accountId) {
           if (isBailian) setBailianAccountId(finalRes.accountId)
           else setVolcAccountId(finalRes.accountId)
+        }
+        if (isTokenhub && finalRes.uin) {
+          setTkhAccountId(finalRes.uin)
+          setNotice(`已识别主账号（Uin ${finalRes.uin}），将以账号级去重绑定`)
+        }
+        // 「绑定即抓额度」：腾讯云 TokenHub 抓取每模型免费视频额度并随负载持久化，供「查看模型」按模型展示
+        if (isTokenhub && Array.isArray(finalRes.models) && finalRes.models.length > 0) {
+          const tkhModelsArr = finalRes.models as Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>
+          const withQuota = tkhModelsArr.filter((m) => m?.freeQuota && typeof m.freeQuota.remaining === 'number')
+          setTkhModels(tkhModelsArr)
+          setNotice(
+            withQuota.length
+              ? `已捕获每模型免费额度：${withQuota.length} 个模型有额度，可在「查看模型」查看`
+              : `已识别 ${finalRes.models.length} 个免费视频模型，暂未捕获到每模型额度`
+          )
         }
         // 「绑定即抓模型」：火山方舟在控制台页面抓到免费视频模型清单，提示用户并暂存随负载持久化
         if (providerId === 'volcengine' && Array.isArray(finalRes.models) && finalRes.models.length > 0) {
@@ -1035,6 +1078,14 @@ export function AddProviderModal({
         // 暂存百炼控制台登录 cookie：捕获成功即随负载持久化，供「进入官网」跨重启重建登录态
         if (isBailian && Array.isArray(finalRes.cookies) && finalRes.cookies.length > 0) {
           setBailianCookies(finalRes.cookies)
+        }
+        // 暂存腾讯云 TokenHub 控制台登录 cookie：捕获成功即随负载持久化，供「进入官网」跨重启重建登录态
+        if (isTokenhub && Array.isArray(finalRes.cookies) && finalRes.cookies.length > 0) {
+          setTkhCookies(finalRes.cookies)
+          setNotice(
+            finalRes.uin ? `已识别主账号（Uin ${finalRes.uin}），控制台登录态已保存，进入官网需重新登录时自动恢复`
+              : '腾讯云TokenHub 控制台登录态已保存'
+          )
         }
       } else if (finalRes.error) {
         setError(finalRes.error)
@@ -1355,7 +1406,7 @@ export function AddProviderModal({
               <button className="btn-sm" onClick={() => void testApiKeyInput()} disabled={saving}>
                 测试 API Key
               </button>
-              {(providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian') && (
+              {(providerId === 'zhipu' || providerId === 'volcengine' || providerId === 'bailian' || providerId === 'tokenhub') && (
                 <button className="btn-sm primary" onClick={() => void openGetApiKey()} disabled={saving}>
                   获取 API Key
                 </button>

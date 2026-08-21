@@ -26,7 +26,10 @@ import {
   volcengineGenBlocker,
   volcengineModelFreeStatus,
   volcGenTokenEstimate,
-  VOLC_DECOMMISSIONED_MODELS
+  VOLC_DECOMMISSIONED_MODELS,
+  decodeTokenhubPayload,
+  tokenhubFreeVideoModels,
+  tokenhubGenerateWithKey
 } from '@quota-flow/providers'
 import type { VolcengineFreeVideoModel, ZhipuGenerateOptions, BailianGenerateOptions, BailianFreeTierSlim } from '@quota-flow/providers'
 import { ipcMain, safeStorage } from 'electron'
@@ -475,13 +478,6 @@ function makeBailianBranch(): ApiGenerationBranch {
   }
 }
 
-/** 已注册的 API 生成分支（key = providerId） */
-export const API_BRANCHES: Record<string, ApiGenerationBranch> = {
-  zhipu: makeZhipuBranch(),
-  volcengine: makeVolcengineBranch(),
-  bailian: makeBailianBranch()
-}
-
 /** 火山方舟免费视频模型默认时长（未收录固定时长走通用档） */
 const VOLC_ENGINE_MODEL_DURATIONS = [5, 10]
 /** 火山免费视频模型统一支持文生 + 图生（Seedance 均有免费推理额度） */
@@ -604,6 +600,102 @@ function makeVolcengineBranch(): ApiGenerationBranch {
 
 let apiIpcRegistered = false
 
+/**
+ * 腾讯云 TokenHub 视频生成目录（静态兜底表）。四个免费视频模型积分费率/计费方式已实测官方（产品计费 1823/130055）。
+ * 时长档官方 OpenAI 兼容示例未给出（见计划 §4.3），先按项目默认档 [5] 作为 TEMP 兜底，待真实提交实测后修正。
+ */
+const TOKENHUB_MODELS = tokenhubFreeVideoModels()
+/** 各模型生成模式（FX 需「特效模板」参数，现调度台无模板选择器，暂不开放生成入口） */
+const TOKENHUB_MODEL_MODES: Record<string, Array<{ value: string; label: string }>> = {
+  'hy-video-1.5': [
+    { value: 'text2video', label: '文生视频' },
+    { value: 'img2video', label: '图生视频' }
+  ],
+  'yt-video-2.0': [{ value: 'img2video', label: '图生视频' }],
+  'yt-video-humanactor': [{ value: 'img2video', label: '图生视频' }],
+  'yt-video-fx': []
+}
+
+function makeTokenhubBranch(): ApiGenerationBranch {
+  return {
+    id: 'tokenhub',
+    displayName: '腾讯云TokenHub',
+    unitName: '积分',
+    parseCredentials(decrypted) {
+      try {
+        const { apiKey } = decodeTokenhubPayload(decrypted)
+        return apiKey ? { apiKey } : null
+      } catch {
+        return null
+      }
+    },
+    cost() {
+      // 本轮接入的均为免费视频模型，cost=0；本地账本不对 tokenhub 做原子扣减（Uin 级共享积分）
+      return 0
+    },
+    supportedDurations() {
+      // TEMP: 时长档待真实提交实测（计划 §4.3），先按项目默认档兜底
+      return [5]
+    },
+    async remaining() {
+      // Uin 级积分接口尚未实测（计划 §4.2），返回 null 表示「未知」，不做公开 API 实时查询
+      return null
+    },
+    preflight() {
+      // Uin 级积分未知时不做客户端硬拦截：免费额度耗尽由服务端拒绝（含 403 未领取），生成错误分类提示即可，
+      // 避免「额度未知→全拦死」导致无法生成（对齐百炼 bailian 的做法）。
+      return { ok: true }
+    },
+    catalog(perModelFreeQuota) {
+      return TOKENHUB_MODELS.map((m) => {
+        const isFx = m.id === 'yt-video-fx'
+        return {
+          model: m.id,
+          priceLabel: m.price,
+          cost: 0,
+          durations: m.durations?.length ? m.durations : [5],
+          size: null,
+          modes: TOKENHUB_MODEL_MODES[m.id] ?? [],
+          freeQuota: perModelFreeQuota?.[m.id],
+          ...(isFx ? { unavailable: 'no_endpoint' as const, unavailableLabel: '已识别免费模型，待模板选择器' } : {})
+        }
+      })
+    },
+    async generate(input, creds, params) {
+      if (params.mode !== 'text2video' && params.mode !== 'img2video') {
+        return { ok: false, error: '腾讯云TokenHub 当前仅支持文生视频 / 图生视频' }
+      }
+      const images = (params.images ?? []).filter((u) => /^https?:\/\//i.test(u))
+      if (params.mode === 'img2video' && images.length < 1) {
+        return { ok: false, error: '图生视频需要至少上传 1 张公网 HTTPS 图片' }
+      }
+      const r = await tokenhubGenerateWithKey(creds.apiKey, {
+        mode: params.mode,
+        model: params.model,
+        prompt: params.prompt,
+        images,
+        onProgress: params.onProgress
+      })
+      return {
+        ok: r.ok,
+        videoUrl: r.videoUrl,
+        coverImageUrl: r.coverImageUrl,
+        traceId: r.traceId,
+        error: r.error,
+        unavailable: r.unavailable
+      }
+    }
+  }
+}
+
+/** 已注册的 API 生成分支（key = providerId） */
+export const API_BRANCHES: Record<string, ApiGenerationBranch> = {
+  zhipu: makeZhipuBranch(),
+  volcengine: makeVolcengineBranch(),
+  bailian: makeBailianBranch(),
+  tokenhub: makeTokenhubBranch()
+}
+
 /** 注册 API 型厂商相关 IPC：provider:api-models（「查看模型」弹窗目录） */
 export function registerApiIpc(): void {
   if (apiIpcRegistered) return
@@ -656,6 +748,27 @@ export function registerApiIpc(): void {
           for (const m of models) {
             if (m?.id && m.freeQuota) perModelFreeQuota[m.id] = m.freeQuota
           }
+        }
+      } catch {}
+    }
+    // 腾讯云 TokenHub：优先读负载里绑定时捕获的每模型 freeQuota（DescribeModelEndpointList），
+    // 旧负载无 models 时回退到 Uin 级共享 points，对每个免费模型叠加展示
+    if (providerId === 'tokenhub' && typeof encrypted === 'string' && encrypted) {
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+        const payload = decodeTokenhubPayload(plain)
+        if (Array.isArray(payload.models)) {
+          const byId: Record<string, { remaining?: number; total?: number }> = {}
+          for (const m of payload.models) {
+            if (m?.id && m.freeQuota && typeof m.freeQuota.remaining === 'number') {
+              byId[m.id] = { remaining: m.freeQuota.remaining, total: m.freeQuota.total }
+            }
+          }
+          if (Object.keys(byId).length > 0) perModelFreeQuota = byId
+        } else if (payload.points && typeof payload.points.remaining === 'number') {
+          perModelFreeQuota = Object.fromEntries(
+            tokenhubFreeVideoModels().map((m) => [m.id, { remaining: payload.points!.remaining, total: payload.points!.total ?? 0 }])
+          )
         }
       } catch {}
     }
