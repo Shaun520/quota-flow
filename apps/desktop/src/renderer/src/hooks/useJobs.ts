@@ -102,6 +102,8 @@ function toJobItem(row: JobListItem): JobItem {
       watermarkBBox,
       watermarkBBoxes,
       params,
+      audioLocalPath: readString(row.audioLocalPath),
+      audioUrl: readString(row.audioUrl),
       images,
       errorMessage: row.error ?? null
     }

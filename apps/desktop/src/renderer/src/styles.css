@@ -1037,6 +1037,170 @@ body {
   color: var(--accent);
 }
 
+/* 参考生（r2v）参考视频上传区 */
+.upload-zone .upload-zone-label {
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.upload-zone .thumb-item.ref-video-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.upload-zone .thumb-item .thumb-play-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+/* 文生视频（bailian）音频参考上传区 */
+.audio-upload {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+.audio-upload .audio-zone {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 40px;
+  max-height: 56px;
+  padding: 5px 10px;
+  box-sizing: border-box;
+}
+
+/* 自定义深色音频播放器 —— 替换原生 <audio controls> 白底风格，与暗色主题统一 */
+.audio-player {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 14px;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  box-sizing: border-box;
+  box-shadow: var(--shadow-inset);
+  color: var(--fg);
+  font-size: 0.88em;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.audio-player:hover {
+  border-color: var(--accent);
+}
+
+/* 播放/暂停按钮 —— 圆形 accent 色，呼应主按钮配色 */
+.audio-play-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.audio-play-btn:hover {
+  transform: scale(1.06);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+}
+.audio-play-btn:active {
+  transform: scale(0.94);
+}
+.audio-play-btn.playing {
+  background: var(--accent);
+}
+
+/* 音频信息区：文件名 + 进度条 + 时间 */
+.audio-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.audio-info .audio-name {
+  flex: 0 0 auto;
+  max-width: 160px;
+  min-width: 0;
+  font-size: 0.92em;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audio-info .audio-progress {
+  flex: 1 1 auto;
+  min-width: 40px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  transition: height 0.15s ease;
+}
+.audio-info .audio-progress:hover {
+  height: 6px;
+}
+.audio-info .audio-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.1s linear;
+  min-width: 0;
+}
+.audio-info .audio-time {
+  flex: 0 0 auto;
+  font-size: 0.82em;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 移除按钮 —— 与播放器配色协调，hover 时变红 */
+.audio-remove-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+.audio-remove-btn:hover {
+  color: var(--error);
+  border-color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* 音频上传中动画：进度条脉冲效果 */
+@keyframes audio-loading {
+  0%   { margin-left: 0%;    width: 30%; }
+  50%  { margin-left: 35%;   width: 30%; }
+  100% { margin-left: 70%;   width: 30%; }
+}
+.audio-loading .audio-progress {
+  cursor: wait;
+}
+
   .generate-actions {
     display: flex;
     align-items: center;

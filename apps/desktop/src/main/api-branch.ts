@@ -16,6 +16,7 @@ import {
   decodeVolcenginePayload,
   decodeBailianPayload,
   isBailianVideoFreeModel,
+  bailianModelCap,
   bailianGenerateWithKey,
   bailianVideoImageCount,
   fetchZhipuQuota,
@@ -52,6 +53,10 @@ export interface ApiGenerateParams {
   prompt: string
   /** 图片 https URL（单图或数组，按模型能力透传 image_url） */
   images?: string[]
+  /** 参考生（r2v）视频 https URL 数组（bailian 等模型合入 input.media reference_video） */
+  videos?: string[]
+  /** 文生视频音频参考的 https URL（bailian 等模型透传 input.audio_url） */
+  audioUrl?: string
   durationSec: number
   /** 生成过程实时回调（限流重试等），供调度台推送 UI 提示 */
   onProgress?: (message: string) => void
@@ -343,7 +348,7 @@ const BAILIAN_VIDEO_MODELS: Array<{
     model: 'wan2.7-r2v-2026-06-12',
     type: 'r2v',
     free: true,
-    durations: [5],
+    durations: [5, 10],
     priceLabel: '免费',
     cost: 0,
     modes: [{ value: 'multi_ref', label: '参考生视频' }]
@@ -367,7 +372,8 @@ function makeBailianBranch(): ApiGenerationBranch {
       return BAILIAN_VIDEO_MODELS.find((m) => m.model === model)?.cost ?? 1
     },
     supportedDurations(model = 'wan2.7-t2v-2026-06-12') {
-      return BAILIAN_VIDEO_MODELS.find((m) => m.model === model)?.durations ?? [5]
+      // 时长档位以 bailianModelCap 的能力卡为准（含 r2v 参考生支持 5/10s），与「查看模型」目录口径一致
+      return bailianModelCap(model).durations
     },
     async remaining() {
       // 真实按次免费额度随账号 payload freeTiers 快照展示；此处返回 null 表示未知（不做公开 API 实时查询）。
@@ -385,14 +391,15 @@ function makeBailianBranch(): ApiGenerationBranch {
         const live = tiers.filter((t) => isBailianVideoFreeModel(t.model) && !t.expired)
         if (live.length > 0) {
           return live.map((t) => {
-            const meta = BAILIAN_VIDEO_MODELS.find((m) => m.model === t.model)
+            // 能力按官方命名归纳（文生/图生/参考/关键帧/检测/专用），免费额度项本身免费
+            const cap = bailianModelCap(t.model)
             return {
               model: t.model,
-              priceLabel: meta?.priceLabel ?? '免费',
-              cost: meta?.cost ?? 0,
-              durations: meta?.durations ?? [5],
+              priceLabel: '免费',
+              cost: 0,
+              durations: cap.durations,
               size: null,
-              modes: meta?.modes ?? [{ value: 'text2video', label: '文生视频' }],
+              modes: cap.modes,
               activated: true,
               freeQuota: { remaining: t.remaining, total: t.total }
             }
@@ -412,15 +419,24 @@ function makeBailianBranch(): ApiGenerationBranch {
     },
     async generate(input, creds, params) {
       const imgs = (params.images ?? []).filter((u) => /^https?:\/\//i.test(u))
+      const vids = (params.videos ?? []).filter((u) => /^https?:\/\//i.test(u))
       const needed = bailianVideoImageCount(params.mode)
-      if (needed > 0 && imgs.length < needed) {
+      // 参考生（multi_ref）：实测当前 r2v 快照 image.media[] 仅收图片格式、不收 mp4，
+      // 故需至少 1 张图片；不再允许仅上传视频（视频入口已从前端移除）。
+      const needOk =
+        params.mode === 'multi_ref'
+          ? imgs.length >= 1
+          : needed > 0
+            ? imgs.length >= needed
+            : true
+      if (!needOk) {
         return {
           ok: false,
           error:
             needed === 2
               ? '首尾帧生成需要上传首帧和尾帧共 2 张图片'
               : params.mode === 'multi_ref'
-                ? '参考生视频需要至少上传 1 张参考图'
+                ? '参考生视频需要至少上传 1 张参考图或参考视频'
                 : '图生视频需要至少上传 1 张首帧图片'
         }
       }
@@ -440,10 +456,12 @@ function makeBailianBranch(): ApiGenerationBranch {
         model: params.model,
         prompt,
         images: imgs,
+        videos: vids,
         durationSec: params.durationSec,
         resolution: input.resolution,
         ratio: input.ratio,
-        audio: input.audio === 'off' ? 'off' : 'on'
+        audio: input.audio === 'off' ? 'off' : 'on',
+        promptAudioUrl: params.audioUrl
       }
       const r = await bailianGenerateWithKey(creds.apiKey, opts, params.onProgress)
       return {
@@ -600,19 +618,24 @@ export function registerApiIpc(): void {
         const { freeTiers } = decodeBailianPayload(plain)
         const models: ApiModelInfo[] = (freeTiers ?? [])
           .filter((t) => isBailianVideoFreeModel(t.model) && !t.expired)
-          .map((t) => ({
-            model: t.model,
-            priceLabel: '免费',
-            cost: 0,
-            durations: [5],
-            size: null,
-            modes: [{ value: 'text2video', label: '文生视频' }],
-            activated: true,
-            freeQuota: {
-              remaining: t.remaining,
-              total: t.total
+          .map((t) => {
+            // 按模型名归纳实际能力（文生/图生/参考/关键帧/检测/专用），替换旧的「统一文生视频」口径
+            const cap = bailianModelCap(t.model)
+            return {
+              model: t.model,
+              priceLabel: '免费',
+              cost: 0,
+              durations: cap.durations,
+              size: null,
+              // direct 模型给出可选择模式；检测/专用模型 modes 为空，仅展示能力名（弹窗用 note 呈现）
+              modes: cap.modes,
+              activated: true,
+              ...(cap.direct
+                ? { freeQuota: { remaining: t.remaining, total: t.total } }
+                : {}),
+              ...(cap.direct ? {} : { unavailableLabel: cap.label, unavailable: 'no_endpoint' as const })
             }
-          }))
+          })
         return { ok: true, models }
       } catch {
         return { ok: false, error: '解析百炼免费额度失败' }

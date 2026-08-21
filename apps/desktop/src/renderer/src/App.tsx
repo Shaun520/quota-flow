@@ -190,7 +190,9 @@ function MainApp({
       audio: p?.audio ?? 'on',
       ratio: p?.ratio ?? '9:16',
       mode: p?.mode ?? 'text2video',
-      images: r.images ?? []
+      images: r.images ?? [],
+      audioLocalPath: r.audioLocalPath ?? null,
+      audioUrl: r.audioUrl ?? null
     })
     setTab('dispatch')
     location.hash = 'tab=dispatch'

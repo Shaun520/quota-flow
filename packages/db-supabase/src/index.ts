@@ -1015,7 +1015,12 @@ export interface JobListItem {
   ratio: string | null
   audio: string | null
   resolution: string | null
+  /** 文生视频音频参考的本地副本路径 / 公网 https URL（从 options 读取，重新生成回填用） */
+  audioLocalPath: string | null
+  audioUrl: string | null
   images: string[] | null
+  /** 参考生（r2v）参考视频的本地副本路径 / 公网 https URL（从 options 读取，重新生成回填用） */
+  videos: string[] | null
   status: JobStatus
   trace_id: string | null
   result_url: string | null
@@ -1093,7 +1098,7 @@ export class JobService {
     const to = from + pageSize - 1
     let builder = this.client
       .from('jobs')
-      .select('id, team_id, provider_id, mode, prompt, model:options->model, accountName:options->accountName, localPath:options->localPath, cleanLocalPath:options->cleanLocalPath, watermarkStatus:options->watermarkStatus, watermarkMethod:options->watermarkMethod, watermarkError:options->watermarkError, watermarkBBox:options->watermarkBBox, watermarkBBoxes:options->watermarkBBoxes, durationSec:options->durationSec, ratio:options->ratio, audio:options->audio, resolution:options->resolution, images:options->images, status, trace_id, result_url, error, cost_unit, cost_amount, created_at', { count: 'exact' })
+      .select('id, team_id, provider_id, mode, prompt, model:options->model, accountName:options->accountName, localPath:options->localPath, cleanLocalPath:options->cleanLocalPath, watermarkStatus:options->watermarkStatus, watermarkMethod:options->watermarkMethod, watermarkError:options->watermarkError, watermarkBBox:options->watermarkBBox, watermarkBBoxes:options->watermarkBBoxes, durationSec:options->durationSec, ratio:options->ratio, audio:options->audio, resolution:options->resolution, audioLocalPath:options->audioLocalPath, audioUrl:options->audioUrl, images:options->images, videos:options->videos, status, trace_id, result_url, error, cost_unit, cost_amount, created_at', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
     const search = query.search?.trim()

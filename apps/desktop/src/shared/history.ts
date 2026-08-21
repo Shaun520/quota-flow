@@ -42,6 +42,10 @@ export interface JobRecord {
   watermarkBBoxes: WatermarkBBox[] | null
   /** 生成参数（模式/时长/比例/配音/分辨率），无记录时为 null */
   params: { mode?: string; durationSec?: number; ratio?: string; audio?: string; resolution?: string } | null
+  /** 文生视频音频参考的本地副本路径（历史回显/重新生成回填时重传取新 URL） */
+  audioLocalPath?: string | null
+  /** 文生视频音频参考的公网 https URL（旧记录兼容） */
+  audioUrl?: string | null
   /** 上传的本地图片副本路径（userData/images/<jobId>-<n>.<ext>），无图片时为空数组 */
   images: string[]
   errorMessage: string | null

@@ -184,6 +184,9 @@ export function parseBailianFreeTierPayload(
   const arr = deepFindFreeTierQuotas(json);
   if (!arr || arr.length === 0) return null;
   const out: BailianFreeTierSlim[] = [];
+  // 同一模型可能因业务空间分区/缓存拼接出现多条快照；按 model 归一化去重，
+  // 同模型只保留「有效额度（remaining 大者）」的一条，避免聚合时把同一模型重复累加（表现为额度翻倍）。
+  const byModel = new Map<string, BailianFreeTierSlim>();
   for (const it of arr) {
     const model = String(it.model ?? it.Model ?? "");
     if (!model) continue;
@@ -193,29 +196,46 @@ export function parseBailianFreeTierPayload(
     const expiredAtMs = expiredAtMsRaw > 0 ? expiredAtMsRaw : null;
     const status = String(it.quotaStatus ?? it.status ?? (remaining > 0 ? "VALID" : "UNKNOWN"));
     const expired = expiredAtMs !== null ? expiredAtMs <= nowMs : remaining <= 0;
-    out.push({
-      model,
-      total,
-      remaining,
-      expired,
-      expiredAtMs,
-      status,
-    });
+    const slim: BailianFreeTierSlim = { model, total, remaining, expired, expiredAtMs, status };
+    const prev = byModel.get(model);
+    if (!prev) { byModel.set(model, slim); continue; }
+    // 同模型多快照：优先取「未过期且有效额度」的一条，其次取剩余更多者
+    const keep =
+      slim.expired && !prev.expired ? prev
+      : !slim.expired && prev.expired ? slim
+      : slim.remaining > prev.remaining ? slim
+      : prev;
+    byModel.set(model, keep);
   }
+  for (const slim of byModel.values()) out.push(slim);
   return out.length > 0 ? out : null;
 }
 
-/** 账号级聚合：把多模型免费额度汇总为单一「剩余/总量」，供账号明细口径展示。 */
+/** 账号级聚合：把多模型免费额度汇总为单一「剩余/总量」，供账号明细口径展示。
+ *  聚合前按 model 归一化去重（同一模型多快照只取价值最合适的一条），避免重复快照被累加导致额度翻倍。
+ */
 export function aggregateBailianFreeQuota(
   tiers: BailianFreeTierSlim[] | null | undefined,
 ): BailianFreeQuota {
   if (!tiers || tiers.length === 0) {
     return { available: false, remaining: 0, total: 0, expired: false };
   }
+  // 同模型取「未过期优先、其次剩余更大」的一条
+  const dedup = new Map<string, BailianFreeTierSlim>();
+  for (const t of tiers) {
+    const prev = dedup.get(t.model);
+    if (!prev) { dedup.set(t.model, t); continue; }
+    const keep =
+      t.expired && !prev.expired ? prev
+      : !t.expired && prev.expired ? t
+      : t.remaining > prev.remaining ? t
+      : prev;
+    dedup.set(t.model, keep);
+  }
   let total = 0;
   let remaining = 0;
   let expired = false;
-  for (const t of tiers) {
+  for (const t of dedup.values()) {
     total += t.total;
     remaining += Math.max(0, t.remaining);
     if (t.expired) expired = true;
@@ -245,6 +265,141 @@ export const BAILIAN_VIDEO_SYNTH_BASE_URL =
 
 /** 视频生成模型类型枚举。 */
 export type BailianVideoMode = "text2video" | "img2video" | "first_last" | "multi_ref";
+
+/**
+ * 单一模型的能力元数据（按官方视频生成文档 + 控制台实测命名归纳，属稳定元数据，可入常量）。
+ * kind：t2v 文生 / i2v 图生(首帧含首尾帧) / r2v 参考生 / kf2v 关键帧生 / detect 检测 / special 专用。
+ * direct=false 表示该模型是检测/专用模型（需要专属输入或前置），不能复用现有 4 模式直接生成，仅做展示标注。
+ */
+export interface BailianModelCap {
+  kind: "t2v" | "i2v" | "r2v" | "kf2v" | "detect" | "special";
+  /** 能力展示名 */
+  label: string;
+  /** 官方能力卡声明的输入模态（Text/Image/Video/Audio） */
+  input: string[];
+  /** 官方能力卡声明的输出模态（Video/Audio 等） */
+  output: string[];
+  /** 可选的生成模式（按需取子集；detect/special 可能为空，仅展示） */
+  modes: Array<{ value: BailianVideoMode; label: string }>;
+  /** 支持时长档位（秒） */
+  durations: number[];
+  /** 分辨率（API 写法，720P/1080P） */
+  resolutions: string[];
+  /** 是否可直接复用现有生成链路。false 时不做生成入口，仅展示能力 */
+  direct: boolean;
+}
+
+/** 单个模型的模式标签（用于模式下拉选项）。 */
+export const BAILIAN_MODE_T2V = { value: "text2video" as BailianVideoMode, label: "文生视频" };
+export const BAILIAN_MODE_I2V = { value: "img2video" as BailianVideoMode, label: "图生视频(首帧)" };
+export const BAILIAN_MODE_FIRST_LAST = {
+  value: "first_last" as BailianVideoMode,
+  label: "首尾帧生成"
+};
+export const BAILIAN_MODE_REF = { value: "multi_ref" as BailianVideoMode, label: "参考生视频" };
+
+const BAILIAN_CAP_RES = ['720P', '1080P'];
+const BAILIAN_CAP_DEFAULT_DUR = [5, 10];
+
+/**
+ * 按模型名逐一核实的能力卡（来源：阿里云百炼官网 help.aliyun.com/zh/model-studio/<模型> 的「模型能力/输入模态」表，
+ * 更新时间 2026-07~08，属稳定元数据，可入常量）。
+ *
+ * 关键：同名家族的不同快照版本，输入模态会因快照而异（如 wan2.7-t2v=Audio+Text，而其 2026-06-12 快照=Text+Image），
+ * 因此不能仅凭 t2v/i2v 命名段猜能力，必须逐模型对照官方「输入模态/输出模态」。
+ */
+const BAILIAN_VERIFIED_CAP: Record<string, Omit<BailianModelCap, 'resolutions'>> = {
+  // ---- wan2.7 ----
+  // 注：wan2.7-t2v-2026-06-12 官方能力卡标注 Text+Image，但其文生视频 SDK 示例同样使用 input.audio_url（官方文档确认），
+  // 故 Audio 一并纳入。Image 为能力卡声明但 HTTP 文生视频 API 无图片传参字段，实际下发仅走 audio_url，图片不误发。
+  'wan2.7-t2v': { kind: 't2v', label: '文生视频', input: ['Audio', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.7-t2v-2026-04-25': { kind: 't2v', label: '文生视频', input: ['Audio', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.7-t2v-2026-06-12': { kind: 't2v', label: '文生视频（支持音频参考）', input: ['Audio', 'Text', 'Image'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.7-i2v': { kind: 'i2v', label: '图生视频', input: ['Audio', 'Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V, BAILIAN_MODE_FIRST_LAST], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.7-i2v-2026-04-25': { kind: 'i2v', label: '图生视频', input: ['Audio', 'Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V, BAILIAN_MODE_FIRST_LAST], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.7-r2v': { kind: 'r2v', label: '参考生视频', input: ['Audio', 'Image', 'Text', 'Video'], output: ['Video'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.7-r2v-2026-06-12': { kind: 'r2v', label: '参考生视频', input: ['Text', 'Image', 'Video', 'Audio'], output: ['Video'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  // ---- wan2.6 ----
+  'wan2.6-t2v': { kind: 't2v', label: '文生视频', input: ['Text', 'Audio'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_T2V], durations: [5, 10, 15], direct: true },
+  // wan2.6 图生视频官方归属「图生视频-基于首帧」（仅首帧，不做首尾帧），故只暴露 i2v 模式
+  'wan2.6-i2v': { kind: 'i2v', label: '图生视频(首帧)', input: ['Text', 'Image', 'Audio'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_I2V], durations: [5, 10, 15], direct: true },
+  'wan2.6-i2v-flash': { kind: 'i2v', label: '图生视频(首帧)', input: ['Text', 'Image', 'Audio'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_I2V], durations: [5, 10, 15], direct: true },
+  'wan2.6-r2v': { kind: 'r2v', label: '参考生视频', input: ['Image', 'Video', 'Text'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'wan2.6-r2v-flash': { kind: 'r2v', label: '参考生视频', input: ['Image', 'Video', 'Text'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  // ---- wan2.5 ----
+  'wan2.5-t2v-preview': { kind: 't2v', label: '文生视频', input: ['Text', 'Audio'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_T2V], durations: [5, 10], direct: true },
+  'wan2.5-i2v-preview': { kind: 'i2v', label: '图生视频(首帧)', input: ['Text', 'Image', 'Audio'], output: ['Video', 'Audio'], modes: [BAILIAN_MODE_I2V], durations: [5, 10], direct: true },
+  // ---- wan2.2（官方固定 5s；图生仅首帧，kf2v 为首尾帧）----
+  'wan2.2-t2v-plus': { kind: 't2v', label: '文生视频', input: ['Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: [5], direct: true },
+  'wan2.2-i2v-plus': { kind: 'i2v', label: '图生视频(首帧)', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V], durations: [5], direct: true },
+  'wan2.2-i2v-flash': { kind: 'i2v', label: '图生视频(首帧)', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V], durations: [5], direct: true },
+  'wan2.2-kf2v-flash': { kind: 'kf2v', label: '首尾帧生成', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_FIRST_LAST], durations: [5], direct: true },
+  // ---- wanx2.1（官方固定 5s；i2v-turbo 为 3/4/5s，因 UI 长档仅 5/10/15 与 5s 档，统一按 5s 可选）----
+  'wanx2.1-t2v-plus': { kind: 't2v', label: '文生视频', input: ['Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: [5], direct: true },
+  'wanx2.1-t2v-turbo': { kind: 't2v', label: '文生视频', input: ['Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: [5], direct: true },
+  'wanx2.1-i2v-plus': { kind: 'i2v', label: '图生视频(首帧)', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V], durations: [5], direct: true },
+  'wanx2.1-i2v-turbo': { kind: 'i2v', label: '图生视频(首帧)', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V], durations: [5], direct: true },
+  'wanx2.1-kf2v-plus': { kind: 'kf2v', label: '首尾帧生成', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_FIRST_LAST], durations: [5], direct: true },
+  // ---- happyhorse ----
+  'happyhorse-1.0-t2v': { kind: 't2v', label: '文生视频', input: ['Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'happyhorse-1.1-t2v': { kind: 't2v', label: '文生视频', input: ['Text'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'happyhorse-1.0-i2v': { kind: 'i2v', label: '图生视频', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'happyhorse-1.1-i2v': { kind: 'i2v', label: '图生视频', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_I2V], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'happyhorse-1.0-r2v': { kind: 'r2v', label: '参考生视频', input: ['Image', 'Video', 'Text', 'Audio'], output: ['Video'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  'happyhorse-1.1-r2v': { kind: 'r2v', label: '参考生视频', input: ['Image', 'Video', 'Text', 'Audio'], output: ['Video'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, direct: true },
+  // ---- 对口型 / 数字人 / 动作驱动 / 检测（专用，不可直接生成）----
+  'videoretalk': { kind: 'special', label: '视频口型替换·声动人像（人物视频+人声音频）', input: ['Video', 'Audio'], output: ['Video'], modes: [], durations: [5, 10], direct: false },
+  'liveportrait': { kind: 'special', label: '图生播报·灵动人像（肖像图片+人声音频）', input: ['Image', 'Audio'], output: ['Video'], modes: [], durations: [5, 10], direct: false },
+  'liveportrait-detect': { kind: 'detect', label: '灵动人像·图片合规检测（前置检测）', input: ['Image'], output: ['判定结果'], modes: [], durations: [5], direct: false },
+  'animate-anyone-gen2': { kind: 'special', label: '舞动人像动作视频(人物图片+动作模板ID)', input: ['Image'], output: ['Video'], modes: [], durations: [5], direct: false },
+  'animate-anyone-template-gen2': { kind: 'special', label: '舞动人像·动作模板提取（从其成视频）', input: ['Video'], output: ['模板ID'], modes: [], durations: [5], direct: false },
+  'animate-anyone-detect-gen2': { kind: 'detect', label: '舞动人像·图片合规检测（前置检测）', input: ['Image'], output: ['判定结果'], modes: [], durations: [5], direct: false }
+};
+
+/**
+ * 按模型名归纳能力（官方能力卡实测 + 命名段兜底）。
+ * 先精确匹配 BAILIAN_VERIFIED_CAP（逐模型对照官方输入/输出模态，准确）；未收录的模型再按 t2v/i2v/r2v/kf2v 命名段回溯。
+ */
+export function bailianModelCap(model: string): BailianModelCap {
+  const m = (model || '').trim();
+  const lower = m.toLowerCase();
+
+  const verified = BAILIAN_VERIFIED_CAP[m];
+  if (verified) {
+    return { ...verified, resolutions: BAILIAN_CAP_RES };
+  }
+
+  // ---- 命名段兜底（未收录模型；能力可能随版本演进，尽可能走上面精确表）----
+  if (/(^|[_-])detect([_-]|$)/.test(lower) || /-detect\b|detection/i.test(lower)) {
+    return { kind: 'detect', label: '检测/预处理模型（不可直接生成，需配套主模型）', input: ['Image'], output: ['判定结果'], modes: [], durations: [5], resolutions: BAILIAN_CAP_RES, direct: false };
+  }
+  if (/videoretalk/i.test(lower)) {
+    return { kind: 'special', label: '视频口型替换·声动人像（人物视频+人声音频）', input: ['Video', 'Audio'], output: ['Video'], modes: [], durations: [5, 10], resolutions: BAILIAN_CAP_RES, direct: false };
+  }
+  if (/liveportrait/i.test(lower)) {
+    return { kind: 'special', label: '图生播报·灵动人像（肖像图片+人声音频）', input: ['Image', 'Audio'], output: ['Video'], modes: [], durations: [5, 10], resolutions: BAILIAN_CAP_RES, direct: false };
+  }
+  if (/animate-anyone|^animate-/i.test(lower)) {
+    return { kind: 'special', label: '舞动人像 AnimateAnyone（需配套 detect/template 前置）', input: ['Image', 'Video'], output: ['Video'], modes: [], durations: [5], resolutions: BAILIAN_CAP_RES, direct: false };
+  }
+
+  // 标准视频生成模型（未逐个核实，按官方命名段回溯）
+  if (/(^|[_-])r2v([_-]|$)/i.test(lower)) {
+    return { kind: 'r2v', label: '参考生视频', input: ['Image', 'Video', 'Text', 'Audio'], output: ['Video'], modes: [BAILIAN_MODE_REF], durations: BAILIAN_CAP_DEFAULT_DUR, resolutions: BAILIAN_CAP_RES, direct: true };
+  }
+  if (/(^|[_-])kf2v([_-]|$)/i.test(lower)) {
+    return { kind: 'kf2v', label: '首尾帧生成', input: ['Image', 'Text'], output: ['Video'], modes: [BAILIAN_MODE_FIRST_LAST], durations: BAILIAN_CAP_DEFAULT_DUR, resolutions: BAILIAN_CAP_RES, direct: true };
+  }
+  if (/(^|[_-])i2v([_-]|$)/i.test(lower)) {
+    return { kind: 'i2v', label: '图生视频', input: ['Image', 'Text', 'Audio'], output: ['Video'], modes: [BAILIAN_MODE_I2V, BAILIAN_MODE_FIRST_LAST], durations: BAILIAN_CAP_DEFAULT_DUR, resolutions: BAILIAN_CAP_RES, direct: true };
+  }
+  if (/(^|[_-])t2v([_-]|$)/i.test(lower)) {
+    return { kind: 't2v', label: '文生视频', input: ['Text', 'Audio'], output: ['Video'], modes: [BAILIAN_MODE_T2V], durations: BAILIAN_CAP_DEFAULT_DUR, resolutions: BAILIAN_CAP_RES, direct: true };
+  }
+
+  // 兜底：未识别类型的视频模型，仅展示、不可直接生成
+  return { kind: 'special', label: '视频模型（模式未识别）', input: ['Text'], output: ['Video'], modes: [], durations: [5], resolutions: BAILIAN_CAP_RES, direct: false };
+}
 
 /** 生成模式 → 单元统一值（0=文生, 1=图生首帧, 2=首尾帧；参考映射到图生/参考语义） */
 export function bailianVideoImageCount(mode: BailianVideoMode): number {
@@ -282,6 +437,8 @@ export interface BailianGenerateOptions {
   prompt?: string;
   /** 图生/首尾/参考：公网 https 图片 URL 数组（首帧 1 / 首尾 2 / 参考 1+） */
   images?: string[];
+  /** 参考生（r2v）：公网 https 视频 URL 数组，与 images 合入 input.media[]（reference_video） */
+  videos?: string[];
   /** 视频时长（秒，整数） */
   durationSec?: number;
   /** 分辨率：'720' | '1080'（调度台写法），落 API 时映射为 '720P' / '1080P' */
@@ -320,7 +477,10 @@ export async function bailianGenerateWithKey(
   const { mode, model } = opts;
   const imgs = (opts.images ?? []).filter((u) => /^https?:\/\//i.test(String(u).trim()));
   const need = bailianVideoImageCount(mode);
-  if (need > 0 && imgs.length < need) {
+  // 参考生（multi_ref）：实测当前 r2v 快照 media[] 仅收图片、不收 mp4，故按图片数校验（至少 1 张）；其余模式按图片数校验
+  const needOk =
+    mode === "multi_ref" ? imgs.length >= 1 : need > 0 ? imgs.length >= need : true;
+  if (!needOk) {
     return {
       ok: false,
       model,
@@ -328,7 +488,7 @@ export async function bailianGenerateWithKey(
         need === 2
           ? "首尾帧生成需要上传首帧和尾帧共 2 张图片"
           : mode === "multi_ref"
-            ? "参考生视频需要至少上传 1 张参考图"
+            ? "参考生视频需要至少上传 1 张参考图或参考视频"
             : "图生视频需要至少上传 1 张首帧图片",
     };
   }
@@ -340,7 +500,24 @@ export async function bailianGenerateWithKey(
     input["img_url"] = imgs[0];
     input["img2_url"] = imgs[1];
   }
-  if (mode === "multi_ref" && imgs.length >= 1) input["img_url"] = imgs[0];
+  // 参考生（r2v）：官方「参考生视频 API 参考」确认使用 input.media[]（公网 http/https）。
+  // 实测（2026-08-21）：当前账号/地域的 r2v 快照，其 media[].type 只接受 "reference_image"，
+  // 且媒体内容仅支持图片格式（jpeg/jpg/png/bmp/webp），不接受 mp4 视频
+  // （传视频/标 reference_video 均报错，见 bailianModelInputs 注释）。故此处仅按图片组装。
+  // 图片合计 ≤5；与图片类 img_url（仅 i2v 首帧字段）不同，r2v 不得沿用 img_url。
+  if (mode === "multi_ref" && imgs.length > 0) {
+    const media = imgs
+      .slice(0, 5)
+      .map((url) => ({ type: "reference_image" as const, url }));
+    if (media.length > 0) input["media"] = media;
+  }
+
+  // 文生视频支持音频参考：官方「万相2.7-文生视频 API 参考」确认 input.audio_url（公网 http/https）。
+  // 仅当模型能力含 Audio 且传入合法 https URL 时才下发，避免对不支持音频的模型发出无效传参。
+  if (mode === "text2video" && bailianModelCap(model).input.includes("Audio")) {
+    const audioUrl = (opts.promptAudioUrl ?? "").trim();
+    if (/^https?:\/\//i.test(audioUrl)) input["audio_url"] = audioUrl;
+  }
 
   const parameters: Record<string, unknown> = {};
   const resMap: Record<string, string> = { "720": "720P", "1080": "1080P" };
@@ -498,9 +675,10 @@ export async function pollBailianTask(
       };
     }
     if (isFail(uuidStatus)) {
-      const reasonRaw = output["message"] ?? data["message"] ?? output["error"] ?? data["error"] ?? uuidStatus;
+      const rawMsg = String(output["message"] ?? data["message"] ?? output["error"] ?? data["error"] ?? "");
+      const userMsg = translateBailianFailMessage(rawMsg);
       genLog(`terminal fail status=${uuidStatus}`, data);
-      return { ok: false, model, error: `阿里云百炼任务${String(reasonRaw)}` };
+      return { ok: false, model, error: userMsg };
     }
     if (polls >= BAILIAN_POLL_MAX) {
       return { ok: false, model, error: `阿里云百炼任务轮询超时（约 ${Math.round((Date.now() - startedAt) / 1000)} 秒）` };
@@ -530,4 +708,53 @@ export async function testBailianApiKey(
   } catch {
     return { ok: false, error: "校验失败（网络错误或超时）" };
   }
+}
+
+/** 将阿里云百炼任务失败消息翻译为用户可读的中文提示。
+ *  仅覆盖常见/高频业务错误，其余回退为精简版原始信息。
+ */
+function translateBailianFailMessage(raw: string): string {
+  if (!raw) return "阿里云百炼任务失败（未知原因）";
+  const msg = raw.trim();
+
+  // 参考音频时长超限（t2v 场景最常见）
+  if (/duration.*at most 30s|duration.*should be at most 30|audio.*duration.*30/i.test(msg)) {
+    const m = msg.match(/got ([\d.]+)s?/i);
+    const got = m ? `（当前 ${m[1]}s）` : "";
+    return `参考音频时长需 ≤ 30 秒${got}，请裁剪后重试`;
+  }
+  // 图片格式/尺寸不支持
+  if (/format.*not supported|image.*format/i.test(msg)) {
+    return "图片格式或尺寸不符合要求（支持 jpg/png/bmp/webp，单边 ≤ 8000px）";
+  }
+  if (/image.*resolution|resolution.*invalid|image.*size.*exceed/i.test(msg)) {
+    return "图片分辨率或大小不符合要求（单边 240–8000px，≤20MB）";
+  }
+  // 视频格式/时长问题
+  if (/video.*duration|video.*format|mp4.*not supported/i.test(msg)) {
+    return "视频文件格式或时长不符合要求（支持 mp4/mov，时长 1–30s）";
+  }
+  // 图片数量/总数超限
+  if (/at most \d+.*images|exceed.*\d+.*images|total.*exceed/i.test(msg)) {
+    return "参考图片数量超出限制（最多 5 张）";
+  }
+  // 角色/主体超限
+  if (/at most \d+.*characters|exceed.*character|too many.*character/i.test(msg)) {
+    return "参考主体数量超出限制（每个参考素材建议只包含单一主体）";
+  }
+  // 免费额度用尽
+  if (/quota|allocation|free.*tier|exhaust/i.test(msg)) {
+    return "免费额度已用完，请更换账号或等待次日额度刷新";
+  }
+  // Prompt 问题
+  if (/prompt.*length|prompt.*exceed|prompt.*too long/i.test(msg)) {
+    return "提示词过长（上限 5000 字符），请精简后重试";
+  }
+  // URL 无法访问
+  if (/url.*invalid|url.*not.*accessible|url.*error|cannot.*download/i.test(msg)) {
+    return "素材 URL 无法被厂商访问（需为公网 https 链接，建议使用 CDN）";
+  }
+  // 回退：去掉 URL 等干扰信息，保留核心
+  const clean = msg.replace(/https?:\/\/\S+/gi, "[URL]");
+  return `阿里云百炼任务失败：${clean}`;
 }

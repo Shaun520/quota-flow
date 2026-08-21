@@ -1395,6 +1395,8 @@ export async function captureZhipuConsoleSession(opts?: {
   })()`
 
   const inject = (): void => {
+    // 定时器可能迟于窗口关闭触发：销毁后跳过，避免主进程 uncaught
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
     void win.webContents.executeJavaScript(INJECT).catch(() => {})
   }
   win.webContents.on('did-finish-load', () => {
@@ -2002,6 +2004,8 @@ export async function captureVolcEngineConsoleSession(opts?: {
   })()`
 
   const inject = (): void => {
+    // 定时器可能迟于窗口关闭触发：销毁后跳过，避免主进程 uncaught
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
     void win.webContents.executeJavaScript(INJECT).catch(() => {})
   }
   win.webContents.on('did-finish-load', () => {
@@ -2536,6 +2540,8 @@ export async function captureBailianConsoleSession(opts?: {
     scanStorage();
   })()`
   const injectCap = (): void => {
+    // 定时器可能迟于捕获窗口关闭触发：销毁后跳过，避免主进程 uncaught
+    if (capWin.isDestroyed() || capWin.webContents.isDestroyed()) return
     void capWin.webContents.executeJavaScript(CAPTURE_INJECT).catch(() => {})
   }
   capWin.webContents.on('did-finish-load', () => {
@@ -2572,11 +2578,14 @@ export async function captureBailianConsoleSession(opts?: {
     document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
     document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
   })()`
-  const injectUI = (): void => {
-    void win.webContents.executeJavaScript(UI_INJECT).catch(() => {})
-  }
+
   win.webContents.on('did-finish-load', () => {
-    setTimeout(injectUI, 500)
+    // 注入延后于加载完成执行，但定时器可能迟于窗口关闭触发：
+    // webContents 已销毁时直接跳过，避免主进程 uncaught（Object has been destroyed）报错
+    setTimeout(() => {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return
+      void win.webContents.executeJavaScript(UI_INJECT).catch(() => {})
+    }, 500)
   })
 
   return new Promise<{
