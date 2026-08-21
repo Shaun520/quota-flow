@@ -11,7 +11,8 @@ export const PROVIDER_LABEL: Record<string, string> = {
   hailuo: '海螺',
   zhipu: '智谱（bigmodel）',
   volcengine: '火山方舟',
-  bailian: '阿里云百炼'
+  bailian: '阿里云百炼',
+  tokenhub: '腾讯云TokenHub'
 }
 
 export const MODELS: Record<string, string[]> = {
@@ -193,6 +194,41 @@ export function bailianModelInputs(model: string): string[] {
   }
 }
 
+/**
+ * 腾讯云 TokenHub 免费视频模型展示价格（与主进程 api-branch.tokenhubFreeVideoModels 保持一致）。
+ * 来源：官方产品计费页实测（四模型积分费率/计费方式）。
+ */
+export const TKH_MODEL_PRICE: Record<string, string> = {
+  'hy-video-1.5': '1.5 积分/次',
+  'yt-video-2.0': '2 积分/次起（480p）',
+  'yt-video-humanactor': '1 积分/秒（720p）',
+  'yt-video-fx': '按模板积分'
+}
+
+/** 腾讯云 TokenHub 各模型固定生成时长（秒）；官方 OpenAI 兼容示例未给出，先按项目默认档 [5] TEMP 兜底，待真实提交实测修正 */
+export const TKH_MODEL_DURATIONS: Record<string, number[]> = {
+  'hy-video-1.5': [5],
+  'yt-video-2.0': [5],
+  'yt-video-humanactor': [5],
+  'yt-video-fx': [5]
+}
+
+/** 腾讯云 TokenHub 按模型取有效时长；未收录模型回退默认档 */
+export function tkhModelDurations(model: string): number[] {
+  return TKH_MODEL_DURATIONS[model ?? ''] ?? DEFAULT_SUPPORTED_DURATIONS
+}
+
+/** 腾讯云 TokenHub 各模型可用的生成模式（与主进程 api-branch.TOKENHUB_MODEL_MODES 口径一致） */
+const TKH_MODEL_MODES: Record<string, Array<{ value: string; label: string }>> = {
+  'hy-video-1.5': [
+    { value: 'text2video', label: '文生视频' },
+    { value: 'img2video', label: '图生视频' }
+  ],
+  'yt-video-2.0': [{ value: 'img2video', label: '图生视频' }],
+  'yt-video-humanactor': [{ value: 'img2video', label: '图生视频' }],
+  'yt-video-fx': []
+}
+
 export interface DurationOption {
   value: number
   label: string
@@ -279,6 +315,10 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
   }
   if (provider === 'dola') {
     return [{ value: 'multi_ref', label: '多参考生成' }]
+  }
+  if (provider === 'tokenhub') {
+    // 腾讯云 TokenHub 各模型模式与主进程 TOKENHUB_MODEL_MODES 一致；FX 待模板选择器，暂无入口
+    return TKH_MODEL_MODES[model ?? ''] ?? []
   }
   return [
     { value: 't2v', label: '文生视频' },
@@ -399,6 +439,13 @@ export function uploadHint(provider: string, mode: string): string {
   }
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
+  if (provider === 'tokenhub') {
+    const map: Record<string, string> = {
+      img2video: '图生视频需上传 1 张公网 HTTPS 图片',
+      text2video: '文生视频无需上传素材'
+    }
+    return map[mode] ?? '文生视频无需上传素材'
+  }
   if (provider === 'doubao' && mode === 'multi_ref') return '上传图片作为参考（最多 10 张）'
   if (mode === 'multi_ref') return '拖拽图片 / 视频到此处（多参考生成，最多 5 个）'
   // 图生视频/首尾帧/首帧：提示需要图片素材
@@ -441,6 +488,10 @@ export function computeCost(
   }
   if (provider === 'dola') {
     return { text: 1 + d + ' 点', who: model + ' · ' + duration + 's' }
+  }
+  if (provider === 'tokenhub') {
+    const price = TKH_MODEL_PRICE[model] ?? '免费'
+    return { text: price, who: model + ' · ' + duration + 's' }
   }
   return { text: '1 次', who: (PROVIDER_LABEL[provider] ?? provider) + ' 执行' }
 }

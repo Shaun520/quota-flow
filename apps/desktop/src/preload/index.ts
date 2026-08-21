@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
+import type { TokenhubFreeVideoModel, TokenhubModelQuota } from '@quota-flow/providers'
 
 export type ProviderId = 'yuanbao' | 'qwenwan'
 
@@ -109,6 +110,8 @@ export interface QuotaUpdatedPayload {
   volcRefreshKeyId?: string
   /** 阿里云百炼生成成功后触发：据此静默重抓该账号控制台最新免费额度 */
   bailianRefreshKeyId?: string
+  /** 腾讯云 TokenHub 生成成功后触发：据此刷新该账号额度（本轮未实测积分接口，预留钩子） */
+  tokenhubRefreshKeyId?: string
 }
 
 /** 智谱平台资源包余额（fetch-quota 返回） */
@@ -299,7 +302,12 @@ export interface DesktopApi {
      * 捕获阿里云百炼控制台登录会话：账号 PK + 免费额度整表快照（解析为归一化条目）
      * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
      */
-    captureBailianSession: (keyId?: string) => Promise<{ ok: boolean; accountId?: string | null; freeTiers?: BailianFreeTier[]; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; error?: string }>
+    captureBailianSession: (keyId?: string) => Promise<{ ok: boolean; accountId?: string | null; freeTiers?: BailianFreeTier[]; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; error?: string }>,
+    /**
+     * 捕获腾讯云 TokenHub 控制台会话：主账号标识 uin（账号级去重维度）+ 每模型免费额度（DescribeModelEndpointList）。
+     * @param keyId 可选：账号 keyId，用于把控制台登录态隔离到该账号自己的分区，避免多账号串会话
+     */
+    captureTokenhubSession: (keyId?: string) => Promise<{ ok: boolean; uin?: string; cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>; models?: Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>; error?: string }>
     /**
      * 读取指定火山方舟账号的控制台会话状态（依据 consoleJwt 的 JWT exp 判定 alive / expiring / expired）
      */
@@ -342,6 +350,16 @@ export interface DesktopApi {
       freeTiers?: BailianFreeTier[]
       quota?: { available: boolean; total: number; remaining: number; expired?: boolean }
       preserved?: boolean
+      reason?: string
+      error?: string
+    }>,
+    tokenhubSyncModels: (keyId: string, encrypted: string, maxStaleMs?: number) => Promise<{
+      ok: boolean
+      encrypted?: string
+      models?: Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>
+      hasQuota?: boolean
+      preserved?: boolean
+      cached?: boolean
       reason?: string
       error?: string
     }>
@@ -499,6 +517,14 @@ const api: DesktopApi = {
         freeTiers?: BailianFreeTier[]
         error?: string
       }>,
+    captureTokenhubSession: (keyId) =>
+      ipcRenderer.invoke('provider:capture-tokenhub-session', keyId) as Promise<{
+        ok: boolean
+        uin?: string
+        cookies?: Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean; expires?: number }>
+        models?: Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>
+        error?: string
+      }>,
     volcSessionStatus: (keyId, encrypted) =>
       ipcRenderer.invoke('provider:volc-session-status', 'volcengine', keyId, encrypted) as Promise<ZhipuSessionStatusResult>,
     volcRenewSession: (keyId, encrypted) =>
@@ -527,6 +553,17 @@ const api: DesktopApi = {
         freeTiers?: BailianFreeTier[]
         quota?: { available: boolean; total: number; remaining: number; expired?: boolean }
         preserved?: boolean
+        reason?: string
+        error?: string
+      }>,
+    tokenhubSyncModels: (keyId, encrypted, maxStaleMs) =>
+      ipcRenderer.invoke('provider:tokenhub-sync-models', 'tokenhub', keyId, encrypted, maxStaleMs) as Promise<{
+        ok: boolean
+        encrypted?: string
+        models?: Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>
+        hasQuota?: boolean
+        preserved?: boolean
+        cached?: boolean
         reason?: string
         error?: string
       }>

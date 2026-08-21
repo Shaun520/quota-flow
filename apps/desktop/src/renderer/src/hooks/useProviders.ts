@@ -194,6 +194,8 @@ export interface ProvidersResult {
   refreshVolcengineModelsOnce: (keyId: string, opts?: { maxStaleMs?: number }) => Promise<string | false>
   /** 阿里云百炼额度刷新：复用该账号 cookie 静默重抓控制台最新免费额度并落库；命中返回新密文，未命中返回 false */
   refreshBailianQuotaOnce: (keyId: string) => Promise<string | false>
+  /** 腾讯云 TokenHub 每模型额度同步：后台静默续抓该账号最新每模型免费额度并落库；命中返回新密文，未抓到返回 false */
+  refreshTokenhubModelsOnce: (keyId: string, maxStaleMs?: number) => Promise<string | false>
 }
 
 export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult {
@@ -512,6 +514,29 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
           // 同步回填账号级指纹：抓到的 accountId 稳定后重算指纹入库，同账号多 Key 共享，去重提示才命中
           accountFingerprint: res.accountFingerprint ?? null
         })
+        void window.api.keysCache.invalidate({ keyId })
+        return res.encrypted
+      } catch {
+        return false
+      }
+    },
+    [user]
+  )
+
+  // 腾讯云 TokenHub 每模型额度同步：后台复用该账号分区登录态（必要时回注入 cookie）静默抓取最新每模型免费额度并落库。
+  // 命中（抓到每模型额度）用重建的加密负载更新 DB 并返回新 encrypted，供「查看模型」即时展示；
+  // 未抓到（登录态失效/页面未就绪）保留旧值返回 false，不打断调用方。主要用于「查看模型」自愈续抓存量账号。
+  const refreshTokenhubModelsOnce = useCallback(
+    async (keyId: string, maxStaleMs?: number): Promise<string | false> => {
+      const svc = getProviderService()
+      if (!svc || !user) return false
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return false
+        const res = await window.api.providers.tokenhubSyncModels(keyId, secret.encrypted_key, maxStaleMs)
+        if (res.cached) return false // 命中缓存：数据仍新鲜，无需回写与返回
+        if (!res.ok || res.preserved || !res.encrypted) return false
+        await svc.refreshProviderKey(user.id, keyId, { encryptedKey: res.encrypted, healthStatus: res.hasQuota ? 'healthy' : undefined })
         void window.api.keysCache.invalidate({ keyId })
         return res.encrypted
       } catch {
@@ -982,6 +1007,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     volcTokenOverrides,
     bailianQuotaOverrides,
     refreshVolcengineModelsOnce,
-    refreshBailianQuotaOnce
+    refreshBailianQuotaOnce,
+    refreshTokenhubModelsOnce
   }
 }

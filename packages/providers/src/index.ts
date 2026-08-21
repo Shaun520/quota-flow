@@ -9,6 +9,7 @@ import { QwenWanProvider } from "./qwen";
 export * from "./zhipu";
 export * from "./volcengine";
 export * from "./bailian";
+export * from "./tokenhub";
 
 export interface ProviderFactoryOptions {
 }

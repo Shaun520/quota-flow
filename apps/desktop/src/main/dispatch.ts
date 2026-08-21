@@ -71,6 +71,8 @@ export interface QuotaUpdatedPayload {
   volcRefreshKeyId?: string
   /** 阿里云百炼生成成功后触发：渲染层据此静默重抓该账号控制台最新免费额度 */
   bailianRefreshKeyId?: string
+  /** 腾讯云 TokenHub 生成成功后触发：渲染层据此刷新该账号额度（本轮未实测积分接口，预留钩子） */
+  tokenhubRefreshKeyId?: string
 }
 
 const UA =
@@ -937,7 +939,9 @@ async function runApiBranch(
       ? { volcRefreshKeyId: cand.id }
       : providerId === 'bailian'
         ? { bailianRefreshKeyId: cand.id }
-        : { zhipuRefreshKeyId: cand.id })
+        : providerId === 'tokenhub'
+          ? { tokenhubRefreshKeyId: cand.id }
+          : { zhipuRefreshKeyId: cand.id })
   })
   return { ok: true, jobId: job.id }
 }

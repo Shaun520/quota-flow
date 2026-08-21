@@ -23,7 +23,25 @@ import {
   aggregateBailianFreeQuota,
   isBailianVideoFreeModel
 } from '@quota-flow/providers'
-import type { VolcengineFreeVideoModel, BailianStoredCookie } from '@quota-flow/providers'
+import {
+  testTokenhubApiKey,
+  tokenhubAccountFingerprint,
+  decodeTokenhubPayload,
+  fetchTokenhubQuota,
+  parseTokenhubDescribeResponse,
+  attachTokenhubFreeQuota,
+  tokenhubFreeVideoModels,
+  TKH_CONSOLE_APIKEY_URL,
+  TKH_CONSOLE_OPEN_URL,
+  TKH_CONSOLE_PARTITION
+} from '@quota-flow/providers'
+import type {
+  VolcengineFreeVideoModel,
+  BailianStoredCookie,
+  TokenhubStoredCookie,
+  TokenhubFreeVideoModel,
+  TokenhubModelQuota
+} from '@quota-flow/providers'
 
 /** 对「解密后的明文」仅做透明的 models 不可用标记写入，返回新明文（不触发网络；consoleJwt/accountId 原样保留）。 */
 export function markVolcModelUnavailable(
@@ -86,6 +104,7 @@ export type ProviderId =
   | 'kling'
   | 'hailuo'
   | 'bailian'
+  | 'tokenhub'
 
 interface ProviderSite {
   loginUrl?: string
@@ -130,6 +149,11 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   bailian: {
     loginUrl: 'https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key',
     healthUrl: 'https://bailian.console.aliyun.com/'
+  },
+  // 腾讯云 TokenHub：tokenhub 为 apikey 厂商，登录页指向「API Key 管理」页
+  tokenhub: {
+    loginUrl: 'https://console.cloud.tencent.com/tokenhub/apikey',
+    healthUrl: 'https://console.cloud.tencent.com/'
   }
 }
 
@@ -174,9 +198,49 @@ const ZHIPU_CONSOLE_PARTITION = 'persist:qf-zhipu-console'
 function zhipuConsolePartitionFor(keyId?: string): string {
   return keyId ? `${ZHIPU_CONSOLE_PARTITION}:${keyId}` : ZHIPU_CONSOLE_PARTITION
 }
+/** 腾讯云 TokenHub 控制台会话分区（账号级隔离，独立于通用 persist:qf-p:tokenhub） */
+function tokenhubConsolePartitionFor(keyId?: string): string {
+  return keyId ? `${TKH_CONSOLE_PARTITION}:${keyId}` : TKH_CONSOLE_PARTITION
+}
+function tokenhubConsoleSession(keyId?: string): Electron.Session {
+  return session.fromPartition(tokenhubConsolePartitionFor(keyId))
+}
+/** 腾讯云 TokenHub 控制台域名（cookie 建档 origin） */
+const TKH_CONSOLE_ORIGIN = 'https://console.cloud.tencent.com'
+/** 腾讯云 TokenHub 每模型额度静默同步时间戳（供「查看模型」自愈续抓节流） */
+const tokenhubSyncAt = new Map<string, number>()
+
+/**
+ * 绑定捕获时的 TokenHub 控制台 cookie 缓存（按 uin 暂存）。
+ * 用途：渲染层把捕获结果落库负载时可能因状态/旧 bundle 丢 cookies，加密兜底合并这里最近的捕获结果，
+ * 确保登录 cookie 一定随负载持久化，供「进入官网」跨重启重新注入。
+ */
+const tokenhubCapturedCookies = new Map<string, TokenhubStoredCookie[]>()
+
+/** 向 TokenHub 控制台分区回注入 cookie（定向到 tokenhubConsolePartitionFor，避免写入通用分区） */
+async function injectTokenhubConsoleCookies(keyId: string, cookies: TokenhubStoredCookie[]): Promise<void> {
+  const ses = session.fromPartition(tokenhubConsolePartitionFor(keyId))
+  ses.setUserAgent(CHROME_UA)
+  for (const c of cookies) {
+    try {
+      await ses.cookies.set({
+        url: `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '') || TKH_CONSOLE_ORIGIN.replace(/^https?:\/\//, '')}${c.path || '/'}`,
+        domain: c.domain || undefined,
+        name: c.name,
+        value: c.value,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        expirationDate: typeof c.expires === 'number' && c.expires > 0 ? Math.floor(c.expires / 1000) : undefined
+      })
+    } catch {
+      // 单条失败不阻塞其余注入
+    }
+  }
+}
 function partitionFor(providerId: string, keyId?: string): string {
   if (providerId === 'zhipu') return zhipuConsolePartitionFor(keyId)
   if (providerId === 'volcengine') return volcConsolePartitionFor(keyId)
+  if (providerId === 'tokenhub') return tokenhubConsolePartitionFor(keyId)
   const base = 'persist:qf-p:' + providerId
   return keyId ? `${base}:${keyId}` : base
 }
@@ -773,6 +837,11 @@ async function openProviderSite(
     } catch {
       /* 诊断失败不影响打开官网 */
     }
+  } else if (providerId === 'tokenhub') {
+    // 复用绑定时捕获会话所在分区（persist:qf-tokenhub-console[:keyId]），打开即带已登录会话；每账号独立分区不串号
+    url = TKH_CONSOLE_APIKEY_URL
+    partition = tokenhubConsolePartitionFor(keyId)
+    injectableEncrypted = encryptedKey
   } else {
     const site = providerSite(providerId)
     url = site?.loginUrl || site?.healthUrl
@@ -810,6 +879,19 @@ async function openProviderSite(
           )
         } catch (e) {
           console.log(`[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
+        }
+      } else if (providerId === 'tokenhub') {
+        // TokenHub 同百炼：登录态落在持久控制台分区，重启后未必留存 authenticating cookie，
+        // 从加密负载读取绑定时持久化的控制台 cookie 重注入，重建登录态（不覆盖目标分区已有 cookie）
+        let payloadCookies = 0
+        try {
+          const plain = safeStorage.decryptString(Buffer.from(injectableEncrypted, 'base64'))
+          const d = decodeTokenhubPayload(plain)
+          payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
+          if (payloadCookies > 0) await injectTokenhubConsoleCookies(keyId, d.cookies!)
+          console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies}`)
+        } catch (e) {
+          console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
         }
       } else {
         const parsed = parseStoredCredentials(injectableEncrypted, providerId)
@@ -2701,6 +2783,282 @@ export async function captureBailianConsoleSession(opts?: {
 
 let registered = false
 
+/**
+ * 腾讯云 TokenHub 控制台会话捕获。
+ * TokenHub 免费额度是「主账号(Uin)级共享积分」（话单在启用管理页，数据面公开 API 读不到）。
+ * 本轮先捕获主账号标识 uin，用于 tokenhubAccountFingerprint 生成账号级去重指纹（同 Uin 多 API Key 去重）；
+ * Uin 级积分采集接口尚未实测确认（见计划 §4.2/4.5），额度展示走本地账本周期授信，不做凭猜的积分抓取。
+ * 捕获依赖腾讯云控制台下发的 uin cookie（值形如 o<uin>）；登录后检测到即自动关闭窗口返回。
+ */
+export async function captureTokenhubConsoleSession(opts?: {
+  quiet?: boolean
+  keyId?: string
+}): Promise<{
+  ok: boolean
+  uin?: string
+  cookies?: TokenhubStoredCookie[]
+  /** 实抓到的每模型免费额度（挂到目录模型上；抓不到则缺省，由渲染层当「额度未知」展示） */
+  models?: Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>
+  error?: string
+}> {
+  const quiet = !!opts?.quiet
+  const optKeyId = opts?.keyId
+  const winKey = `${quiet ? 'tokenhub-console-quiet' : 'tokenhub-console'}:${optKeyId ?? 'shared'}`
+  const existing = loginWindows.get(winKey)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return { ok: false, error: quiet ? '会话捕获进行中' : '腾讯云TokenHub 控制台窗口已打开' }
+  }
+  // 首次交互式绑定清空登录态避免残留；静默续期保留
+  if (!quiet) {
+    try {
+      await tokenhubConsoleSession(optKeyId).clearStorageData()
+    } catch {}
+  }
+  const ses = tokenhubConsoleSession(optKeyId)
+
+  const win = new BrowserWindow({
+    width: 1120,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    show: !quiet,
+    paintWhenInitiallyHidden: true,
+    autoHideMenuBar: true,
+    title: quiet ? '腾讯云控制台 - Quota-Flow' : 'Quota-Flow · 腾讯云控制台（TokenHub）',
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      partition: tokenhubConsolePartitionFor(optKeyId),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  ses.setUserAgent(CHROME_UA)
+  win.webContents.setUserAgent(CHROME_UA)
+  // 拦截非 http(s) 深链跳转，避免触发系统级「打开此链接的应用」弹窗
+  const BLOCKED_PROTO_RE = /^(?!https?:)[a-z][a-z0-9+.-]*:/i
+  win.webContents.on('will-navigate', (ev, url) => {
+    if (BLOCKED_PROTO_RE.test(url)) ev.preventDefault()
+  })
+  win.webContents.setWindowOpenHandler(({ url }) => (BLOCKED_PROTO_RE.test(url) ? { action: 'deny' } : { action: 'allow' }))
+  loginWindows.set(winKey, win)
+  win.on('closed', () => loginWindows.delete(winKey))
+  void win.loadURL(TKH_CONSOLE_OPEN_URL).catch(() => {})
+
+  // 交互式绑定：注入可拖拽悬浮提示条，引导用户登录后复制 API Key（静默续期窗口隐藏无需提示）
+  if (!quiet) {
+    const HINT_INJECT = `(() => {
+      if (window.__QUOTA_FLOW_TOKENHUB_UI__) return;
+      window.__QUOTA_FLOW_TOKENHUB_UI__ = true;
+      const bar = document.createElement('div');
+      bar.id = 'qf-tokenhub-bar';
+      bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:460px;';
+      bar.innerHTML =
+        '<div id="qf-tokenhub-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
+        '<span id="qf-tokenhub-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
+        '<span>Quota-Flow · 腾讯云 TokenHub 控制台</span>' +
+        '</div>' +
+        '<div style="color:#c4c8d0;font-size:12px;line-height:1.4;">请在页面登录后前往「TokenHub → API Key 管理」复制 API Key；</div>' +
+        '<div style="color:#c4c8d0;font-size:12px;line-height:1.4;">复制完成后，回到 Quota-Flow 窗口粘贴 API Key 并保存。</div>' +
+        '<div style="display:flex;justify-content:flex-end;">' +
+        '<button id="qf-tokenhub-close" style="padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;">已复制，关闭窗口</button>' +
+        '</div>';
+      document.body.appendChild(bar);
+      document.getElementById('qf-tokenhub-close').addEventListener('click', () => { window.close(); });
+      let dragging = false, offX = 0, offY = 0;
+      const grip = document.getElementById('qf-tokenhub-grip');
+      const header = document.getElementById('qf-tokenhub-header');
+      const barEl = document.getElementById('qf-tokenhub-bar');
+      const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
+      if (grip) grip.addEventListener('mousedown', startDrag);
+      if (header) header.addEventListener('mousedown', startDrag);
+      document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
+      document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
+    })()`
+    win.webContents.on('did-finish-load', () => {
+      setTimeout(() => {
+        // 注入延后于加载完成执行，但定时器可能迟于窗口关闭触发：webContents 已销毁时直接跳过
+        if (win.isDestroyed() || win.webContents.isDestroyed()) return
+        void win.webContents.executeJavaScript(HINT_INJECT).catch(() => {})
+      }, 500)
+    })
+  }
+
+  // —— 免费额度捕获（每模型） ——
+  // 「启用管理」默认落在「语言模型」标签；注入 fetch/XHR 钩子拦截 DescribeModelEndpointList(VISION) 响应，
+  // 并自动点开「视觉模型」标签触发 VISION 请求。响应文本累积到 window.__TKH_RESPONSES__ 供主进程读回解析。
+  // 实测契约（2026-08-21）：响应 data.data.data.Response.ModelEndpointSet[]，元素 ModelId + ChargeType='FREE' +
+  // FreeTrialClaimed=true + ChargeDetail(字符串) -> FreeQuota{TotalQuota,UsedQuota,UsagePercent,ExpireTime}；每模型独立 50 积分。
+  const CAP_INJECT = `(() => {
+    if (window.__QUOTA_FLOW_TKH_CAP__) return;
+    window.__QUOTA_FLOW_TKH_CAP__ = true;
+    window.__TKH_RESPONSES__ = window.__TKH_RESPONSES__ || [];
+    window.__TKH_SUBMIT__ = false;
+    const ingest = (u, t) => {
+      try {
+        if (!u || String(u).indexOf('DescribeModelEndpointList') < 0) return;
+        if (typeof t !== 'string' || !t) return;
+        window.__TKH_RESPONSES__.push(t);
+        if (window.__TKH_RESPONSES__.length > 10) window.__TKH_RESPONSES__ = window.__TKH_RESPONSES__.slice(-10);
+        window.__TKH_SUBMIT__ = true;
+        window.__TKH_OK__ = true;
+      } catch (_) {}
+    };
+    const oOF = window.fetch;
+    window.fetch = function (...args) {
+      const url = typeof args[0] === 'string' ? args[0] : ((args[0] && args[0].url) || '');
+      return oOF.apply(this, args).then((res) => {
+        try { if (String(url).indexOf('DescribeModelEndpointList') >= 0) res.clone().text().then((t) => ingest(url, t)); } catch (_) {}
+        return res;
+      });
+    };
+    const oX = XMLHttpRequest.prototype.open;
+    const oS = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (m, u) { this.__qfu = u; return oX.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function (body) {
+      if (this.__qfu && String(this.__qfu).indexOf('DescribeModelEndpointList') >= 0) {
+        const self = this, u = this.__qfu;
+        this.addEventListener('loadend', function () { try { ingest(u, self.responseText || ''); } catch (_) {} });
+      }
+      return oS.apply(this, arguments);
+    };
+    const tryOpenVision = () => {
+      try {
+        const tabs = Array.from(document.querySelectorAll('li, a, button, div, span'));
+        const hit = tabs.filter((e) => e.childElementCount <= 1 && e.textContent && e.textContent.trim() === '视觉模型' && e.tagName !== 'A');
+        if (hit.length) hit[0].click();
+      } catch (_) {}
+    };
+    // 交互式绑定用户可能未登录，VISION 请求在登录后才生效；周期性重触发视觉模型标签直至拿到一条响应。
+    window.__TKH_OK__ = false;
+    tryOpenVision();
+    window.__TKH_RETRY__ = setInterval(function () {
+      try {
+        if (!window.__TKH_OK__) tryOpenVision();
+        else if (window.__TKH_RETRY__) { clearInterval(window.__TKH_RETRY__); window.__TKH_RETRY__ = null; }
+      } catch (_) {}
+    }, 4000);
+  })()`
+  win.webContents.on('did-finish-load', () => {
+    setTimeout(() => {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return
+      void win.webContents.executeJavaScript(CAP_INJECT).catch(() => {})
+    }, 400)
+  })
+
+  // 腾讯云控制台把当前主账号 uin 写入 uin cookie，值为 o<uin>（leading 'o' 去掉即纯数字账号）。
+  const resolveUin = async (): Promise<string | null> => {
+    try {
+      const cks = await ses.cookies.get({ url: 'https://console.cloud.tencent.com' })
+      for (const c of cks) {
+        if (c.name === 'uin' && c.value) {
+          const v = c.value.replace(/^o/i, '').trim()
+          if (/^\d+$/.test(v)) return v
+        }
+      }
+    } catch {}
+    return null
+  }
+
+  const FREQ_MS = 1200
+  const MAX_WAIT_MS = 5 * 60 * 1000
+  /** uin 首次捕获后再给额度最长等待：静默续期/交互绑定都不至于久挂；额度通常登录后 2-4s 内就到 */
+  const QUOTA_GRACE_MS = 12000
+  // 已捕获到的 uin（账号级去重维度）；记录后窗口关闭时据其归档最终完整登录 cookie
+  let capturedUin: string | null = null
+  let uinAt = 0
+  /** 已解析出的每模型免费额度（DescribeModelEndpointList → parseTokenhubDescribeResponse 归一） */
+  let capturedQuota: Array<{ model: string; quota: TokenhubModelQuota }> | null = null
+  /** 从该账号控制台分区收集登录 cookie 并写入缓存（供「进入官网」跨重启重建登录态；encrypt 兜底合并） */
+  const collectCookies = async (uin: string): Promise<void> => {
+    try {
+      const cs = exportCookies(await ses.cookies.get({}))
+      if (cs.length > 0) tokenhubCapturedCookies.set(uin, cs)
+    } catch {}
+  }
+  /** 读回页面里已拦截到的 DescribeModelEndpointList 响应，解析为每模型额度 */
+  const readQuota = async (): Promise<void> => {
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return
+      const raw = await win.webContents.executeJavaScript(
+        'window.__TKH_SUBMIT__ ? JSON.stringify(window.__TKH_RESPONSES__) : null'
+      )
+      if (typeof raw !== 'string' || !raw) return
+      const list = JSON.parse(raw) as string[]
+      const seen = new Map<string, TokenhubModelQuota>()
+      for (const t of list || []) {
+        for (const e of parseTokenhubDescribeResponse(t)) {
+          if (!seen.has(e.model)) seen.set(e.model, e.quota)
+        }
+      }
+      if (seen.size > 0) capturedQuota = Array.from(seen.entries()).map(([model, quota]) => ({ model, quota }))
+    } catch {}
+  }
+  const buildModels = (): Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }> | undefined =>
+    capturedQuota && capturedQuota.length
+      ? attachTokenhubFreeQuota(tokenhubFreeVideoModels(), Object.fromEntries(capturedQuota.map((i) => [i.model, i.quota])))
+      : undefined
+
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (
+      res: { ok: boolean; uin?: string; models?: Array<TokenhubFreeVideoModel & { freeQuota?: TokenhubModelQuota }>; error?: string },
+      closeWin = true
+    ) => {
+      if (settled) return
+      settled = true
+      clearInterval(timer)
+      clearTimeout(timeout)
+      // 清理页面注入的周期点击 Timer，避免窗口关闭后残留
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        try {
+          void win.webContents.executeJavaScript('if(window.__TKH_RETRY__){clearInterval(window.__TKH_RETRY__);window.__TKH_RETRY__=null}')
+        } catch {}
+      }
+      if (closeWin) {
+        try {
+          if (!win.isDestroyed()) win.close()
+        } catch {}
+      }
+      resolve(res)
+    }
+    win.on('closed', () => {
+      // 无论是否已 settle：交互式窗口中用户登录并复制完 API Key 后关闭窗口，登录态已定型，
+      // 此时再收集一次「最终完整登录 cookie」覆盖缓存，供加密兜底合并（避免 uin 刚出现时收集到不完整登录态）
+      if (capturedUin) void collectCookies(capturedUin)
+      if (!settled) finish({ ok: false, error: '窗口已关闭' })
+    })
+    const tick = async () => {
+      if (win.isDestroyed() || settled) {
+        clearInterval(timer)
+        return
+      }
+      const uin = await resolveUin()
+      if (uin && !settled && !capturedUin) {
+        console.log(`[qf-tokenhub] CAPTURE uin=${uin}`)
+        capturedUin = uin
+        uinAt = Date.now()
+        // 立即收集一次作为兜底底稿；最终完整登录态以窗口关闭时归档为准
+        await collectCookies(uin)
+      }
+      if (!settled) {
+        await readQuota()
+        if (capturedQuota && capturedQuota.length) {
+          console.log(`[qf-tokenhub] CAPTURE quota models=${capturedQuota.length}`)
+        }
+      }
+      // 已拿 uin，且「拿到每模型额度 或 额度宽限已过」→ 结算。
+      // 交互式(closeWin=false)结算后保持窗口打开供用户复制 API Key；静默续期(closeWin=true)关窗释放。
+      if (capturedUin && !settled && ((capturedQuota && capturedQuota.length > 0) || Date.now() - uinAt > QUOTA_GRACE_MS)) {
+        finish({ ok: true, uin: capturedUin, models: buildModels() }, quiet)
+      }
+    }
+    const timer = setInterval(() => void tick(), FREQ_MS)
+    const timeout = setTimeout(() => finish({ ok: false, error: '捕获超时，请确认已登录腾讯云控制台' }), MAX_WAIT_MS)
+    void tick()
+  })
+}
+
 export function initProviders(): void {
   if (registered) return
   registered = true
@@ -2731,6 +3089,23 @@ export function initProviders(): void {
             }
           }
         }
+      } else if (providerId === 'tokenhub') {
+        // TokenHub 同百炼兜底：捕获的 uin 存在但负载未带入 cookies 时，用缓存最近一次同 uin 的 cokies 合并
+        const trimmedT = (plain || '').trim()
+        if (trimmedT.startsWith('{')) {
+          const d = decodeTokenhubPayload(trimmedT)
+          if (d.uin && (!Array.isArray(d.cookies) || d.cookies.length === 0)) {
+            const live = tokenhubCapturedCookies.get(d.uin)
+            if (live && live.length > 0) {
+              try {
+                const obj = JSON.parse(trimmedT)
+                obj.cookies = live
+                payloadPlain = JSON.stringify(obj)
+                console.log(`[qf-tokenhub] ENC mergeCapturedCookies uin=${d.uin} n=${live.length}`)
+              } catch {}
+            }
+          }
+        }
       }
       const encrypted = safeStorage.encryptString(payloadPlain).toString('base64')
       // apikey 型厂商：指纹用于去重。
@@ -2745,7 +3120,9 @@ export function initProviders(): void {
               ? await volcengineAccountFingerprint(plain)
               : providerId === 'bailian'
                 ? await bailianAccountFingerprint(plain)
-                : fingerprintFor(providerId, plain.trim())
+                : providerId === 'tokenhub'
+                  ? await tokenhubAccountFingerprint(plain)
+                  : fingerprintFor(providerId, plain.trim())
         // 火山方舟去重诊断：确认 accountId 是否进链路、指纹是「账号级」还是退化成「Key 哈希」
         if (providerId === 'volcengine') {
           const { accountId } = decodeVolcenginePayload(plain)
@@ -2780,7 +3157,9 @@ export function initProviders(): void {
         ? await testVolcengineApiKey(apiKey)
         : providerId === 'bailian'
           ? await testBailianApiKey(apiKey)
-          : await testZhipuApiKey(apiKey)
+          : providerId === 'tokenhub'
+            ? await testTokenhubApiKey(apiKey)
+            : await testZhipuApiKey(apiKey)
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : 'API Key 校验失败' }
     }
@@ -2799,6 +3178,12 @@ export function initProviders(): void {
           (t) => isBailianVideoFreeModel(t.model) && !t.expired
         )
         return { ok: true, quota: aggregateBailianFreeQuota(tiers) }
+      }
+      if (providerId === 'tokenhub') {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { apiKey, uin } = decodeTokenhubPayload(plain)
+        if (!apiKey) return { ok: false, error: '未解析到 API Key' }
+        return fetchTokenhubQuota(apiKey, uin ?? undefined)
       }
       const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
       const { apiKey, consoleJwt } = decodeZhipuPayload(plain)
@@ -2826,6 +3211,14 @@ export function initProviders(): void {
     return captureVolcEngineConsoleSession({
       keyId: typeof keyId === 'string' && keyId ? keyId : undefined,
       targetUrl: VOLC_OPEN_MANAGEMENT_URL
+    })
+  })
+
+  // 腾讯云 TokenHub 控制台会话捕获：按账号 keyId 弹出「启用管理」页并捕获主账号标识 uin（去重维度）。
+  // uin 用于 tokenhubAccountFingerprint 生成账号级指纹；未捕获则加密时退化为按 API Key 哈希去重。
+  ipcMain.handle('provider:capture-tokenhub-session', async (_e, keyId?: string) => {
+    return captureTokenhubConsoleSession({
+      keyId: typeof keyId === 'string' && keyId ? keyId : undefined
     })
   })
 
@@ -2996,6 +3389,60 @@ export function initProviders(): void {
         }
         // 同步超时/未抓到（登录态失效或页面未就绪）：保留旧额度，不报错，交由调用方提示可稍后手动刷新
         logVolcSync(`SYNC_PRESERVED key=${keyId} ok=${res.ok} source=${(res as { source?: string }).source ?? '?'}`)
+        return { ok: true, preserved: true }
+      } catch (e) {
+        return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '额度同步失败' }
+      }
+    }
+  )
+  // 腾讯云 TokenHub 每模型额度同步：后台复用该账号分区登录态（必要时回注入已存 cookie）静默抓取最新每模型免费额度，
+  // 命中则重建加密负载（models + uin + cookies）返回 newEncrypted，供渲染层落库并刷新「查看模型」展示。
+  // 用于「查看模型」自愈：存量账号负载无 models（旧版本绑定）时，点一次即可续抓补全，无需重新绑定。
+  ipcMain.handle(
+    'provider:tokenhub-sync-models',
+    async (_e, _providerId: string, keyId: string, encrypted: string, maxStaleMs?: number) => {
+      if (!encrypted) return { ok: false, reason: 'no-secret', error: '缺少密钥' }
+      // 缓存命中：maxStaleMs>0 且负载里已有每模型额度、上次同步未超期 → 直接返回，跳过一次 webview 同步让弹窗秒开
+      if (typeof maxStaleMs === 'number' && maxStaleMs > 0) {
+        try {
+          const plain = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+          const { models } = decodeTokenhubPayload(plain)
+          const syncedAt = tokenhubSyncAt.get(keyId)
+          const hasQuota = Array.isArray(models) && models.some((m) => m?.freeQuota && typeof m.freeQuota.remaining === 'number')
+          if (hasQuota && typeof syncedAt === 'number' && Date.now() - syncedAt < maxStaleMs) {
+            return { ok: true, cached: true }
+          }
+        } catch {
+          /* 负载解析失败则按未命中继续走完整同步 */
+        }
+      }
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(encrypted ?? '', 'base64'))
+        const { apiKey, uin, cookies } = decodeTokenhubPayload(plain)
+        if (!apiKey) return { ok: false, reason: 'no-key', error: '未解析到 API Key' }
+        // 回注入已存控制台登录 cookie，保证静默窗口能保持登录态（存量账号未走本应用绑定、分区无登录时也能恢复）
+        if (Array.isArray(cookies) && cookies.length > 0) {
+          try {
+            await injectTokenhubConsoleCookies(typeof keyId === 'string' && keyId ? keyId : '', cookies)
+          } catch {}
+        }
+        const res = await captureTokenhubConsoleSession({ quiet: true, keyId })
+        // 抓到每模型额度 → 用最新 models 重建负载回库（保留 apiKey/uin/原 cookies）
+        if (res.ok && Array.isArray(res.models) && res.models.length > 0) {
+          const newPlain = JSON.stringify({
+            v: 1,
+            apiKey,
+            uin: res.uin ?? uin ?? null,
+            models: res.models,
+            cookies: Array.isArray(cookies) ? cookies : undefined
+          })
+          const newEncrypted = safeStorage.encryptString(newPlain).toString('base64')
+          tokenhubSyncAt.set(keyId, Date.now())
+          console.log(`[tkh-sync] 回写 models=${res.models.map((m) => m.id).join(',')} uin=${res.uin ?? uin ?? 'NO'}`)
+          const hasQuota = res.models.some((m) => m?.freeQuota && typeof m.freeQuota.remaining === 'number')
+          return { ok: true, encrypted: newEncrypted, models: res.models, hasQuota }
+        }
+        // 同步未抓到（登录态失效/页面未就绪/无每模型额度）：保留旧值交由调用方提示稍后手动刷新
         return { ok: true, preserved: true }
       } catch (e) {
         return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '额度同步失败' }

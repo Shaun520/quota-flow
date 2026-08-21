@@ -14,6 +14,8 @@ const PAGE_SIZE = 10
 
 // 火山「查看模型」额度缓存有效期：有效期内点开不再触发 webview 同步，直接秒开展示缓存值；过期后台静默刷新
 const VOLC_VIEW_MODELS_CACHE_MS = 5 * 60 * 1000
+/** 腾讯云 TokenHub 「查看模型」每模型额度静默同步的缓存窗口：命中（已有每模型额度且未超期）不再重复开控制台 */
+const TKH_VIEW_MODELS_CACHE_MS = 5 * 60 * 1000
 
 /** 顶部额度汇总条
  * - volcengine：聚合免费模型的额度（保持火山方舟原有展示，单位 tokens）
@@ -179,7 +181,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce, refreshBailianQuotaOnce } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce, refreshBailianQuotaOnce, refreshTokenhubModelsOnce } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -245,8 +247,8 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
     setModelsLoading(true)
     try {
       let encrypted: string | undefined
-      // 火山方舟 / 阿里云百炼：取该账号密钥负载，供主进程读取每模型免费额度（火山 token / 百炼 freeTiers）
-      if (providerId === 'volcengine' || providerId === 'bailian') {
+      // 火/百炼/腾讯云：取该账号密钥负载，供主进程读取每模型免费额度（火山 token / 百炼 freeTiers / 腾讯云 token 点数）
+      if (providerId === 'volcengine' || providerId === 'bailian' || providerId === 'tokenhub') {
         const svc = getProviderService()
         if (svc && user) {
           const secret = await svc.getProviderKeySecret(user.id, keyId)
@@ -273,6 +275,16 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         // 阿里云百炼：复用账号 cookie 静默重抓控制台最新免费额度 → 用新密文重拉目录刷新最新剩余，对齐火山
       } else if (providerId === 'bailian') {
         const fresh = await refreshBailianQuotaOnce(keyId)
+        if (fresh && token === modelsTokenRef.current) {
+          const newRes = await window.api.providers.apiModels(providerId, fresh)
+          if (token === modelsTokenRef.current && newRes.ok && newRes.models) {
+            setModels(newRes.models)
+          }
+        }
+        // 腾讯云 TokenHub：后台复用该账号登录态静默续抓最新每模型免费额度 → 用新密文重拉目录刷新剩余，对齐火山/百炼
+        // （存量账号负载无 models 时，点一次「查看模型」即自愈补全每模型额度，无需重新绑定）
+      } else if (providerId === 'tokenhub') {
+        const fresh = await refreshTokenhubModelsOnce(keyId, TKH_VIEW_MODELS_CACHE_MS)
         if (fresh && token === modelsTokenRef.current) {
           const newRes = await window.api.providers.apiModels(providerId, fresh)
           if (token === modelsTokenRef.current && newRes.ok && newRes.models) {
@@ -849,7 +861,7 @@ function ProviderRow({
                         )}
                       </td>
                       <td>
-                        {!isApiKeyProvider || agg.providerId === 'zhipu' || agg.providerId === 'volcengine' || agg.providerId === 'bailian' ? (
+                        {!isApiKeyProvider || agg.providerId === 'zhipu' || agg.providerId === 'volcengine' || agg.providerId === 'bailian' || agg.providerId === 'tokenhub' ? (
                           <>
                             <button
                               className="btn-sm"
