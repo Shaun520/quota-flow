@@ -267,10 +267,7 @@ export function ProviderIconMark({
   if (Icon) return <Icon size={size} />
   if (logo?.trim()) {
     return (
-      <span
-        className="provider-icon-fallback"
-        style={{ width: size, height: size, fontSize: Math.max(10, Math.round(size * 0.7)) }}
-      >
+      <span className="provider-icon-fallback" style={{ fontSize: Math.max(11, Math.round(size * 0.7)) }}>
         {logo.trim().slice(0, 1)}
       </span>
     )

@@ -808,10 +808,20 @@ export function AddProviderModal({
         }
       }
 
-      // 备注为空时兜底自动命名：<厂商名> 账号 N（按该厂商第 N 个绑定递增）
+      // 备注为空时兜底自动命名：<厂商名> 账号 N（跳过已删除的序号，取最大序号+1）
       const allKeys = scopeKeys
       const sameProvider = allKeys.filter((k) => k.provider_id === providerId)
-      const seq = sameProvider.length + 1
+      // 从现有账号名中提取序号：匹配 "账号 N" 末尾的数字，取最大+1
+      const seqRe = /账号\s*(\d+)\s*(?:\(默认\))?$/
+      let maxSeq = 0
+      for (const k of sameProvider) {
+        const m = seqRe.exec(k.account_name ?? '')
+        if (m) {
+          const n = Number(m[1])
+          if (Number.isFinite(n) && n > maxSeq) maxSeq = n
+        }
+      }
+      const seq = maxSeq + 1
       const name = accountName.trim() || `${selected?.name ?? providerId} 账号 ${seq}`
 
       // 新建账号：用 loginTempId 作为 DB 记录 id，使「登录分区 = 生成分区」
@@ -1245,7 +1255,8 @@ export function AddProviderModal({
           }}
         />
         {(selected?.boundCount ?? 0) > 0 && (
-          <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--accent)' }}>
+          <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            <span style={{ color: 'var(--warning, #e8a54d)', fontWeight: 500 }}>注意：</span>
             该厂商已绑定 {selected!.boundCount} 个账号，请确认不是重复绑定同一账号
           </p>
         )}
@@ -1326,16 +1337,20 @@ export function AddProviderModal({
       <div className="form-group" style={{ background: 'var(--bg-elevated)', padding: '16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
         {isApiKey ? (
           <>
-            <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--fg-secondary)' }}>
-              {selected?.name} 使用 API Key 方式接入，填入后保存。
-            </p>
+            <label style={{ display: 'block', fontSize: '0.85em', fontWeight: 600, color: 'var(--fg-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+              API Key
+            </label>
             <input
               type="password"
               placeholder="请输入 API Key"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               disabled={saving}
+              style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', color: 'var(--fg-primary)', fontSize: '1em', boxShadow: 'var(--shadow-inset)', fontFamily: 'var(--font-body)' }}
             />
+            <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+              {selected?.name} 使用 API Key 方式接入，填入后保存。
+            </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button className="btn-sm" onClick={() => void testApiKeyInput()} disabled={saving}>
                 测试 API Key
