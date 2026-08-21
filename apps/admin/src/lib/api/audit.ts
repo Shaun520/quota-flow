@@ -1,7 +1,7 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
 import { formatDateTime } from "@/lib/utils/format";
 
-export type AuditLogActionCategory = "" | "team" | "user" | "provider" | "announcement" | "quota" | "feedback";
+export type AuditLogActionCategory = "" | "team" | "user" | "provider" | "announcement" | "quota" | "feedback" | "monitor";
 export type AuditLogTimeRange = "24h" | "7d" | "30d" | "all";
 
 export interface AuditLog {
@@ -64,7 +64,8 @@ export function actionLabel(action: string): string {
     "sub.update": "订阅变更",
     "cost.update": "消耗表更新",
     "audit.clear": "清除日志",
-    "feedback.status": "反馈处理"
+    "feedback.status": "反馈处理",
+    "monitor.alert_rule": "告警阈值更新"
   };
   return map[action] ?? action;
 }
@@ -121,6 +122,13 @@ export const AUDIT_ACTION_GROUPS: ActionGroup[] = [
     label: "反馈",
     actions: [
       { value: "feedback.status", label: "反馈处理" }
+    ]
+  },
+  {
+    value: "monitor",
+    label: "监控",
+    actions: [
+      { value: "monitor.alert_rule", label: "告警阈值更新" }
     ]
   }
 ];
