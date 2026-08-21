@@ -17,7 +17,6 @@ data/jobs.jsonl
 
 # 本地编辑器配置与拷贝的全局 skill
 .trae/
-skills/
 __pycache__/
 
 # 敏感配置

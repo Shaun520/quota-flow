@@ -6,6 +6,22 @@ export interface SupabaseConfig {
   supabaseAnonKey: string
 }
 
+/* ================= 跨模块 in-flight 读去重 =================
+ * 只合并「完全相同参数、在并发窗口内」的读请求：并发方共享同一 Promise，
+ * 每次调用只发生一次真实请求，结果按第一个发起者的快照返回；Promise 落定即删除，
+ * 不做任何正缓存（避免密钥/账本等易变数据的陈旧值竞态）。
+ * 模块级 Map，主进程与各 renderer 进程各自独立，跨所有调用模块生效。
+ */
+const readInFlight = new Map<string, Promise<unknown>>()
+
+function dedupeRead<T>(key: string, fetch: () => Promise<T>): Promise<T> {
+  const pending = readInFlight.get(key)
+  if (pending) return pending as Promise<T>
+  const p = fetch().finally(() => readInFlight.delete(key))
+  readInFlight.set(key, p)
+  return p
+}
+
 /** 按北京时间（Asia/Shanghai）计算日期键，保证每日额度 0 点重置 */
 export function todayKey(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -38,18 +54,37 @@ export function createSupabaseClient(config: SupabaseConfig): SupabaseClient {
   })
 }
 
+/* ================= 团队归属（team_members）正缓存 =================
+ * 归属是低频变化数据（加入/退出/角色变更才有变），会话内所有窗口/模块共用一份，
+ * TTL 内直接复用，不再反复打 team_members；加入/退出/角色变更处调 invalidateTeamContext 强制失效。
+ */
+const teamContextCache = new Map<string, { at: number; ctx: TeamContext | null }>()
+const TEAM_CONTEXT_TTL_MS = 5 * 60 * 1000
+
+/** 团队归属变化时调用，强制绕过缓存重新拉取（join/leave/角色变更后必须调，否则仍显示旧的伙伴态） */
+export function invalidateTeamContext(userId: string): void {
+  teamContextCache.delete(userId)
+}
+
 export async function getTeamContext(
   client: SupabaseClient,
   userId: string
 ): Promise<TeamContext | null> {
-  const { data, error } = await client
-    .from('team_members')
-    .select('team_id, role')
-    .eq('user_id', userId)
-    .maybeSingle()
+  const hit = teamContextCache.get(userId)
+  if (hit && Date.now() - hit.at < TEAM_CONTEXT_TTL_MS) return hit.ctx
+  // 模块级 in-flight 去重：多个并发方共享同一 Promise，只发一次真实请求
+  const ctx = await dedupeRead(`team_context:${userId}`, async () => {
+    const { data, error } = await client
+      .from('team_members')
+      .select('team_id, role')
+      .eq('user_id', userId)
+      .maybeSingle()
 
-  if (error || !data) return null
-  return { id: data.team_id as string, role: data.role as TeamRole }
+    if (error || !data) return null
+    return { id: data.team_id as string, role: data.role as TeamRole }
+  })
+  teamContextCache.set(userId, { at: Date.now(), ctx })
+  return ctx
 }
 
 export interface TeamDetail {
@@ -127,11 +162,19 @@ export interface CreateTeamInviteOptions {
 export class TeamService {
   constructor(private readonly client: SupabaseClient) {}
 
+  /** 当前登录用户 id（本地会话缓存解析，不发网络请求）；用于归属缓存失效 */
+  private async actorId(): Promise<string | null> {
+    const { data } = await this.client.auth.getUser()
+    return data.user?.id ?? null
+  }
+
   async createTeam(name: string): Promise<TeamContext> {
     const { data, error } = await this.client.rpc('create_team', { p_name: name })
     if (error) throw error
     const raw = data as { ok?: boolean; team?: { id?: string; role?: string } } | null
     if (!raw?.team?.id) throw new Error('create_team RPC returned no team')
+    const actor = await this.actorId()
+    if (actor) invalidateTeamContext(actor)
     return {
       id: raw.team.id,
       role: (raw.team.role === 'admin' ? 'admin' : 'member') as TeamRole
@@ -143,6 +186,8 @@ export class TeamService {
     if (error) throw error
     const raw = data as { ok?: boolean; team?: { id?: string; role?: string } } | null
     if (!raw?.team?.id) throw new Error('join_team_by_invite RPC returned no team')
+    const actor = await this.actorId()
+    if (actor) invalidateTeamContext(actor)
     return {
       id: raw.team.id,
       role: (raw.team.role === 'admin' ? 'admin' : 'member') as TeamRole
@@ -204,6 +249,10 @@ export class TeamService {
       .eq('team_id', teamId)
       .eq('user_id', targetUserId)
     if (error) throw error
+    // 被移除者（本端可能就是自己）归属缓存失效
+    invalidateTeamContext(targetUserId)
+    const actor = await this.actorId()
+    if (actor) invalidateTeamContext(actor)
     return (count ?? 0) > 0
   }
 
@@ -219,6 +268,8 @@ export class TeamService {
   async leaveTeam(teamId: string): Promise<void> {
     const { error } = await this.client.rpc('team_leave', { p_team_id: teamId })
     if (error) throw error
+    const actor = await this.actorId()
+    if (actor) invalidateTeamContext(actor)
   }
 
   async disbandTeam(teamId: string): Promise<void> {
@@ -422,63 +473,78 @@ export class ProviderService {
   constructor(private readonly client: SupabaseClient) {}
 
   async listProviders(): Promise<ProviderMeta[]> {
-    const { data, error } = await this.client
-      .from('providers')
-      .select('id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota')
-      .eq('enabled', true)
-      .order('name')
-    if (error) throw error
-    return (data ?? []) as unknown as ProviderMeta[]
+    return dedupeRead(`providers:enabled`, async () => {
+      const { data, error } = await this.client
+        .from('providers')
+        .select('id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota')
+        .eq('enabled', true)
+        .order('name')
+      if (error) throw error
+      return (data ?? []) as unknown as ProviderMeta[]
+    })
   }
 
   async listAllProviders(): Promise<ProviderMeta[]> {
-    const { data, error } = await this.client
-      .from('providers')
-      .select('id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota')
-      .order('name')
-    if (error) throw error
-    return (data ?? []) as unknown as ProviderMeta[]
+    return dedupeRead(`providers:all`, async () => {
+      const { data, error } = await this.client
+        .from('providers')
+        .select('id, name, logo, capabilities, auth_type, enabled, unit_name, default_daily_quota')
+        .order('name')
+      if (error) throw error
+      return (data ?? []) as unknown as ProviderMeta[]
+    })
   }
 
   async listProviderKeys(userId: string): Promise<ProviderKeySummary[]> {
-    const { data, error } = await this.client
-      .from('provider_keys')
-      .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
-      .eq('owner_user_id', userId)
-      .order('created_at', { ascending: false })
-    if (error) throw error
-    return (data ?? []) as unknown as ProviderKeySummary[]
+    return dedupeRead(`provider_keys:${userId}`, async () => {
+      const { data, error } = await this.client
+        .from('provider_keys')
+        .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+        .eq('owner_user_id', userId)
+        .order('created_at', { ascending: false })
+      if (error) throw error
+      return (data ?? []) as unknown as ProviderKeySummary[]
+    })
   }
 
   async listTeamProviderKeys(teamId: string): Promise<ProviderKeySummary[]> {
-    const { data, error } = await this.client
-      .from('provider_keys')
-      .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
-      .eq('team_id', teamId)
-      .order('created_at', { ascending: false })
-    if (error) throw error
-    return (data ?? []) as unknown as ProviderKeySummary[]
+    return dedupeRead(`provider_keys_team:${teamId}`, async () => {
+      const { data, error } = await this.client
+        .from('provider_keys')
+        .select('id, team_id, owner_user_id, provider_id, account_name, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+        .eq('team_id', teamId)
+        .order('created_at', { ascending: false })
+      if (error) throw error
+      return (data ?? []) as unknown as ProviderKeySummary[]
+    })
   }
 
-  /** 主进程/后台任务需要真实加密凭证时使用，避免列表接口重复下发大字段。 */
-  async listProviderKeysWithSecrets(userId: string): Promise<ProviderKeySecret[]> {
-    const { data, error } = await this.client
-      .from('provider_keys')
-      .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
-      .eq('owner_user_id', userId)
-      .order('created_at', { ascending: false })
-    if (error) throw error
-    return (data ?? []) as unknown as ProviderKeySecret[]
+  /** 主进程/后台任务需要真实加密凭证时使用，避免列表接口重复下发大字段。
+   *  传 providerId 时把过滤下推到 SQL，只回传该厂商行（生成调度按厂商批量读密钥时避免整表拉取大字段）。 */
+  async listProviderKeysWithSecrets(userId: string, providerId?: string): Promise<ProviderKeySecret[]> {
+    return dedupeRead(`provider_keys_secret:${userId}:${providerId ?? ''}`, async () => {
+      let q = this.client
+        .from('provider_keys')
+        .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+        .eq('owner_user_id', userId)
+      if (providerId) q = q.eq('provider_id', providerId)
+      const { data, error } = await q.order('created_at', { ascending: false })
+      if (error) throw error
+      return (data ?? []) as unknown as ProviderKeySecret[]
+    })
   }
 
-  async listTeamProviderKeysWithSecrets(teamId: string): Promise<ProviderKeySecret[]> {
-    const { data, error } = await this.client
-      .from('provider_keys')
-      .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
-      .eq('team_id', teamId)
-      .order('created_at', { ascending: false })
-    if (error) throw error
-    return (data ?? []) as unknown as ProviderKeySecret[]
+  async listTeamProviderKeysWithSecrets(teamId: string, providerId?: string): Promise<ProviderKeySecret[]> {
+    return dedupeRead(`provider_keys_team_secret:${teamId}:${providerId ?? ''}`, async () => {
+      let q = this.client
+        .from('provider_keys')
+        .select('id, team_id, owner_user_id, provider_id, account_name, encrypted_key, auth_type, cookie_expires_at, last_health_check, health_status, account_fingerprint, enabled, is_default, created_at')
+        .eq('team_id', teamId)
+      if (providerId) q = q.eq('provider_id', providerId)
+      const { data, error } = await q.order('created_at', { ascending: false })
+      if (error) throw error
+      return (data ?? []) as unknown as ProviderKeySecret[]
+    })
   }
 
   async getProviderKeySecret(userId: string, keyId: string): Promise<ProviderKeySecret | null> {
@@ -639,28 +705,32 @@ export class ProviderService {
 
   async listTodayLedger(userId: string): Promise<QuotaLedgerRow[]> {
     const today = todayKey()
-    const { data, error } = await this.client
-      .from('quota_ledger')
-      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
-      .eq('owner_user_id', userId)
-      .eq('date', today)
-      .order('date', { ascending: false })
-      .limit(500)
-    if (error) throw error
-    return (data ?? []) as unknown as QuotaLedgerRow[]
+    return dedupeRead(`ledger_today:${userId}:${today}`, async () => {
+      const { data, error } = await this.client
+        .from('quota_ledger')
+        .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+        .eq('owner_user_id', userId)
+        .eq('date', today)
+        .order('date', { ascending: false })
+        .limit(500)
+      if (error) throw error
+      return (data ?? []) as unknown as QuotaLedgerRow[]
+    })
   }
 
   async listTeamTodayLedger(teamId: string): Promise<QuotaLedgerRow[]> {
     const today = todayKey()
-    const { data, error } = await this.client
-      .from('quota_ledger')
-      .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
-      .eq('team_id', teamId)
-      .eq('date', today)
-      .order('date', { ascending: false })
-      .limit(500)
-    if (error) throw error
-    return (data ?? []) as unknown as QuotaLedgerRow[]
+    return dedupeRead(`ledger_team_today:${teamId}:${today}`, async () => {
+      const { data, error } = await this.client
+        .from('quota_ledger')
+        .select('id, date, team_id, owner_user_id, account_key_id, provider_id, unit_name, daily_total, used, remaining, reserved, refreshed_at')
+        .eq('team_id', teamId)
+        .eq('date', today)
+        .order('date', { ascending: false })
+        .limit(500)
+      if (error) throw error
+      return (data ?? []) as unknown as QuotaLedgerRow[]
+    })
   }
 
   /** 批量初始化缺失的今日额度行，避免厂商列表/调度前对每个账号逐个请求。 */

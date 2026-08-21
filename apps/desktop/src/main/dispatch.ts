@@ -16,6 +16,12 @@ import { runYuanbaoGeneration } from './yuanbao-webview'
 import { runDolaGeneration } from './dola-webview'
 import { API_BRANCHES } from './api-branch'
 import type { ApiCredential, ApiGenerateParams } from './api-branch'
+import { deleteImages } from './github-upload'
+import {
+  cachedListProviderKeysWithSecrets,
+  cachedListTeamProviderKeysWithSecrets,
+  invalidateKeysByKeyId
+} from './query-cache'
 
 export interface GenerateInput {
   supabaseUrl: string
@@ -32,8 +38,10 @@ export interface GenerateInput {
   resolution?: string
   audio?: string
   ratio?: string
-  /** 本地图片路径（图生视频，仅允许常见图片格式） */
+  /** 历史入库/本地展示用的图片：本地路径或公网 URL（本地路径会复制到 userData/images） */
   images?: string[]
+  /** 厂商 API 用的参考图公网 https URL（仅 API 型厂商上传；历史展示不依赖它） */
+  imageUrls?: string[]
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }
@@ -96,6 +104,33 @@ function providerCost(providerId: string, durationSec: number, resolution?: stri
     return { amount: 1, unitName: '个' }
   }
   return { amount: 1 + durationPoint, unitName: '点' }
+}
+
+/**
+ * 把「生成用图片」持久化为历史上存储的图片副本（供历史详情回显，不依赖外网）：
+ *  - 本地路径 → 复制一份到 userData/images 存本地路径，历史显示走本地媒体服务；
+ *  - http(s) 公网 URL → 原样保留（兼容旧记录 / 已上传到公网的图）。
+ * 各厂商（WebView + API 分支）共用，避免重复实现。
+ */
+function persistJobImages(images: string[], jobId: string): string[] {
+  const jobImages: string[] = []
+  if (!images || images.length === 0) return jobImages
+  const imgDir = join(app.getPath('userData'), 'images')
+  mkdirSync(imgDir, { recursive: true })
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i]
+    try {
+      if (/^https?:\/\//i.test(img)) {
+        jobImages.push(img)
+        continue
+      }
+      const ext = (/\.(png|gif|webp)$/i.exec(img)?.[1] ?? 'jpg').toLowerCase()
+      const dest = join(imgDir, `${jobId}-${i}.${ext}`)
+      copyFileSync(img, dest)
+      jobImages.push(dest)
+    } catch {}
+  }
+  return jobImages
 }
 
 /** 下载视频到 userData/videos/<jobId>.mp4（生成后立即落盘，避免签名 URL 过期） */
@@ -242,29 +277,8 @@ export async function runGenerate(
   const images = (input.images ?? [])
     .filter((p) => typeof p === 'string' && /\.(jpe?g|png|webp|gif)$/i.test(p))
     .slice(0, resolvedProviderId === 'doubao' || resolvedProviderId === 'yuanbao' || resolvedProviderId === 'dola' ? 10 : 5)
-  // 生成参数 + 上传图片副本：随任务持久化，历史详情可回显「提示词/参数/图片」
-  const jobImages: string[] = []
-  if (images.length > 0) {
-    try {
-      const imgDir = join(app.getPath('userData'), 'images')
-      mkdirSync(imgDir, { recursive: true })
-      for (let i = 0; i < images.length; i++) {
-        const img = images[i]
-        try {
-          // 远程公网 URL（开放平台 API 参考图已上传到 Supabase）→ 直接记录 URL，历史详情按公网地址回显
-          if (/^https?:\/\//i.test(img)) {
-            jobImages.push(img)
-            continue
-          }
-          // 本地图片路径 → 复制一份本地副本到 userData/images 持久化，透过多段历史详情回显
-          const ext = (/\.(png|gif|webp)$/i.exec(img)?.[1] ?? 'jpg').toLowerCase()
-          const dest = join(imgDir, `${job.id}-${i}.${ext}`)
-          copyFileSync(img, dest)
-          jobImages.push(dest)
-        } catch {}
-      }
-    } catch {}
-  }
+  // 生成参数 + 上传图片副本：随任务持久化，历史详情可回显「提示词/参数/图片」（本地副本，不依赖外网）
+  const jobImages = persistJobImages(images, job.id)
   const jobOptions: Record<string, unknown> = {
     mode: input.mode,
     model: input.model,
@@ -274,10 +288,11 @@ export async function runGenerate(
     resolution: input.resolution
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
+  // 按厂商把密钥过滤下推到 SQL，只回传目标厂商行，避免每次生成整表拉取 encrypted_key 大字段
   const keys = input.teamId
-    ? await providerSvc.listTeamProviderKeysWithSecrets(input.teamId)
-    : (await providerSvc.listProviderKeysWithSecrets(input.userId)).filter((k) => !k.team_id)
-  const providerKeys = keys.filter((k) => k.provider_id === resolvedProviderId && k.enabled !== false)
+    ? await cachedListTeamProviderKeysWithSecrets(client, input.teamId, resolvedProviderId)
+    : (await cachedListProviderKeysWithSecrets(client, input.userId, resolvedProviderId)).filter((k) => !k.team_id)
+  const providerKeys = keys.filter((k) => k.enabled !== false)
 
   let selectedKey: { id: string; accountName: string | null } | null = null
   let result:
@@ -467,6 +482,8 @@ export async function runGenerate(
         if (/未登录|登录|API Key/.test(lastError)) {
           try {
             await providerSvc.updateHealth(input.userId, cand.id, 'expired')
+            // 健康态变了会直接影响后续生成的选号排序，立即失效该 key 所在分区缓存
+            invalidateKeysByKeyId(cand.id)
           } catch {}
         }
         emit({
@@ -648,10 +665,8 @@ async function runApiBranch(
   emit({ jobId: job.id, status: 'pending', message: '任务已创建' })
   onJobCreated?.(job.id, runCancelState)
 
-  // 图片 https URL 随任务持久化，历史详情可回显「上传图片」；api 厂商参考图为 Supabase 公网 URL
-  const jobImages = (input.images ?? [])
-    .filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u))
-    .slice(0, 5)
+  // 图片本地副本随任务持久化，历史详情离线回显；公网 http(s) URL 原样保留（兼容旧记录）
+  const jobImages = persistJobImages(input.images ?? [], job.id)
   const jobOptions: Record<string, unknown> = {
     mode: input.mode,
     model,
@@ -659,10 +674,11 @@ async function runApiBranch(
   }
   if (jobImages.length > 0) jobOptions.images = jobImages
 
+  // 按厂商把密钥过滤下推到 SQL，只回传该厂商行，避免整表拉取 encrypted_key 大字段
   const keys = input.teamId
-    ? await providerSvc.listTeamProviderKeysWithSecrets(input.teamId)
-    : (await providerSvc.listProviderKeysWithSecrets(input.userId)).filter((k) => !k.team_id)
-  const providerKeys = keys.filter((k) => k.provider_id === providerId && k.enabled !== false)
+    ? await cachedListTeamProviderKeysWithSecrets(client, input.teamId, providerId)
+    : (await cachedListProviderKeysWithSecrets(client, input.userId, providerId)).filter((k) => !k.team_id)
+  const providerKeys = keys.filter((k) => k.enabled !== false)
   // 选号：厂商实现 pick 时按其策略在多个已启用账号间选最优（如火山按「是否开通+剩余额度」），
   // 否则回退现状：默认账号优先，无默认取首个可用账号。
   let cand = providerKeys.find((k) => k.is_default) ?? providerKeys[0]
@@ -765,8 +781,8 @@ async function runApiBranch(
     mode,
     model,
     prompt: input.prompt,
-    // 图生/首尾/参考生图片为前端上传后的公网 https URL；由 branch 按模式过滤与数量校验
-    images: input.images ?? [],
+    // 图生/首尾/参考生图片为前端上传后的公网 https URL（imageUrls）；厂商不依赖历史本地展示路径
+    images: input.imageUrls ?? input.images ?? [],
     durationSec: input.durationSec,
     onProgress: (msg) => emit({ jobId: job.id, status: 'running', stage: 'progress', message: msg })
   }
@@ -781,6 +797,8 @@ async function runApiBranch(
           await providerSvc.refreshProviderKey(input.userId, cand.id, {
             encryptedKey: safeStorage.encryptString(marked.plain).toString('base64')
           })
+          // encrypted_key 已更新（落不可用标记），失效缓存避免复用旧负载
+          invalidateKeysByKeyId(cand.id)
         } catch {
           // 标记写库失败不回滚本次生成失败
         }
@@ -793,6 +811,10 @@ async function runApiBranch(
       completedAt: new Date().toISOString()
     })
     emit({ jobId: job.id, status: 'failed', message: err })
+    // 生成失败也延迟清理参考图公网 URL：厂商已不会再拉取，避免残留撑大 GitHub 仓库
+    setTimeout(() => {
+      void deleteImages(input.imageUrls ?? []).catch(() => {})
+    }, 10 * 60 * 1000)
     return { ok: false, jobId: job.id, error: err }
   }
 
@@ -828,6 +850,12 @@ async function runApiBranch(
     data: { resultUrl, cost, localPath, accountId: cand.id }
   })
 
+  // 参考图公网 URL 仅供生成瞬间给厂商拉取；生成成功后延迟清理，避免日积月累撑大 GitHub 仓库。
+  // 本地历史副本（userData/images）不受影响；延迟给用户留出「成功后再点一次生成」的窗口。
+  setTimeout(() => {
+    void deleteImages(input.imageUrls ?? []).catch(() => {})
+  }, 10 * 60 * 1000)
+
   // 火山方舟生成成功 → 自愈清除该模型的历史不可用标记（平台恢复可用即重新放行）
   if (providerId === 'volcengine' && model && plain) {
     const cleared = clearVolcModelUnavailable(plain, model)
@@ -836,6 +864,8 @@ async function runApiBranch(
         await providerSvc.refreshProviderKey(input.userId, cand.id, {
           encryptedKey: safeStorage.encryptString(cleared.plain).toString('base64')
         })
+        // encrypted_key 已更新（清除不可用标记），失效缓存避免复用旧负载
+        invalidateKeysByKeyId(cand.id)
       } catch {
         // 自愈写库失败不影响生成成功返回
       }

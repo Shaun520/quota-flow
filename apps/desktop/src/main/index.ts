@@ -20,6 +20,8 @@ import { getWatermarkStatus, processWatermarkJob } from './watermark-remover/job
 import type { WatermarkJobInput } from './watermark-remover/job'
 import type { WatermarkProgress } from './watermark-remover/engine'
 import { getMaterialStore } from './materials/store'
+import { uploadImage as uploadImageToGh, cleanupOldImages } from './github-upload'
+import { clearKeysCache, handleKeysCacheInvalidate } from './query-cache'
 
 /** 活跃生成任务注册表：jobId → 取消/已提交状态（用于「终止生成」与「关闭确认」） */
 interface ActiveRunState {
@@ -266,6 +268,10 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   void startMediaServer()
+  // 启动后兜底清理：移除 GitHub 图床 qf-images/ 下超过 24 小时的旧参考图（防止任务中断/失败残留累积撑大仓库）
+  setTimeout(() => {
+    void cleanupOldImages(24 * 60 * 60 * 1000).catch(() => {})
+  }, 10_000)
   ipcMain.handle('media:get-url', async (_e, name: unknown) => {
     if (typeof name !== 'string' || !/^[0-9a-fA-F-]+(\.clean(?:-[A-Za-z0-9-]+)?)?\.mp4$/.test(name)) {
       throw new Error('invalid media name')
@@ -317,6 +323,56 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('ping', () => 'pong')
+
+  // 主进程密钥分区缓存：渲染层写点（add/refresh/remove/默认/停用/改名/健康）成功后失效对应分区；
+  // 登出/换账号时 clear 全清，保证「会话内先加载 + 重登录强制失效」语义。
+  ipcMain.handle('keys-cache-invalidate', (_e, opts: unknown) => {
+    const o = (opts ?? {}) as { keyId?: unknown; userId?: unknown; teamId?: unknown }
+    handleKeysCacheInvalidate({
+      keyId: typeof o.keyId === 'string' ? o.keyId : undefined,
+      userId: typeof o.userId === 'string' ? o.userId : undefined,
+      teamId: typeof o.teamId === 'string' ? o.teamId : undefined
+    })
+  })
+  ipcMain.handle('keys-cache-clear', () => {
+    clearKeysCache()
+  })
+
+  // 参考图上传到 GitHub 公开仓库并返回 jsDelivr CDN 公网 URL（密钥在主进程，渲染层仅传字节）
+  ipcMain.handle('storage:upload-image', async (_e, payload: unknown) => {
+    const p = (payload ?? {}) as { bytes?: ArrayBuffer; contentType?: string; ext?: string }
+    if (!(p.bytes instanceof ArrayBuffer) || p.bytes.byteLength === 0) {
+      throw new Error('非法的图片上传载荷')
+    }
+    const { url } = await uploadImageToGh({
+      bytes: new Uint8Array(p.bytes),
+      contentType: typeof p.contentType === 'string' ? p.contentType : '',
+      ext: typeof p.ext === 'string' ? p.ext : 'png'
+    })
+    return { url }
+  })
+  // 参考图本地副本：写入 userData/images 供历史详情离线回显（与 dispatch 持久化语义一致）
+  ipcMain.handle('storage:save-image-local', async (_e, payload: unknown) => {
+    const p = (payload ?? {}) as { bytes?: ArrayBuffer; ext?: string }
+    if (!(p.bytes instanceof ArrayBuffer) || p.bytes.byteLength === 0) {
+      throw new Error('非法的图片载荷')
+    }
+    const ext = /^[a-z0-9]{1,8}$/.test((p.ext as string) || '') ? (p.ext as string) : 'png'
+    const imgDir = join(app.getPath('userData'), 'images')
+    mkdirSync(imgDir, { recursive: true })
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`
+    const path = join(imgDir, name)
+    writeFileSync(path, Buffer.from(p.bytes))
+    return { path }
+  })
+  // 读取本地图片字节（历史「重新生成」时对 API 厂商重传参考图取新公网 URL 用）
+  ipcMain.handle('storage:read-image-local', async (_e, path: unknown) => {
+    if (typeof path !== 'string' || !path) {
+      throw new Error('非法的图片路径')
+    }
+    const data = readFileSync(path)
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+  })
   ipcMain.handle('window:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
   ipcMain.handle('window:toggle-maximize', (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)

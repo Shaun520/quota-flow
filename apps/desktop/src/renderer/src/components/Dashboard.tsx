@@ -27,9 +27,12 @@ import { VideoThumb } from './VideoThumb'
 import { getInitialShowWebview } from './Modals'
 import type { DesktopFeatureFlags } from '../hooks/useDesktopPermissions'
 import type { ProviderCaps, ProviderCapsMap } from '../hooks/useProviderCaps'
-import { uploadReferenceImage } from '../utils/uploadImage'
+import { imageContentType, prepareReferenceImage } from '../utils/uploadImage'
 
 const VIP = false
+
+/** 需要通过公网 https URL 才能做图生/参考的 API 型厂商（历史图生记录重新生成时需重传本地图取新 URL） */
+const API_IMAGE_PROVIDERS = ['zhipu', 'volcengine']
 
 function maxImageUploadCount(provider: string, model: string): number {
   // 智谱按模型能力限制图片上传数量：图生视频1张、首尾帧2张、Vidu 2参考生视频最多5张
@@ -189,6 +192,8 @@ export default function Dashboard({
   const [images, setImages] = useState<string[]>([])
   const [imageFiles, setImageFiles] = useState<File[]>([])
   const [savedImagePaths, setSavedImagePaths] = useState<string[]>([])
+  // 开放平台 API 型厂商（智谱/火山/百炼）参考图的公网 https URL：仅用于生成时透传厂商，历史展示走 savedImagePaths 本地路径
+  const [apiImageUrls, setApiImageUrls] = useState<string[]>([])
   // 开放平台 API 型厂商（智谱/火山）图片异步上传计数：>0 表示尚有图片在上传，禁用「开始生成」
   const [uploadingCount, setUpLoadingCount] = useState(0)
   const [prompt, setPrompt] = useState('')
@@ -244,6 +249,7 @@ export default function Dashboard({
     setPrompt(regenerateDraft.prompt || '')
     setImageFiles([])
     setSavedImagePaths(regenerateDraft.images ?? [])
+    setApiImageUrls([])
     setImages([])
     setGenError(null)
     setGenFailed(false)
@@ -259,6 +265,27 @@ export default function Dashboard({
         setImages(urls.filter((u): u is string => !!u))
       })
       .catch(() => {})
+    // 历史已改为本地副本：API 厂商图生再生成需的参考图，http(s) 旧 URL 直接复用，本地路径重传取新公网 URL（原 URL 生成后已删）
+    if (API_IMAGE_PROVIDERS.includes(nextProvider) && paths.length > 0) {
+      void Promise.all(
+        paths.map(async (p) => {
+          if (/^https?:\/\//i.test(p)) return p
+          try {
+            const bytes = await window.api.storage.readImageLocal(p)
+            const ext = (/\.(png|gif|webp|jpe?g)$/i.exec(p)?.[1] ?? 'png').toLowerCase().replace('jpeg', 'jpg')
+            const { url } = await window.api.storage.uploadImage({ bytes, contentType: imageContentType(ext), ext })
+            return url
+          } catch {
+            return ''
+          }
+        })
+      )
+        .then((urls) => {
+          if (cancelled) return
+          setApiImageUrls(urls.filter((u): u is string => !!u))
+        })
+        .catch(() => {})
+    }
     onRegenerateConsumed?.()
     return () => {
       cancelled = true
@@ -270,6 +297,8 @@ export default function Dashboard({
     if (!materialImages || materialImages.length === 0) return
     setSavedImagePaths((prev) => [...prev, ...materialImages.map((m) => m.path)])
     setImages((prev) => [...prev, ...materialImages.map((m) => m.url)])
+    // 素材图是本地路径；仅当素材给了公开 https URL 时才可作 API 厂商参考图透传（否则生成走本地路径）
+    setApiImageUrls((prev) => [...prev, ...materialImages.filter((m) => /^https?:\/\//i.test(m.url)).map((m) => m.url)])
     const validModes = visibleModeOptions(provider, model, features, caps)
     const imageMode = validModes.find((m) => ['multi_ref', 'img', 'first_last', 'first_frame'].includes(m.value))
     if (imageMode && imageMode.value !== mode) setMode(imageMode.value)
@@ -615,6 +644,8 @@ export default function Dashboard({
         images: currentMode === 't2v' && provider !== 'yuanbao'
           ? []
           : [...savedImagePaths, ...imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean)].slice(0, maxImageUploadCount(provider, model)),
+        // 厂商 API 用图片仅取公网 https URL（API 型厂商图生参考图）；WebView 厂商不传，主进程回退 images
+        imageUrls: apiImageUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u)),
         showWebview: getInitialShowWebview()
       })
       activeJobIdRef.current = res.jobId ?? null
@@ -634,7 +665,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, uploadingCount, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, apiImageUrls, uploadingCount, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -703,20 +734,32 @@ export default function Dashboard({
   }, [])
 
   // 开放平台 API 型厂商（智谱 / 火山方舟）的图生/多参考/首尾帧图片必须为公网 https URL：
-  // 先立即显示本地预览（blob URL），再逐个后台上传到 qf-images 桶取公开 URL（回填 savedImagePaths 同序号格子）。
+  // 先立即显示本地预览（blob URL），再逐个后台处理，同时得到
+  //  - 公网 https URL（apiImageUrls）：只传给厂商 API 用于生成；
+  //  - 本地绝对路径（savedImagePaths）：随任务入库，历史模块离线回显（不依赖外网）。
   const appendApiImages = useCallback(
     async (files: File[]) => {
       const base = savedImagePaths.length
       // 预览立刻出现，不等网络上传
       setImages((prev) => [...prev, ...files.map((f) => URL.createObjectURL(f))])
-      // 预占储存格保证 savedImagePaths 与 images 序号对齐；上传完成后回填 https URL
+      // 预占储存格保证 savedImagePaths/apiImageUrls 与 images 序号对齐；处理完成后回填
       setSavedImagePaths((prev) => [...prev, ...files.map(() => '')])
+      setApiImageUrls((prev) => [...prev, ...files.map(() => '')])
       setUpLoadingCount((c) => c + files.length)
       for (let i = 0; i < files.length; i++) {
         const idx = base + i
         try {
-          const url = await uploadReferenceImage(files[i])
-          setSavedImagePaths((prev) => prev.map((p, j) => (j === idx ? url : p)))
+          // 大图优先在渲染层压缩（远小于 GitHub/jsDelivr 单文件上限），小图不重复解码
+          const { bytes, ext, reencoded } = await prepareReferenceImage(files[i])
+          const { url } = await window.api.storage.uploadImage({ bytes, contentType: imageContentType(ext), ext })
+          const diskPath = window.api.files.getPath(files[i])
+          // 压缩过的存压缩字节副本；未压缩且带磁盘路径用原路径（不重复落盘），否则 blob 写本地副本兜底
+          const localPath =
+            !reencoded && diskPath
+              ? diskPath
+              : (await window.api.storage.saveImageLocal({ bytes, ext })).path
+          setSavedImagePaths((prev) => prev.map((p, j) => (j === idx ? localPath : p)))
+          setApiImageUrls((prev) => prev.map((p, j) => (j === idx ? url : p)))
         } catch (e) {
           setGenError('图片上传失败：' + (e instanceof Error ? e.message : String(e)))
         } finally {
@@ -760,6 +803,7 @@ export default function Dashboard({
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
     setSavedImagePaths((prev) => prev.filter((_, i) => i !== idx))
+    setApiImageUrls((prev) => prev.filter((_, i) => i !== idx))
     setImageFiles((prev) => {
       if (idx < savedImagePaths.length) return prev
       return prev.filter((_, i) => i !== idx - savedImagePaths.length)
