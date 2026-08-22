@@ -91,6 +91,9 @@ const healthCheckAt = new Map<string, number>()
 /** 健康检查节流记录所属的 user id；账号切换时清空，避免节流记录串号 */
 let healthCheckUserId: string | null = null
 
+/** 腾讯云 TokenHub 每模型额度补抓节流：`${userId}:${keyId}` -> 最近一次补抓时间戳（一账号每会话限一次，避免反复开隐藏窗口） */
+const tokenhubBackfillAt = new Map<string, number>()
+
 /* ============ 智谱 consoleJwt 会话自动续期（静默隐式，后台完成，不打扰用户） ============ */
 
 /** keyId -> 该 key 最近一次续期尝试时间戳（后续期失败节流，避免反复开隐藏窗口） */
@@ -190,6 +193,8 @@ export interface ProvidersResult {
   volcTokenOverrides: Record<string, { remaining: number; total: number } | null>
   /** 阿里云百炼各账号真实免费额度聚合覆盖（keyId -> 账号级剩余/总量），随绑定时的控制台会话捕获落库 */
   bailianQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  /** 腾讯云 TokenHub 账号真实每模型免费额度汇总覆盖（keyId -> remaining/total；null 表示已拉取但未拿到真实额度），替代账本假额度 50/50 */
+  tokenhubQuotaOverrides: Record<string, { remaining: number; total: number } | null>
   /** 火山方舟额度同步：后台静默抓取该账号最新免费模型额度/开通状态并落库；命中返回新加密负载，未抓到返回 false */
   refreshVolcengineModelsOnce: (keyId: string, opts?: { maxStaleMs?: number }) => Promise<string | false>
   /** 阿里云百炼额度刷新：复用该账号 cookie 静默重抓控制台最新免费额度并落库；命中返回新密文，未命中返回 false */
@@ -221,6 +226,11 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   // 阿里云百炼各账号真实免费额度聚合覆盖（keyId -> 账号级剩余/总量），随绑定时的控制台会话捕获落库
   const [bailianQuotaOverrides, setBailianQuotaOverrides] = useState<
     Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  >({})
+  // 腾讯云 TokenHub 各账号真实每模型免费额度汇总覆盖（keyId -> remaining/total）。
+  // 值为 null 表示已拉取但未拿到真实额度（用于占位，避免误显示账本假额度 50/50）。
+  const [tokenhubQuotaOverrides, setTokenhubQuotaOverrides] = useState<
+    Record<string, { remaining: number; total: number } | null>
   >({})
 
   // 单次拉取智谱某账号真实额度（平台资源包余额）并写入覆盖；返回剩余次数（查询失败返回 null）
@@ -526,6 +536,44 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
   // 腾讯云 TokenHub 每模型额度同步：后台复用该账号分区登录态（必要时回注入 cookie）静默抓取最新每模型免费额度并落库。
   // 命中（抓到每模型额度）用重建的加密负载更新 DB 并返回新 encrypted，供「查看模型」即时展示；
   // 未抓到（登录态失效/页面未就绪）保留旧值返回 false，不打断调用方。主要用于「查看模型」自愈续抓存量账号。
+  // 拉取腾讯云 TokenHub 某账号真实每模型免费额度汇总（该账号目录里所有带 freeQuota 的模型求和）并写入覆盖。
+  // 口径与「查看模型」弹窗一致：仅汇总 freeQuota.total 存在的模型；未取到任何真实额度写 null（前端护栏显示占位，而非账本假额度 50/50）。
+  // 返回是否已拿到真实额度（供「绑完自动补抓」判断，缺 models 的负载据此续抓）。
+  const fetchTokenhubQuotaSummaryOnce = useCallback(
+    async (keyId: string): Promise<boolean> => {
+      const svc = getProviderService()
+      if (!svc || !user) return false
+      let found = false
+      try {
+        const secret = await svc.getProviderKeySecret(user.id, keyId)
+        if (!secret) return false
+        const res = await window.api.providers.apiModels('tokenhub', secret.encrypted_key)
+        const models = res.ok ? res.models : undefined
+        if (Array.isArray(models) && models.length > 0) {
+          let total = 0
+          let remaining = 0
+          for (const m of models) {
+            if (m.freeQuota && typeof m.freeQuota.total === 'number' && m.freeQuota.total > 0) {
+              total += m.freeQuota.total
+              if (typeof m.freeQuota.remaining === 'number') remaining += m.freeQuota.remaining
+            }
+          }
+          if (total > 0) {
+            found = true
+            setTokenhubQuotaOverrides((prev) => ({ ...prev, [keyId]: { remaining, total } }))
+          }
+        }
+      } catch {
+        // 拉取失败不阻断
+      }
+      if (!found) {
+        setTokenhubQuotaOverrides((prev) => ({ ...prev, [keyId]: null }))
+      }
+      return found
+    },
+    [user]
+  )
+
   const refreshTokenhubModelsOnce = useCallback(
     async (keyId: string, maxStaleMs?: number): Promise<string | false> => {
       const svc = getProviderService()
@@ -538,13 +586,40 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
         if (!res.ok || res.preserved || !res.encrypted) return false
         await svc.refreshProviderKey(user.id, keyId, { encryptedKey: res.encrypted, healthStatus: res.hasQuota ? 'healthy' : undefined })
         void window.api.keysCache.invalidate({ keyId })
+        // 同步命中 → 用最新负载重置各账号真实额度汇总（厂商列表行同步显示真实积分，而非 50/50）
+        if (res.hasQuota) void fetchTokenhubQuotaSummaryOnce(keyId)
         return res.encrypted
       } catch {
         return false
       }
     },
-    [user]
+    [user, fetchTokenhubQuotaSummaryOnce]
   )
+
+  // 腾讯云 TokenHub 每模型额度补抓：先读负载，缺 models（存量账号 / 刚绑定错过 open-management 页）时
+  // 复用该账号分区登录态静默补抓并落库再重读，实现「绑定 / 加载后即显示真实积分」的实时同步。
+  // 同一账号每会话补抓一次（tokenhubBackfillAt 节流），避免反复开隐藏窗口增加请求。
+  const ensureTokenhubQuotaOnce = useCallback(
+    async (keyId: string): Promise<void> => {
+      // 先读负载：已有真实每模型额度直接返回，无需重复抓
+      if (await fetchTokenhubQuotaSummaryOnce(keyId)) return
+      const guard = user ? `${user.id}:${keyId}` : keyId
+      const at = tokenhubBackfillAt.get(guard)
+      if (typeof at === 'number' && Date.now() - at < 60000) return
+      tokenhubBackfillAt.set(guard, Date.now())
+      const fresh = await refreshTokenhubModelsOnce(keyId)
+      if (fresh !== false) void fetchTokenhubQuotaSummaryOnce(keyId)
+    },
+    [user, fetchTokenhubQuotaSummaryOnce, refreshTokenhubModelsOnce]
+  )
+
+  // 初始化 / 刷新时主动拉取腾讯云 TokenHub 各账号真实每模型免费额度汇总（供厂商列表行展示，替代账本假额度 50/50）
+  useEffect(() => {
+    if (!user || keys.length === 0) return
+    const tkhKeys = keys.filter((k) => k.provider_id === 'tokenhub')
+    if (tkhKeys.length === 0) return
+    tkhKeys.forEach((key) => void ensureTokenhubQuotaOnce(key.id))
+  }, [user?.id, keys, ensureTokenhubQuotaOnce])
 
   // 扫描所有火山账号的会话状态：命中 expiring / expired 且未到重试节流时，触发一次静默续期并停止本轮
   const scanVolcSessions = useCallback(async (): Promise<void> => {
@@ -1006,6 +1081,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     volcSessionStatuses,
     volcTokenOverrides,
     bailianQuotaOverrides,
+    tokenhubQuotaOverrides,
     refreshVolcengineModelsOnce,
     refreshBailianQuotaOnce,
     refreshTokenhubModelsOnce

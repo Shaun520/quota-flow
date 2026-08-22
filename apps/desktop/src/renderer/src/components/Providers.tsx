@@ -181,7 +181,7 @@ interface ProvidersProps {
 
 export default function Providers({ fresh, viewScope, usageScope, onBound, providers, canBind = true }: ProvidersProps) {
   const { user, team } = useAuth()
-  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce, refreshBailianQuotaOnce, refreshTokenhubModelsOnce } = providers
+  const { loading, refreshing, error, aggs, reload, testHealth, rename, setDefault, setEnabled, setProviderKeyScope, unbind, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides, tokenhubQuotaOverrides, setKeyHealth, refreshVolcengineModelsOnce, refreshBailianQuotaOnce, refreshTokenhubModelsOnce } = providers
   const [text, setText] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -509,6 +509,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
                         zhipuQuotaOverrides={zhipuQuotaOverrides}
                         volcTokenOverrides={volcTokenOverrides}
                         bailianQuotaOverrides={bailianQuotaOverrides}
+                        tokenhubQuotaOverrides={tokenhubQuotaOverrides}
                         currentUserId={user?.id ?? ''}
                         team={team}
                       />
@@ -636,6 +637,7 @@ function ProviderRow({
   zhipuQuotaOverrides,
   volcTokenOverrides,
   bailianQuotaOverrides,
+  tokenhubQuotaOverrides,
   currentUserId,
   team
 }: {
@@ -658,6 +660,7 @@ function ProviderRow({
   zhipuQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
   volcTokenOverrides: Record<string, { remaining: number; total: number } | null>
   bailianQuotaOverrides: Record<string, { available: boolean; total: number; remaining: number; expired?: boolean }>
+  tokenhubQuotaOverrides: Record<string, { remaining: number; total: number } | null>
   currentUserId: string
   team: { id: string } | null
 }) {
@@ -668,14 +671,15 @@ function ProviderRow({
   const isApiQuota = agg.providerId === 'zhipu'
   const isVolc = agg.providerId === 'volcengine'
   const isBailian = agg.providerId === 'bailian'
+  const isTkh = agg.providerId === 'tokenhub'
   const quotaOf = (keyId: string) =>
     isApiQuota
       ? zhipuQuotaOverrides[keyId] && zhipuQuotaOverrides[keyId].available
         ? zhipuQuotaOverrides[keyId]
         : undefined
-      : isVolc
-        ? volcTokenOverrides[keyId] && volcTokenOverrides[keyId]!.total > 0
-          ? volcTokenOverrides[keyId]
+      : isVolc || isTkh
+        ? (isVolc ? volcTokenOverrides[keyId] : tokenhubQuotaOverrides[keyId]) && (isVolc ? volcTokenOverrides[keyId] : tokenhubQuotaOverrides[keyId])!.total > 0
+          ? (isVolc ? volcTokenOverrides[keyId] : tokenhubQuotaOverrides[keyId])
           : undefined
         : isBailian
           ? bailianQuotaOverrides[keyId] && bailianQuotaOverrides[keyId].available
@@ -683,16 +687,18 @@ function ProviderRow({
             : undefined
           : undefined
   const remaining = activeBindings.reduce(
-    (s, b) => s + (isApiQuota || isVolc || isBailian ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
+    (s, b) => s + (isApiQuota || isVolc || isBailian || isTkh ? quotaOf(b.keyId)?.remaining ?? 0 : b.remaining),
     0
   )
   const totalQuota = activeBindings.reduce(
-    (s, b) => s + (isApiQuota || isVolc || isBailian ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
+    (s, b) => s + (isApiQuota || isVolc || isBailian || isTkh ? quotaOf(b.keyId)?.total ?? 0 : b.dailyTotal),
     0
   )
-  // 火山方舟：所有启用账号都未拿到真实 token 汇总时，厂商行总计显示占位（避免展示假的 0/0 或账本日额度）
+  // 火山方舟 / 腾讯云 TokenHub：所有启用账号都未拿到真实额度时，厂商行总计显示占位（避免展示假的 0/0 或账本日额度）
   const volcNoQuota =
     isVolc && activeBindings.length > 0 && activeBindings.every((b) => !(volcTokenOverrides[b.keyId] && volcTokenOverrides[b.keyId]!.total > 0))
+  const tkhNoQuota =
+    isTkh && activeBindings.length > 0 && activeBindings.every((b) => !(tokenhubQuotaOverrides[b.keyId] && tokenhubQuotaOverrides[b.keyId]!.total > 0))
   const disabledCount = agg.bindings.length - activeBindings.length
   const [editKeyId, setEditKeyId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
@@ -713,7 +719,7 @@ function ProviderRow({
           </span>
         </td>
         <td>{agg.unitName}</td>
-        <td>{volcNoQuota ? <span className="models-quota-text--dim">—</span> : `${remaining.toLocaleString()} / ${totalQuota.toLocaleString()}`}</td>
+        <td>{volcNoQuota || tkhNoQuota ? <span className="models-quota-text--dim">—</span> : `${remaining.toLocaleString()} / ${totalQuota.toLocaleString()}`}</td>
         <td className="col-accounts">{agg.boundCount} 个账号{disabledCount > 0 ? `（${disabledCount} 已停用）` : ''}</td>
         <td>
           <span className={'badge ' + badge.cls}>{badge.label}</span>
@@ -830,6 +836,20 @@ function ProviderRow({
                             return (
                               <span>{q?.available ? `${q.remaining} / ${q.total} ${agg.unitName}` : '—'}</span>
                             )
+                          })()
+                        ) : agg.providerId === 'tokenhub' ? (
+                          (() => {
+                            const t = tokenhubQuotaOverrides[acc.keyId]
+                            // 已取到真实每模型免费额度汇总：显示真实额度（剩余 / 总数）
+                            if (t && t.total > 0) {
+                              return <span>{t.remaining.toLocaleString()} / {t.total.toLocaleString()} {agg.unitName}</span>
+                            }
+                            // 未拿到真实额度：显示占位提示，替代账本假额度 50/50
+                            if (t === null) {
+                              return <span className="models-quota-text models-quota-text--dim">额度待查看</span>
+                            }
+                            // 拉取中：短暂沿用旧值避免闪烁
+                            return <span>{acc.remaining} / {acc.dailyTotal} {agg.unitName}</span>
                           })()
                         ) : (
                           `${acc.remaining} / ${acc.dailyTotal} ${agg.unitName}`

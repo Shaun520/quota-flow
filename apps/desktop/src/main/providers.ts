@@ -2886,22 +2886,28 @@ export async function captureTokenhubConsoleSession(opts?: {
 
   // —— 免费额度捕获（每模型） ——
   // 「启用管理」默认落在「语言模型」标签；注入 fetch/XHR 钩子拦截 DescribeModelEndpointList(VISION) 响应，
-  // 并自动点开「视觉模型」标签触发 VISION 请求。响应文本累积到 window.__TKH_RESPONSES__ 供主进程读回解析。
+  // 并自动点开「视觉模型」标签触发 VISION 请求。响应/诊断经 sessionStorage 持久化：整页重载不丢，重载后能继续诊断。
   // 实测契约（2026-08-21）：响应 data.data.data.Response.ModelEndpointSet[]，元素 ModelId + ChargeType='FREE' +
   // FreeTrialClaimed=true + ChargeDetail(字符串) -> FreeQuota{TotalQuota,UsedQuota,UsagePercent,ExpireTime}；每模型独立 50 积分。
   const CAP_INJECT = `(() => {
     if (window.__QUOTA_FLOW_TKH_CAP__) return;
     window.__QUOTA_FLOW_TKH_CAP__ = true;
-    window.__TKH_RESPONSES__ = window.__TKH_RESPONSES__ || [];
-    window.__TKH_SUBMIT__ = false;
+    const S = window.sessionStorage;
+    const KD = '__qftkh_diag__', KR = '__qftkh_resp__';
+    const loadD = () => { try { return JSON.parse(S.getItem(KD) || 'null') || {}; } catch (_) { return {}; } };
+    const diag = loadD();
+    diag.ready = document.readyState;
+    const putD = () => { try { window.__QUOTA_FLOW_TKH_DIAG__ = diag; S.setItem(KD, JSON.stringify(diag)); } catch (_) {} };
     const ingest = (u, t) => {
       try {
         if (!u || String(u).indexOf('DescribeModelEndpointList') < 0) return;
         if (typeof t !== 'string' || !t) return;
-        window.__TKH_RESPONSES__.push(t);
-        if (window.__TKH_RESPONSES__.length > 10) window.__TKH_RESPONSES__ = window.__TKH_RESPONSES__.slice(-10);
-        window.__TKH_SUBMIT__ = true;
-        window.__TKH_OK__ = true;
+        let arr = []; try { arr = JSON.parse(S.getItem(KR) || '[]'); } catch (_) {}
+        arr.push(t); if (arr.length > 10) arr = arr.slice(-10);
+        S.setItem(KR, JSON.stringify(arr));
+        window.__QUOTA_FLOW_TKH_RESPONSES__ = arr;
+        window.__TKH_SUBMIT__ = true; window.__TKH_OK__ = true;
+        diag.submit = true; diag.ok = true; diag.resp = arr.length; putD();
       } catch (_) {}
     };
     const oOF = window.fetch;
@@ -2922,20 +2928,51 @@ export async function captureTokenhubConsoleSession(opts?: {
       }
       return oS.apply(this, arguments);
     };
+    const $g = (s) => Array.from(document.querySelectorAll(s));
+    const label = (el) => el && el.textContent ? String(el.textContent).trim() : '';
+    const isSidebar = (el) => /menu|sider|side|aside/.test(String(el.className || '')) || !!(el.closest && el.closest('[class*="menu"], [class*="sider"]'));
+    const probeVision = () => $g('li, a, span, div, button')
+      .filter((e) => e.childElementCount <= 3 && label(e).indexOf('视觉模型') === 0)
+      .map((e) => ({ tag: e.tagName, cls: String(e.className || '').toString().slice(0, 60), sel: isSidebar(e) }))
+      .slice(0, 6);
     const tryOpenVision = () => {
       try {
-        const tabs = Array.from(document.querySelectorAll('li, a, button, div, span'));
-        const hit = tabs.filter((e) => e.childElementCount <= 1 && e.textContent && e.textContent.trim() === '视觉模型' && e.tagName !== 'A');
-        if (hit.length) hit[0].click();
-      } catch (_) {}
+        diag.tries = (diag.tries || 0) + 1;
+        diag.href = location.href;
+        diag.ready = document.readyState;
+        diag.total = $g('li, a, button, div, span').length;
+        diag.kind = 'none'; diag.err = '';
+        diag.visionDetail = probeVision();
+        let hit = null;
+        // 1) 水平「系统标签」里的视觉模型（system-tabs 等，点击才触发 DescribeModelEndpointList）
+        const sysEl = $g('li[class*="system-tabs"], li[class*="tab"], a[class*="system-tabs"], a[class*="tab"]')
+          .find((e) => label(e) === '视觉模型' && !isSidebar(e)) || null;
+        if (sysEl) { hit = sysEl; diag.kind = 'system-tab'; }
+        else {
+          // 2) 任意非侧栏(menu)的视觉模型可点条目
+          const gEl = $g('li, a, span, div, button').find((e) => e.childElementCount <= 3 && label(e) === '视觉模型' && !isSidebar(e) && !/menu|sider/.test(String(e.className || ''))) || null;
+          if (gEl) { hit = gEl; diag.kind = 'generic'; }
+        }
+        const a = hit ? (hit.tagName === 'A' ? hit : (hit.querySelector('a') || hit)) : null;
+        diag.tag = hit ? hit.tagName : '';
+        diag.cls = hit ? String(hit.className || '').toString().slice(0, 60) : '';
+        diag.clicked = a ? a.tagName : '';
+        if (a) {
+          const fire = (el) => { try { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true })); el.click(); } catch (_) {} };
+          fire(a); if (a !== hit) fire(hit);
+          diag.lastClickKind = diag.kind;
+        }
+        putD();
+      } catch (e) { diag.err = String(e); putD(); }
     };
-    // 交互式绑定用户可能未登录，VISION 请求在登录后才生效；周期性重触发视觉模型标签直至拿到一条响应。
-    window.__TKH_OK__ = false;
-    tryOpenVision();
-    window.__TKH_RETRY__ = setInterval(function () {
+    // 已抓到响应则不再重复点击
+    putD();
+    if (!diag.ok) tryOpenVision();
+    window.__QUOTA_FLOW_TKH_RETRY__ = setInterval(function () {
       try {
-        if (!window.__TKH_OK__) tryOpenVision();
-        else if (window.__TKH_RETRY__) { clearInterval(window.__TKH_RETRY__); window.__TKH_RETRY__ = null; }
+        if (diag.ok) { clearInterval(window.__QUOTA_FLOW_TKH_RETRY__); window.__QUOTA_FLOW_TKH_RETRY__ = null; }
+        else tryOpenVision();
       } catch (_) {}
     }, 4000);
   })()`
@@ -2962,8 +2999,8 @@ export async function captureTokenhubConsoleSession(opts?: {
 
   const FREQ_MS = 1200
   const MAX_WAIT_MS = 5 * 60 * 1000
-  /** uin 首次捕获后再给额度最长等待：静默续期/交互绑定都不至于久挂；额度通常登录后 2-4s 内就到 */
-  const QUOTA_GRACE_MS = 12000
+  /** uin 首次捕获后再给额度最长等待：静默续期/交互绑定都不至于久挂；额度通常登录后 2-4s 内就到，放宽到 20s 以覆盖慢速控制台下标签点击+请求往返 */
+  const QUOTA_GRACE_MS = 20000
   // 已捕获到的 uin（账号级去重维度）；记录后窗口关闭时据其归档最终完整登录 cookie
   let capturedUin: string | null = null
   let uinAt = 0
@@ -2976,17 +3013,18 @@ export async function captureTokenhubConsoleSession(opts?: {
       if (cs.length > 0) tokenhubCapturedCookies.set(uin, cs)
     } catch {}
   }
-  /** 读回页面里已拦截到的 DescribeModelEndpointList 响应，解析为每模型额度 */
+  /** 读回页面里已拦截到的 DescribeModelEndpointList 响应，解析为每模型额度（优先 window，整页重载后回退 sessionStorage） */
   const readQuota = async (): Promise<void> => {
     try {
       if (win.isDestroyed() || win.webContents.isDestroyed()) return
       const raw = await win.webContents.executeJavaScript(
-        'window.__TKH_SUBMIT__ ? JSON.stringify(window.__TKH_RESPONSES__) : null'
+        'JSON.stringify({submit:!!window.__TKH_SUBMIT__,arr:(window.__TKH_RESPONSES__||[]).length?window.__TKH_RESPONSES__:(function(){try{return JSON.parse(sessionStorage.getItem("__qftkh_resp__")||"[]")}catch(_){return []}})()})'
       )
-      if (typeof raw !== 'string' || !raw) return
-      const list = JSON.parse(raw) as string[]
+      const info = raw ? (JSON.parse(raw) as { submit?: boolean; arr?: string[] }) : null
+      const list = info?.arr
+      if (!Array.isArray(list) || list.length === 0) return
       const seen = new Map<string, TokenhubModelQuota>()
-      for (const t of list || []) {
+      for (const t of list) {
         for (const e of parseTokenhubDescribeResponse(t)) {
           if (!seen.has(e.model)) seen.set(e.model, e.quota)
         }
@@ -3026,7 +3064,16 @@ export async function captureTokenhubConsoleSession(opts?: {
       // 无论是否已 settle：交互式窗口中用户登录并复制完 API Key 后关闭窗口，登录态已定型，
       // 此时再收集一次「最终完整登录 cookie」覆盖缓存，供加密兜底合并（避免 uin 刚出现时收集到不完整登录态）
       if (capturedUin) void collectCookies(capturedUin)
-      if (!settled) finish({ ok: false, error: '窗口已关闭' })
+      // 交互式绑定：用户在窗口内点「已复制，关闭窗口」提前关闭窗口（未到 20s 额度宽限/未 settle）时，
+      // 只要已识别主账号 uin 就按成功返回（附上已抓到的每模型额度；缺额度的由其知道后续台静默补抓），
+      // 避免报「窗口已关闭」错误把整次绑定判死、导致用户看不到「已获取模型」的成功提示。
+      if (!settled) {
+        finish(
+          capturedUin
+            ? { ok: true, uin: capturedUin, models: buildModels() }
+            : { ok: false, error: '窗口已关闭' }
+        )
+      }
     })
     const tick = async () => {
       if (win.isDestroyed() || settled) {
@@ -3050,6 +3097,17 @@ export async function captureTokenhubConsoleSession(opts?: {
       // 已拿 uin，且「拿到每模型额度 或 额度宽限已过」→ 结算。
       // 交互式(closeWin=false)结算后保持窗口打开供用户复制 API Key；静默续期(closeWin=true)关窗释放。
       if (capturedUin && !settled && ((capturedQuota && capturedQuota.length > 0) || Date.now() - uinAt > QUOTA_GRACE_MS)) {
+        if (!capturedQuota || capturedQuota.length === 0) {
+          // 结算时仍未抓到每模型额度：把是否真的收到过 VISION 响应、以及 __TKH_OK__ 态打出来，便于定位是「点不出标签」还是「接口未返回额度」
+          try {
+            const dbg = await win.webContents.executeJavaScript(
+              '(function(){let r=[];try{r=JSON.parse(sessionStorage.getItem("__qftkh_resp__")||"[]")}catch(_){}let d=null;try{d=JSON.parse(sessionStorage.getItem("__qftkh_diag__")||"null")}catch(_){d=window.__QUOTA_FLOW_TKH_DIAG__}return JSON.stringify({ok:!!(r.length||window.__TKH_OK__),submit:!!(r.length||window.__TKH_SUBMIT__),resp:r.length||(window.__TKH_RESPONSES__||[]).length,diag:d||window.__TKH_DIAG__||null})})()'
+            )
+            console.log(`[qf-tokenhub] CAPTURE no-quota uin=${uin} ${dbg || ''}`)
+          } catch {
+            console.log(`[qf-tokenhub] CAPTURE no-quota uin=${uin}`)
+          }
+        }
         finish({ ok: true, uin: capturedUin, models: buildModels() }, quiet)
       }
     }
