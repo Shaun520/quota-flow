@@ -13,7 +13,7 @@ export const PROVIDER_LABEL: Record<string, string> = {
 }
 
 export const MODELS: Record<string, string[]> = {
-  doubao: ['Seedance 2.0 Mini'],
+  doubao: ['Seedance 2.0 Mini', 'Seedance 2.0 Fast'],
   qwen: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   qwenwan: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   yuanbao: ['混元'],
@@ -315,6 +315,13 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
     // 腾讯云 TokenHub 各模型模式与主进程 TOKENHUB_MODEL_MODES 一致；FX 待模板选择器，暂无入口
     return TKH_MODEL_MODES[model ?? ''] ?? []
   }
+  if (provider === 'doubao') {
+    // 豆包 WebView 引擎仅支持文生视频 / 图生视频（图生最多 10 张），不暴露多参考/首尾帧
+    return [
+      { value: 'text2video', label: '文生视频' },
+      { value: 'img2video', label: '图生视频' }
+    ]
+  }
   return [
     { value: 't2v', label: '文生视频' },
     { value: 'img', label: '图生视频' },
@@ -380,6 +387,17 @@ export function resolutionOptions(
 }
 
 export function ratioOptions(provider: string): Array<{ value: string; label: string }> {
+  if (provider === 'doubao') {
+    // 豆包视频页比例网格实测可选：9:16 / 16:9 / 1:1 / 3:4 / 4:3 / 21:9
+    return [
+      { value: '9:16', label: '9:16' },
+      { value: '16:9', label: '16:9' },
+      { value: '1:1', label: '1:1' },
+      { value: '3:4', label: '3:4' },
+      { value: '4:3', label: '4:3' },
+      { value: '21:9', label: '21:9' }
+    ]
+  }
   if (provider === 'dola') {
     return [
       { value: '1:1', label: '1:1' },
@@ -443,6 +461,11 @@ export function uploadHint(provider: string, mode: string): string {
     }
     return map[mode] ?? '文生视频无需上传素材'
   }
+  // 豆包图生视频支持最多 10 张图片（与 maxImageUploadCount 一致）
+  if (provider === 'doubao') {
+    if (mode === 'img2video' || mode === 'img') return '图生视频需上传图片（最多 10 张）'
+    return '文生视频无需上传素材'
+  }
   if (provider === 'doubao' && mode === 'multi_ref') return '上传图片作为参考（最多 10 张）'
   if (mode === 'multi_ref') return '拖拽图片 / 视频到此处（多参考生成，最多 5 个）'
   // 图生视频/首尾帧/首帧：提示需要图片素材
@@ -478,7 +501,7 @@ export function computeCost(
     return { text: cost + ' 额度', who: model + ' · ' + duration + 's · ' + resolution + 'p' }
   }
   if (provider === 'doubao') {
-    return { text: 1 + d + ' 点', who: 'Seedance 2.0 Mini · ' + duration + 's' }
+    return { text: 1 + d + ' 点', who: model + ' · ' + duration + 's' }
   }
   if (provider === 'yuanbao') {
     return { text: '1 个', who: '元宝混元 · 5s' }

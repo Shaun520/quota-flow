@@ -51,6 +51,8 @@ export interface DoubaoGenerateOptions {
   prompt: string
   /** 生成模式：text2video / img2video（当前支持） */
   mode?: string
+  /** 模型：Seedance 2.0 Mini / Seedance 2.0 Fast（默认 Mini；通过豆包页面模型选择器真实操作） */
+  model?: string
   /** 清晰度：豆包规格无清晰度维度，仅透传记录 */
   resolution?: string
   /** 配音：on / off（尽力注入） */
@@ -602,6 +604,213 @@ const closeDurationMenuScript = (): unknown => {
   return { ok: true }
 }
 
+/* ---------------- 比例网格 DOM 操作（豆包「自动 · Ns」菜单内） ----------------
+ * 与时长同菜单：菜单打开时含「比例」网格 +「时长」滑块。
+ * 比例项为 button，文本形如「9:16 / 3:4 / 21:9」，选中态通过 class
+ * border-dbx-text-highlight 判定（实测 2026-08-22，无 aria-checked/data-state）。
+ */
+
+/* 读取比例网格状态：菜单是否打开 + 比例项列表 + 当前选中 */
+const readRatioStateScript = (): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const visible = (el: Element): boolean => (el as HTMLElement).offsetParent !== null
+  const menu =
+    [...document.querySelectorAll('[role="menu"][data-state="open"]')]
+      .filter(visible)
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0] || null
+  const items = menu
+    ? [...menu.querySelectorAll('button, [role="button"]')]
+        .filter((el) => visible(el) && /^\d+\s*:\s*\d+$/.test(norm(el.textContent || '')))
+        .map((el) => ({
+          t: norm(el.textContent || ''),
+          selected: /border-dbx-text-highlight/.test((el.className || '').toString()),
+          tag: el.tagName,
+          cls: (el.className || '').toString().slice(0, 80)
+        }))
+    : []
+  return { menuOpen: !!menu, items }
+}
+
+/* 点击比例网格中匹配 target 的比例项 */
+const clickRatioScript = (target: string): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const visible = (el: Element): boolean => (el as HTMLElement).offsetParent !== null
+  const menu =
+    [...document.querySelectorAll('[role="menu"][data-state="open"]')]
+      .filter(visible)
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0] || null
+  if (!menu) return { ok: false, reason: '比例菜单未打开' }
+  const targetNorm = target.replace(/\s+/g, '')
+  const els = [...menu.querySelectorAll('button, [role="button"]')].filter(
+    (el) => visible(el) && norm(el.textContent || '').replace(/\s+/g, '') === targetNorm
+  )
+  if (els.length === 0) return { ok: false, reason: '未找到比例项 ' + target }
+  const el = els[els.length - 1] as HTMLElement
+  // 已选中则跳过
+  if (/border-dbx-text-highlight/.test((el.className || '').toString())) {
+    return { ok: true, already: true }
+  }
+  const r = el.getBoundingClientRect()
+  const base = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerId: 11,
+    pointerType: 'mouse',
+    isPrimary: true,
+    clientX: r.x + r.width / 2,
+    clientY: r.y + r.height / 2,
+    button: 0,
+    buttons: 1,
+    view: window
+  }
+  el.dispatchEvent(new PointerEvent('pointerover', { ...base, buttons: 0 }))
+  el.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }))
+  el.dispatchEvent(new PointerEvent('pointerdown', base))
+  el.dispatchEvent(new MouseEvent('mousedown', base))
+  el.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }))
+  el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }))
+  el.dispatchEvent(new MouseEvent('click', { ...base, buttons: 0 }))
+  return { ok: true, text: norm(el.textContent || '').slice(0, 20) }
+}
+
+/* ---------------- 模型选择器 DOM 操作（豆包视频页） ----------------
+ * 模型选择器：trigger 按钮文本含「Seedance」或「模型」，aria-haspopup="menu"；
+ * 菜单打开后含模型选项（文本形如「Seedance 2.0 Mini日常生成使用」）。
+ * 选中态通过菜单项 data-selected="true" 判定（实测 2026-08-22，无 aria-checked/data-state）。
+ */
+
+/* 读取模型选择器状态：trigger 文本 + 菜单是否打开 + 模型选项列表 */
+const readModelStateScript = (): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const textOf = (b: Element): string =>
+    norm((b as HTMLElement).textContent || '') ||
+    norm(b.getAttribute('aria-label') || '') ||
+    norm(b.getAttribute('title') || '')
+  const visible = (el: Element): boolean => (el as HTMLElement).offsetParent !== null
+  const btns = [...document.querySelectorAll('button, [role="button"], [role="tab"], [role="combobox"]')].filter(
+    (b) => visible(b) && (b as HTMLButtonElement).disabled !== true
+  )
+  const trigger =
+    btns.find((b) => /seedance/i.test(textOf(b)) && (b.getAttribute('aria-haspopup') || '').includes('menu')) ||
+    btns.find((b) => /seedance/i.test(textOf(b))) ||
+    btns.find((b) => /^模型/.test(textOf(b))) ||
+    null
+  const menu =
+    [...document.querySelectorAll('[role="menu"][data-state="open"], [role="listbox"][data-state="open"]')]
+      .filter(visible)
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0] || null
+  const options = menu
+    ? [...menu.querySelectorAll('button, [role="menuitem"], [role="option"], [role="radio"]')]
+        .filter(visible)
+        .map((el) => ({
+          t: textOf(el).slice(0, 50),
+          selected: el.getAttribute('data-selected') === 'true',
+          checked: el.getAttribute('aria-checked'),
+          pressed: el.getAttribute('aria-pressed'),
+          state: el.getAttribute('data-state'),
+          tag: el.tagName
+        }))
+        .filter((o) => o.t)
+    : []
+  return {
+    triggerText: trigger ? textOf(trigger).slice(0, 50) : '',
+    triggerExpanded: trigger ? trigger.getAttribute('aria-expanded') : null,
+    menuOpen: !!menu,
+    options
+  }
+}
+
+/* 打开模型菜单：JS PointerEvent 序列（与时长菜单同法，软件渲染兼容） */
+const openModelMenuScript = (): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const textOf = (b: Element): string =>
+    norm((b as HTMLElement).textContent || '') ||
+    norm(b.getAttribute('aria-label') || '') ||
+    norm(b.getAttribute('title') || '')
+  const visible = (el: Element): boolean => (el as HTMLElement).offsetParent !== null
+  const btns = [...document.querySelectorAll('button, [role="button"], [role="tab"], [role="combobox"]')].filter(
+    (b) => visible(b) && (b as HTMLButtonElement).disabled !== true
+  )
+  const trigger =
+    btns.find((b) => /seedance/i.test(textOf(b)) && (b.getAttribute('aria-haspopup') || '').includes('menu')) ||
+    btns.find((b) => /seedance/i.test(textOf(b))) ||
+    btns.find((b) => /^模型/.test(textOf(b))) ||
+    null
+  if (!trigger) return { ok: false, reason: '未找到模型选择器' }
+  const alreadyOpen =
+    trigger.getAttribute('aria-expanded') === 'true' || !!document.querySelector('[role="menu"][data-state="open"]')
+  if (alreadyOpen) return { ok: true, alreadyOpen: true }
+  const r = trigger.getBoundingClientRect()
+  const base = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerId: 13,
+    pointerType: 'mouse',
+    isPrimary: true,
+    clientX: r.x + r.width / 2,
+    clientY: r.y + r.height / 2,
+    button: 0,
+    buttons: 1,
+    view: window
+  }
+  trigger.dispatchEvent(new PointerEvent('pointerover', { ...base, buttons: 0 }))
+  trigger.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }))
+  trigger.dispatchEvent(new PointerEvent('pointerdown', base))
+  trigger.dispatchEvent(new MouseEvent('mousedown', base))
+  trigger.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }))
+  trigger.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }))
+  trigger.dispatchEvent(new MouseEvent('click', { ...base, buttons: 0 }))
+  return { ok: true, text: textOf(trigger).slice(0, 50) }
+}
+
+/* 点击模型菜单中匹配 target 的选项 */
+const clickModelScript = (target: string): unknown => {
+  const norm = (s: string): string => (s || '').trim()
+  const textOf = (el: Element): string =>
+    norm((el as HTMLElement).textContent || '') ||
+    norm(el.getAttribute('aria-label') || '') ||
+    norm(el.getAttribute('title') || '')
+  const visible = (el: Element): boolean => (el as HTMLElement).offsetParent !== null
+  const menu =
+    [...document.querySelectorAll('[role="menu"][data-state="open"], [role="listbox"][data-state="open"]')]
+      .filter(visible)
+      .sort((a, b) => b.getBoundingClientRect().width - a.getBoundingClientRect().width)[0] || null
+  if (!menu) return { ok: false, reason: '模型菜单未打开' }
+  const targetNorm = norm(target).toLowerCase().replace(/\s+/g, '')
+  const els = [...menu.querySelectorAll('button, [role="menuitem"], [role="option"], [role="radio"]')].filter(
+    (el) => visible(el) && textOf(el).toLowerCase().replace(/\s+/g, '').includes(targetNorm)
+  )
+  if (els.length === 0) return { ok: false, reason: '未找到模型选项 ' + target }
+  const el = els[els.length - 1] as HTMLElement
+  if (el.getAttribute('data-selected') === 'true' || el.getAttribute('aria-checked') === 'true' || el.getAttribute('data-state') === 'selected') {
+    return { ok: true, already: true }
+  }
+  const r = el.getBoundingClientRect()
+  const base = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerId: 15,
+    pointerType: 'mouse',
+    isPrimary: true,
+    clientX: r.x + r.width / 2,
+    clientY: r.y + r.height / 2,
+    button: 0,
+    buttons: 1,
+    view: window
+  }
+  el.dispatchEvent(new PointerEvent('pointerover', { ...base, buttons: 0 }))
+  el.dispatchEvent(new PointerEvent('pointermove', { ...base, buttons: 0 }))
+  el.dispatchEvent(new PointerEvent('pointerdown', base))
+  el.dispatchEvent(new MouseEvent('mousedown', base))
+  el.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }))
+  el.dispatchEvent(new MouseEvent('mouseup', { ...base, buttons: 0 }))
+  el.dispatchEvent(new MouseEvent('click', { ...base, buttons: 0 }))
+  return { ok: true, text: textOf(el).slice(0, 50) }
+}
+
 /** 通过豆包真实 UI 设置时长（页面内 JS PointerEvent + 键盘，隐藏窗口可用，无需 CDP）。失败时调用方应终止任务。 */
 async function applyDoubaoDuration(
   win: BrowserWindow,
@@ -691,6 +900,178 @@ async function applyDoubaoDuration(
   } catch {}
   await sleep(600)
   return { ok: true }
+}
+
+/** 通过豆包真实 UI 设置比例（「自动 · Ns」菜单内的比例网格，JS PointerEvent 点击）。
+ *  目标比例已在网格选中时跳过；未找到目标比例项或菜单打不开则失败。 */
+async function applyDoubaoRatio(
+  win: BrowserWindow,
+  ratio: string
+): Promise<{ ok: boolean; reason?: string; already?: boolean }> {
+  const exec = (script: string, arg?: string): Promise<unknown> =>
+    win.webContents.executeJavaScript('(' + script + ')(' + (arg !== undefined ? JSON.stringify(arg) : '') + ')', true)
+  const target = (ratio || '').replace(/\s+/g, '')
+  if (!target) return { ok: false, reason: '比例为空' }
+
+  // 1) 打开「自动 · Ns」菜单（与时长同菜单；幂等 + 重试 3 次）
+  let state: { menuOpen?: boolean; items?: Array<{ t?: string; selected?: boolean }> } = {}
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      state = (await exec(readRatioStateScript.toString())) as typeof state
+      if (state.menuOpen) break
+    } catch {}
+    try {
+      const open = (await exec(openDurationMenuScript.toString())) as { ok?: boolean; reason?: string }
+      if (!open.ok) {
+        if (attempt === 2) return { ok: false, reason: open.reason || '未找到比例入口' }
+        await sleep(600)
+        continue
+      }
+    } catch {
+      if (attempt === 2) return { ok: false, reason: '打开比例菜单失败' }
+      await sleep(600)
+      continue
+    }
+    for (let i = 0; i < 10; i++) {
+      await sleep(500)
+      try {
+        state = (await exec(readRatioStateScript.toString())) as typeof state
+        if (state.menuOpen) break
+      } catch {}
+    }
+    if (state.menuOpen) break
+  }
+  if (!state.menuOpen) return { ok: false, reason: '比例菜单未打开' }
+
+  // 2) 目标已选中则直接成功
+  if ((state.items || []).some((it) => it.t && it.t.replace(/\s+/g, '') === target && it.selected === true)) {
+    try {
+      await exec(closeDurationMenuScript.toString())
+    } catch {}
+    return { ok: true, already: true }
+  }
+
+  // 3) 点击目标比例项
+  let click: { ok?: boolean; reason?: string } = {}
+  try {
+    click = (await exec(clickRatioScript.toString(), target)) as typeof click
+  } catch (e) {
+    click = { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+  if (!click.ok) {
+    try {
+      await exec(closeDurationMenuScript.toString())
+    } catch {}
+    return { ok: false, reason: click.reason || '点击比例失败' }
+  }
+  await sleep(700)
+
+  // 4) 校验：网格内目标项 border-dbx-text-highlight 高亮
+  let after: { items?: Array<{ t?: string; selected?: boolean }> } = {}
+  try {
+    after = (await exec(readRatioStateScript.toString())) as typeof after
+  } catch {}
+  const ok = (after.items || []).some(
+    (it) => it.t && it.t.replace(/\s+/g, '') === target && it.selected === true
+  )
+  try {
+    await exec(closeDurationMenuScript.toString())
+  } catch {}
+  if (!ok) return { ok: false, reason: '比例未生效：' + target }
+  return { ok: true }
+}
+
+/** 通过豆包真实 UI 设置模型（页面模型选择器下拉，JS PointerEvent 点击）。
+ *  目标模型已选中时跳过；找不到模型选择器/选项则失败（默认不阻断，返回 ok 表示未变更）。 */
+async function applyDoubaoModel(
+  win: BrowserWindow,
+  model: string
+): Promise<{ ok: boolean; reason?: string; changed?: boolean }> {
+  const exec = (script: string, arg?: string): Promise<unknown> =>
+    win.webContents.executeJavaScript('(' + script + ')(' + (arg !== undefined ? JSON.stringify(arg) : '') + ')', true)
+  const target = (model || '').trim()
+  if (!target) return { ok: true } // 无模型要求，跳过
+
+  // 1) 读取模型选择器状态
+  let state: { triggerText?: string; menuOpen?: boolean; options?: Array<{ t?: string; selected?: boolean }> } = {}
+  try {
+    state = (await exec(readModelStateScript.toString())) as typeof state
+  } catch {
+    return { ok: false, reason: '读取模型选择器失败' }
+  }
+  if (!state.triggerText) return { ok: true } // 页面无模型选择器（页面结构变化），不阻断
+  // 目标已选中（trigger 文本含目标）则跳过
+  if (state.triggerText.toLowerCase().replace(/\s+/g, '').includes(target.toLowerCase().replace(/\s+/g, ''))) {
+    return { ok: true, changed: false }
+  }
+
+  // 2) 打开模型菜单
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      state = (await exec(readModelStateScript.toString())) as typeof state
+      if (state.menuOpen) break
+    } catch {}
+    try {
+      const open = (await exec(openModelMenuScript.toString())) as { ok?: boolean; reason?: string }
+      if (!open.ok) {
+        if (attempt === 2) return { ok: false, reason: open.reason || '未找到模型选择器' }
+        await sleep(600)
+        continue
+      }
+    } catch {
+      if (attempt === 2) return { ok: false, reason: '打开模型菜单失败' }
+      await sleep(600)
+      continue
+    }
+    for (let i = 0; i < 10; i++) {
+      await sleep(500)
+      try {
+        state = (await exec(readModelStateScript.toString())) as typeof state
+        if (state.menuOpen) break
+      } catch {}
+    }
+    if (state.menuOpen) break
+  }
+  if (!state.menuOpen) return { ok: false, reason: '模型菜单未打开' }
+
+  // 3) 目标选项已选中则直接成功
+  if ((state.options || []).some((o) => o.t && o.t.toLowerCase().replace(/\s+/g, '').includes(target.toLowerCase().replace(/\s+/g, '')) && o.selected === true)) {
+    try {
+      await exec(closeDurationMenuScript.toString())
+    } catch {}
+    return { ok: true, changed: false }
+  }
+
+  // 4) 点击目标模型选项
+  let click: { ok?: boolean; reason?: string } = {}
+  try {
+    click = (await exec(clickModelScript.toString(), target)) as typeof click
+  } catch (e) {
+    click = { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+  if (!click.ok) {
+    try {
+      await exec(closeDurationMenuScript.toString())
+    } catch {}
+    return { ok: false, reason: click.reason || '点击模型失败' }
+  }
+  await sleep(700)
+
+  // 5) 校验：trigger 文本或选项 data-selected 已含目标
+  let after: { triggerText?: string; options?: Array<{ t?: string; selected?: boolean }> } = {}
+  try {
+    after = (await exec(readModelStateScript.toString())) as typeof after
+  } catch {}
+  const ok =
+    (after.triggerText || '').toLowerCase().replace(/\s+/g, '').includes(target.toLowerCase().replace(/\s+/g, '')) ||
+    (after.options || []).some(
+      (o) => o.t && o.t.toLowerCase().replace(/\s+/g, '').includes(target.toLowerCase().replace(/\s+/g, '')) && o.selected === true
+    )
+  try {
+    await exec(closeDurationMenuScript.toString())
+  } catch {}
+  if (!ok) return { ok: false, reason: '模型未生效：' + target }
+  return { ok: true, changed: true }
 }
 
 /* ---------------- 风控探针（豆包服务端风控/验证码检测，2026-08-12） ----------------
@@ -1099,6 +1480,16 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     const aborted = abortIfCancelled()
     if (aborted) return aborted
   }
+  // 模型：真实 UI 模型选择器（页面无模型选择器时跳过不阻断；有选择器但设置失败则终止）
+  if (options.model) {
+    progress(options, 'apply-model', { model: options.model })
+    const modelApply = await applyDoubaoModel(win, options.model)
+    if (!modelApply.ok) {
+      win.destroy()
+      return fail('豆包模型设置失败：' + (modelApply.reason || '未知原因'))
+    }
+  }
+
   const durationSec = options.durationSec === 10 ? 10 : options.durationSec === 15 ? 15 : 5
   // 时长：真实 UI 滑块（Radix Slider），避免「5秒 文本 vs 10s chip」双时长冲突
   progress(options, 'apply-duration', { durationSec })
@@ -1108,18 +1499,26 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     return fail('豆包时长设置失败：' + (durApply.reason || '未知原因'))
   }
 
-  // 参数统一拼进提示词（豆包会从提示词解析）：生成模式 + 比例 + 配音 + 分辨率 + 单视频约束
-  // 时长不再拼文本：已由上方 applyDoubaoDuration 走真实 UI 设置，避免「5秒 文本 vs 5s chip」重复
+  // 比例：真实 UI 网格点击；失败时回退文本拼接（页面结构变化时不阻断任务）
+  let ratioViaDom = false
+  if (options.ratio) {
+    progress(options, 'apply-ratio', { ratio: options.ratio })
+    const ratioApply = await applyDoubaoRatio(win, options.ratio)
+    if (ratioApply.ok) ratioViaDom = true
+  }
+
+  // 参数统一拼进提示词（豆包会从提示词解析）：生成模式 + 比例(兜底) + 配音 + 分辨率 + 单视频约束
+  // 时长/比例走真实 UI 后不再拼文本，避免「文本 vs chip」冲突；比例 DOM 失败时才拼文本兜底
   const modeLabel = options.mode === 'img2video' ? '图生视频' : '文生视频'
   const parts: string[] = [options.prompt, modeLabel]
-  if (options.ratio) parts.push(options.ratio)
+  if (options.ratio && !ratioViaDom) parts.push(options.ratio)
   if (options.audio === 'on') parts.push('带配音')
   else if (options.audio === 'off') parts.push('关闭配音')
   if (options.resolution) parts.push(`分辨率${options.resolution}p`)
   // 单视频约束：置于最后，作为最明确的指令，覆盖 prompt 里列举多个实体导致的「生成多个视频」
   parts.push('仅生成1个视频')
   const submitPrompt = parts.join('，')
-  progress(options, 'apply-params', { mode: modeLabel, ratio: options.ratio, audio: options.audio, resolution: options.resolution, submitPrompt })
+  progress(options, 'apply-params', { mode: modeLabel, model: options.model, ratio: options.ratio, ratioViaDom, audio: options.audio, resolution: options.resolution, submitPrompt })
 
   {
     const aborted = abortIfCancelled()

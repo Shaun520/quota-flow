@@ -21,6 +21,7 @@ __pycache__/
 
 # 敏感配置
 data/*-auth.json
+data/*-auth*.json
 data/*-api-key
 apps/desktop/.env
 .env
