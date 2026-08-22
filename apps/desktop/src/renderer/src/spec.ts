@@ -304,9 +304,12 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
       { value: 'first_frame', label: '首帧生成' }
     ]
   }
-  // 元宝没有独立视频生成 DOM，只按提示词 + 多参考图片执行，避免暴露无实际作用的模式选项。
+  // 元宝没有独立视频生成 DOM，只按提示词 + 图片执行：图生视频（传图）/ 文生视频（纯提示词）两模式
   if (provider === 'yuanbao') {
-    return [{ value: 'multi_ref', label: '多参考生成' }]
+    return [
+      { value: 'img2video', label: '图生视频' },
+      { value: 'text2video', label: '文生视频' }
+    ]
   }
   if (provider === 'dola') {
     return [{ value: 'multi_ref', label: '多参考生成' }]
@@ -451,8 +454,11 @@ export function uploadHint(provider: string, mode: string): string {
     }
     return map[mode] ?? '拖拽图片到此处，最多 5 张'
   }
-  if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
-  if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
+  if (provider === 'yuanbao') {
+    if (mode === 'img2video' || mode === 'img') return '图生视频需上传图片（最多 10 张）'
+    return '文生视频无需上传素材'
+  }
+  if (provider === 'dola') return '上传图片作为参考（最多 10 张）'
   if (provider === 'tokenhub') {
     // 图生为首帧引导（单图）；上传的本地图会自动转成公网 URL，用户无需关心「HTTPs」，只说上传图片即可
     const map: Record<string, string> = {

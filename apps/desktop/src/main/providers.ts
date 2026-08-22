@@ -102,6 +102,7 @@ export type ProviderId =
   | 'qwenwan'
   | 'yuanbao'
   | 'dola'
+  | 'chatglm'
   | 'bailian'
   | 'tokenhub'
 
@@ -117,8 +118,9 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
     healthUrl: 'https://www.doubao.com/chat/'
   },
   qwen: {
-    loginUrl: 'https://tongyi.aliyun.com/wanxiang/create',
-    healthUrl: 'https://tongyi.aliyun.com/'
+    // 通义万相「进入官网」实际登录/生成为千问对话（www.qianwen.com）；tongyi.aliyun.com/wanxiang/create 已失效报「网络出错」
+    loginUrl: 'https://www.qianwen.com/',
+    healthUrl: 'https://www.qianwen.com/'
   },
   qwenwan: {
     loginUrl: 'https://www.qianwen.com/chat',
@@ -131,6 +133,11 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   dola: {
     loginUrl: 'https://www.dola.com/',
     healthUrl: 'https://www.dola.com/'
+  },
+  // 智谱清言（chatglm.cn）：C 端对话产品，网页 cookie 登录
+  chatglm: {
+    loginUrl: 'https://chatglm.cn/',
+    healthUrl: 'https://chatglm.cn/'
   },
   // 阿里云百炼：bailian 为 apikey 厂商，走 openProviderSite 通用分支打开 API Key 管理页
   bailian: {
@@ -169,6 +176,12 @@ export interface ProviderLoginResult {
   expiresAt?: number | null
   accountFingerprint?: string | null
   error?: string
+  /**
+   * 面向用户的友好提示：与 error 成对出现。
+   * error 保留原始诊断（如 ERR_FAILED、会话 Cookie 未达），仅写日志；
+   * friendlyMessage 用于渲染层展示（如「窗口已关闭，未获取到登录信息」）。
+   */
+  friendlyMessage?: string
 }
 
 const loginWindows = new Map<string, BrowserWindow>()
@@ -659,7 +672,13 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
       if (loginWindows.get(winKey) === win) loginWindows.delete(winKey)
       if (!finished) {
         finished = true
-        resolve({ ok: false, canceled: true })
+        // 用户在登录完成前关闭窗口：统一给友好提示，避免暴露底层诊断
+        resolve({
+          ok: false,
+          canceled: true,
+          error: 'window-closed',
+          friendlyMessage: '窗口已关闭，未获取到登录信息'
+        })
       }
     })
 
@@ -731,8 +750,11 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
                 done({
                   ok: false,
                   error: !onMainSite
-                    ? '登录后未跳转回厂商主站（当前在 ' + (currentUrl || '未知页') + '），请完成登录流程后重试'
-                    : '未检测到有效登录状态，请确认已扫码登录后再试'
+                    ? 'not-on-main-site: ' + (currentUrl || 'unknown')
+                    : 'login-state-not-detected',
+                  friendlyMessage: !onMainSite
+                    ? '登录后未跳转回厂商主站，请完成登录流程后重试'
+                    : '未检测到登录状态，请确认已完成登录后重试'
                 })
                 return
               }
@@ -753,12 +775,20 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
               }
               cookies = await collectPartitionCookies(providerId, keyId)
               if (cookies.length === 0) {
-                done({ ok: false, error: '未检测到登录 Cookie，请确认已登录后重试' })
+                done({
+                  ok: false,
+                  error: 'no-cookie',
+                  friendlyMessage: '登录未获取到登录信息，请确认已完成登录后重试'
+                })
                 return
               }
               const hasSession = hasSessionCookie(providerId, cookies)
               if (!hasSession) {
-                done({ ok: false, error: '未检测到会话 Cookie（可能登录未完成），请重试' })
+                done({
+                  ok: false,
+                  error: 'no-session-cookie',
+                  friendlyMessage: '登录未获取到登录信息，请确认已完成登录后重试'
+                })
                 return
               }
 
@@ -824,7 +854,12 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
     }, 800)
 
     void win.loadURL(loginUrl).catch((e: unknown) => {
-      done({ ok: false, error: `加载登录页失败：${String(e)}` })
+      const rawErr = String(e)
+      const isNetworkErr = /ERR_FAILED|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION/i.test(rawErr)
+      const friendlyMessage = isNetworkErr
+        ? '登录页加载失败，请检查网络或稍后重试'
+        : '登录页加载失败，请稍后重试'
+      done({ ok: false, error: `load-url: ${rawErr}`, friendlyMessage })
     })
   })
 }
@@ -873,6 +908,61 @@ async function injectSiteCredentials(providerId: string, keyId: string, encrypte
     const parsed = parseStoredCredentials(encryptedKey, providerId)
     if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
   }
+}
+
+/**
+ * 构建 APIC 型厂商控制台的统一悬浮提示条注入脚本。
+ * 所有 APIC 厂商（智谱、火山方舟、阿里云百炼、腾讯云 TokenHub）的悬浮窗统一为此样式：
+ * 顶部拖拽标题栏 + 指引文字（最多 2 行） + 右下角操作按钮。
+ */
+function buildApiKeyHintBar(args: {
+  providerKey: string
+  title: string
+  lines: string[]
+  buttonText: string
+  onButtonClick: string
+}): string {
+  const { providerKey, title, lines, buttonText, onButtonClick } = args
+  const guardVar = `window.__QUOTA_FLOW_${providerKey.toUpperCase()}_UI__`
+  const barId = `qf-${providerKey}-bar`
+  const headerId = `qf-${providerKey}-header`
+  const gripId = `qf-${providerKey}-grip`
+  const btnId = `qf-${providerKey}-close`
+
+  const lineHtml = lines
+    .map(
+      (l) =>
+        `<div style="color:#c4c8d0;font-size:12px;line-height:1.4;">${l}</div>`
+    )
+    .join('')
+
+  return `(() => {
+      if (${guardVar}) return;
+      ${guardVar} = true;
+      const bar = document.createElement('div');
+      bar.id = '${barId}';
+      bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:460px;';
+      bar.innerHTML =
+        '<div id="${headerId}" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
+        '<span id="${gripId}" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
+        '<span>${title}</span>' +
+        '</div>' +
+        '${lineHtml}' +
+        '<div style="display:flex;justify-content:flex-end;">' +
+        '<button id="${btnId}" style="padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;">${buttonText}</button>' +
+        '</div>';
+      document.body.appendChild(bar);
+      document.getElementById('${btnId}').addEventListener('click', () => { ${onButtonClick} });
+      let dragging = false, offX = 0, offY = 0;
+      const grip = document.getElementById('${gripId}');
+      const header = document.getElementById('${headerId}');
+      const barEl = document.getElementById('${barId}');
+      const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
+      if (grip) grip.addEventListener('mousedown', startDrag);
+      if (header) header.addEventListener('mousedown', startDrag);
+      document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
+      document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
+    })()`
 }
 
 async function openProviderSite(
@@ -1472,50 +1562,25 @@ export async function captureZhipuConsoleSession(opts?: {
     };
     window.__ZF_SCAN__ = setInterval(scanStorage, 1500);
     scanStorage();
-    // 4) 可拖拽注入条（左上角；标题栏含 ⋮⋮ 标识，cursor:grab）
-    const bar = document.createElement('div');
-    bar.id = 'qf-zhipu-bar';
-    bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:440px;';
-    bar.innerHTML =
-      '<div id="qf-zhipu-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
-      '<span id="qf-zhipu-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
-      '<span>Quota-Flow · 智谱控制台</span>' +
-      '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;">' +
-      '<span style="flex:1;min-width:0;color:#c4c8d0;font-size:12px;line-height:1.4;">请在页面完成智谱控制台登录；登录后在「API Key 管理」页复制 API Key，然后点击下方按钮返回</span>' +
-      '<button id="qf-zhipu-get" style="flex-shrink:0;padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;white-space:nowrap;">已获取key返回</button>' +
-      '</div>';
-    document.body.appendChild(bar);
-    document.getElementById('qf-zhipu-get').addEventListener('click', () => {
-      scanStorage();
-      window.__ZF_SUBMIT__ = true;
-      window.__ZF_STATE__ = window.__ZF_CAPTURED__ ? 'ok' : 'none';
-    });
-    // 拖拽：按下 grip 或标题栏拖动，实时更新位置并夹紧窗口边界
-    let dragging = false, offX = 0, offY = 0;
-    const grip = document.getElementById('qf-zhipu-grip');
-    const header = document.getElementById('qf-zhipu-header');
-    const barEl = document.getElementById('qf-zhipu-bar');
-    const startDrag = (e) => {
-      dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop;
-      barEl.style.cursor = 'grabbing';
-      e.preventDefault();
-    };
-    if (grip) grip.addEventListener('mousedown', startDrag);
-    if (header) header.addEventListener('mousedown', startDrag);
-    document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX));
-      const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY));
-      barEl.style.left = x + 'px'; barEl.style.top = y + 'px';
-    });
-    document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
   })()`
+  const CAPTURE_INJECT = INJECT
+  const UI_HINT = buildApiKeyHintBar({
+    providerKey: 'zhipu',
+    title: 'Quota-Flow · 智谱控制台',
+    lines: [
+      '请在页面登录后前往「API Key 管理」复制 API Key；',
+      '复制完成后，回到 Quota-Flow 窗口粘贴 API Key 并保存。'
+    ],
+    buttonText: '已获取key返回',
+    onButtonClick:
+      'scanStorage(); window.__ZF_SUBMIT__ = true; window.__ZF_STATE__ = window.__ZF_CAPTURED__ ? "ok" : "none";'
+  })
 
   const inject = (): void => {
     // 定时器可能迟于窗口关闭触发：销毁后跳过，避免主进程 uncaught
     if (win.isDestroyed() || win.webContents.isDestroyed()) return
-    void win.webContents.executeJavaScript(INJECT).catch(() => {})
+    void win.webContents.executeJavaScript(CAPTURE_INJECT).catch(() => {})
+    void win.webContents.executeJavaScript(UI_HINT).catch(() => {})
   }
   win.webContents.on('did-finish-load', () => {
     // 延迟注入，避免与控制台自身早期脚本竞争
@@ -2070,23 +2135,11 @@ export async function captureVolcEngineConsoleSession(opts?: {
         } catch (_) {}
       }, 900);
     }
-    // 4) 可拖拽注入条（仅交互式首次绑定显示）
-    if (${quiet ? 'false' : 'true'}) {
-      const bar = document.createElement('div');
-      bar.id = 'qf-volc-bar';
-      bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:440px;';
-      bar.innerHTML =
-        '<div id="qf-volc-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
-        '<span id="qf-volc-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
-        '<span>Quota-Flow · 火山方舟控制台</span>' +
-        '</div>' +
-        '<div style="color:#c9cdd4;font-size:12px;">请使用「手机号登录/账号登录」，进入「API Key 管理」复制 Key 后点击下方按钮即可（第三方登录已拦截，需在外部浏览器完成）</div>' +
-        '<button id="qf-volc-done" style="margin-top:2px;border:none;border-radius:6px;background:#22c55e;color:#fff;font:600 12.5px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:7px 12px;cursor:pointer;align-self:flex-start;">已获取 key 返回</button>';
-      document.body.appendChild(bar);
-      bar.querySelector('#qf-volc-done').addEventListener('click', () => {
-        let diag = '';
+  })()`
+  const CAPTURE_INJECT = INJECT
+
+  const volcButtonClick = `let diag = '';
         try {
-          // 诊断：webview 里权威 key 是否存在、解码结果、real 解析结果（定位为何取不到真实 userId）
           const db2 = (s) => { const t = s.replace(/-/g, '+').replace(/_/g, '/'); const pad = t.length % 4 ? '='.repeat(4 - (t.length % 4)) : ''; try { return atob(t + pad); } catch (_) { return null; } };
           const dc2 = (s) => { if (typeof s !== 'string' || !s) return s; if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(s)) { const d = db2(s); if (d !== null) { try { return decodeURIComponent(d); } catch (_) { return d; } } } return s; };
           const parts = [];
@@ -2102,29 +2155,26 @@ export async function captureVolcEngineConsoleSession(opts?: {
           try { window.localStorage.setItem('qf:volc:diag', diag); } catch (_) {}
         } catch (_) {}
         realUidResolve(); if (window.__VF_REAL_UID__) persistAccount(window.__VF_REAL_UID__);
-        window.__VF_SUBMIT__ = true; window.__VF_STATE__ = window.__VF_CAPTURED__ ? 'ok' : 'empty';
-      });
-      let dragging = false, offX = 0, offY = 0;
-      const grip = document.getElementById('qf-volc-grip');
-      const header = document.getElementById('qf-volc-header');
-      const barEl = document.getElementById('qf-volc-bar');
-      const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
-      if (grip) grip.addEventListener('mousedown', startDrag);
-      if (header) header.addEventListener('mousedown', startDrag);
-      document.addEventListener('mousemove', (e) => {
-        if (!dragging) return;
-        const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX));
-        const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY));
-        barEl.style.left = x + 'px'; barEl.style.top = y + 'px';
-      });
-      document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
-    }
-  })()`
+        window.__VF_SUBMIT__ = true; window.__VF_STATE__ = window.__VF_CAPTURED__ ? 'ok' : 'empty';`
+
+  const UI_HINT = buildApiKeyHintBar({
+    providerKey: 'volc',
+    title: 'Quota-Flow · 火山方舟控制台',
+    lines: [
+      '请使用「手机号登录/账号登录」，进入「API Key 管理」复制 Key；',
+      '复制完成后，回到 Quota-Flow 窗口粘贴 API Key 并保存。'
+    ],
+    buttonText: '已获取 key 返回',
+    onButtonClick: volcButtonClick
+  })
 
   const inject = (): void => {
     // 定时器可能迟于窗口关闭触发：销毁后跳过，避免主进程 uncaught
     if (win.isDestroyed() || win.webContents.isDestroyed()) return
-    void win.webContents.executeJavaScript(INJECT).catch(() => {})
+    void win.webContents.executeJavaScript(CAPTURE_INJECT).catch(() => {})
+    if (!quiet) {
+      void win.webContents.executeJavaScript(UI_HINT).catch(() => {})
+    }
   }
   win.webContents.on('did-finish-load', () => {
     setTimeout(inject, 500)
@@ -2668,41 +2718,23 @@ export async function captureBailianConsoleSession(opts?: {
   if (quiet) setTimeout(injectCap, 700)
 
   // ── 主窗口注入：可拖拽提示条 + 「已捕获返回」按钮（数据在隐藏捕获窗口自动抓取）──
-  const UI_INJECT = `(() => {
-    if (window.__QUOTA_FLOW_BAILIAN_UI__) return;
-    window.__QUOTA_FLOW_BAILIAN_UI__ = true;
-    window.__QB_UI_SUBMIT__ = false;
-    const bar = document.createElement('div');
-    bar.id = 'qf-bailian-bar';
-    bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:440px;';
-    bar.innerHTML =
-      '<div id="qf-bailian-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
-      '<span id="qf-bailian-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
-      '<span>Quota-Flow · 阿里云百炼控制台</span>' +
-      '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;">' +
-      '<span style="flex:1;min-width:0;color:#c4c8d0;font-size:12px;line-height:1.4;">请在页面登录并复制 API Key，免费额度已由后台自动捕获；返回请点击下方按钮</span>' +
-      '<button id="qf-bailian-return" style="flex-shrink:0;padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;white-space:nowrap;">已捕获返回</button>' +
-      '</div>';
-    document.body.appendChild(bar);
-    document.getElementById('qf-bailian-return').addEventListener('click', () => { window.__QB_UI_SUBMIT__ = true; });
-    let dragging = false, offX = 0, offY = 0;
-    const grip = document.getElementById('qf-bailian-grip');
-    const header = document.getElementById('qf-bailian-header');
-    const barEl = document.getElementById('qf-bailian-bar');
-    const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
-    if (grip) grip.addEventListener('mousedown', startDrag);
-    if (header) header.addEventListener('mousedown', startDrag);
-    document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
-    document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
-  })()`
+  const UI_HINT = buildApiKeyHintBar({
+    providerKey: 'bailian',
+    title: 'Quota-Flow · 阿里云百炼控制台',
+    lines: [
+      '请在页面登录并复制 API Key；免费额度已由后台自动捕获，',
+      '复制完成后点击下方按钮返回 Quota-Flow 窗口。'
+    ],
+    buttonText: '已捕获返回',
+    onButtonClick: 'window.__QB_UI_SUBMIT__ = true;'
+  })
 
   win.webContents.on('did-finish-load', () => {
     // 注入延后于加载完成执行，但定时器可能迟于窗口关闭触发：
     // webContents 已销毁时直接跳过，避免主进程 uncaught（Object has been destroyed）报错
     setTimeout(() => {
       if (win.isDestroyed() || win.webContents.isDestroyed()) return
-      void win.webContents.executeJavaScript(UI_INJECT).catch(() => {})
+      void win.webContents.executeJavaScript(UI_HINT).catch(() => {})
     }, 500)
   })
 
@@ -2883,39 +2915,21 @@ export async function captureTokenhubConsoleSession(opts?: {
 
   // 交互式绑定：注入可拖拽悬浮提示条，引导用户登录后复制 API Key（静默续期窗口隐藏无需提示）
   if (!quiet) {
-    const HINT_INJECT = `(() => {
-      if (window.__QUOTA_FLOW_TOKENHUB_UI__) return;
-      window.__QUOTA_FLOW_TOKENHUB_UI__ = true;
-      const bar = document.createElement('div');
-      bar.id = 'qf-tokenhub-bar';
-      bar.style.cssText = 'position:fixed;top:12px;left:12px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-radius:8px;background:rgba(20,20,22,.92);color:#fff;font:12.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35);user-select:none;max-width:460px;';
-      bar.innerHTML =
-        '<div id="qf-tokenhub-header" style="display:flex;align-items:center;gap:6px;font-weight:600;color:#fff;cursor:grab;font-size:12.5px;">' +
-        '<span id="qf-tokenhub-grip" style="color:#9aa0a6;letter-spacing:1px;font-size:13px;">⋮⋮</span>' +
-        '<span>Quota-Flow · 腾讯云 TokenHub 控制台</span>' +
-        '</div>' +
-        '<div style="color:#c4c8d0;font-size:12px;line-height:1.4;">请在页面登录后前往「TokenHub → API Key 管理」复制 API Key；</div>' +
-        '<div style="color:#c4c8d0;font-size:12px;line-height:1.4;">复制完成后，回到 Quota-Flow 窗口粘贴 API Key 并保存。</div>' +
-        '<div style="display:flex;justify-content:flex-end;">' +
-        '<button id="qf-tokenhub-close" style="padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;">已复制，关闭窗口</button>' +
-        '</div>';
-      document.body.appendChild(bar);
-      document.getElementById('qf-tokenhub-close').addEventListener('click', () => { window.close(); });
-      let dragging = false, offX = 0, offY = 0;
-      const grip = document.getElementById('qf-tokenhub-grip');
-      const header = document.getElementById('qf-tokenhub-header');
-      const barEl = document.getElementById('qf-tokenhub-bar');
-      const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
-      if (grip) grip.addEventListener('mousedown', startDrag);
-      if (header) header.addEventListener('mousedown', startDrag);
-      document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
-      document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
-    })()`
+    const UI_HINT = buildApiKeyHintBar({
+      providerKey: 'tokenhub',
+      title: 'Quota-Flow · 腾讯云 TokenHub 控制台',
+      lines: [
+        '请在页面登录后前往「TokenHub → API Key 管理」复制 API Key；',
+        '复制完成后，回到 Quota-Flow 窗口粘贴 API Key 并保存。'
+      ],
+      buttonText: '已复制，关闭窗口',
+      onButtonClick: 'window.close();'
+    })
     win.webContents.on('did-finish-load', () => {
       setTimeout(() => {
         // 注入延后于加载完成执行，但定时器可能迟于窗口关闭触发：webContents 已销毁时直接跳过
         if (win.isDestroyed() || win.webContents.isDestroyed()) return
-        void win.webContents.executeJavaScript(HINT_INJECT).catch(() => {})
+        void win.webContents.executeJavaScript(UI_HINT).catch(() => {})
       }, 500)
     })
   }

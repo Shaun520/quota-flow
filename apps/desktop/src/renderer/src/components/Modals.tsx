@@ -1228,11 +1228,12 @@ export function AddProviderModal({
         setStatus('login-ok')
       }
     } else if (res.canceled) {
+      // 窗口被用户主动关闭：展示友好文案后回到 idle，避免残留错误态
       setStatus('idle')
-      if (res.error) setError(res.error)
+      setError(res.friendlyMessage ?? res.error ?? '已取消登录')
     } else {
       setStatus('login-fail')
-      setError(res.error ?? '登录失败，请重试')
+      setError(res.friendlyMessage ?? res.error ?? '登录失败，请重试')
     }
   }
 
@@ -1341,7 +1342,8 @@ export function AddProviderModal({
           用于在列表中识别该账号（如「工作号」「小号」）
         </p>
       </div>
-      {error && <div className="auth-msg auth-msg-error">{error}</div>}
+      {/* login-fail 状态下错误已在专属 UI 中展示，这里跳过避免重复 */}
+      {error && status !== 'login-fail' && <div className="auth-msg auth-msg-error">{error}</div>}
       {notice && (
         <div
           className="auth-msg"
@@ -1433,8 +1435,8 @@ export function AddProviderModal({
             )}
             {status === 'login-fail' && (
               <div>
-                <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--error)' }}>
-                  登录未获取到 Cookie，请重试。
+                <p className="auth-msg auth-msg-error" style={{ margin: '0 0 12px' }}>
+                  {error ?? '登录失败，请重试'}
                 </p>
                 <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
                   重新登录

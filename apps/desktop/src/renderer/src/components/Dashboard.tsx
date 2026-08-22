@@ -188,10 +188,15 @@ export interface RegenerateDraft {
 }
 
 function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
+  // 元宝仅图生/文生：历史 multi_ref（多参考）记录归为图生视频
+  if (providerId === 'yuanbao') {
+    if (rawMode === 'text2video' || rawMode === 't2v') return 't2v'
+    return 'img'
+  }
   if (rawMode === 'text2video' || rawMode === 't2v') return 't2v'
   if (rawMode === 'img2video' || rawMode === 'img') return 'img'
   if (rawMode === 'multi_ref' || rawMode === 'first_last' || rawMode === 'first_frame') return rawMode
-  if (providerId === 'yuanbao' || providerId === 'dola' || providerId === 'qwenwan') return 'multi_ref'
+  if (providerId === 'dola' || providerId === 'qwenwan') return 'multi_ref'
   return 't2v'
 }
 
@@ -1139,7 +1144,7 @@ export default function Dashboard({
   const onModeChange = (value: string): void => {
     setMode(value)
     // 文生视频（text2video）模式清空图片：图片上传区已隐藏，残留图片需一并清掉
-    if ((value === 'text2video' || value === 't2v') && provider !== 'yuanbao') {
+    if (value === 'text2video' || value === 't2v') {
       setImages([])
       setImageFiles([])
       setSavedImagePaths([])
@@ -1754,7 +1759,7 @@ export default function Dashboard({
                 </label>
               )}
             </div>
-          ) : (mode !== 'text2video' || provider === 'yuanbao') && !t2vSupportsAudio && (
+          ) : mode !== 'text2video' && !t2vSupportsAudio && (
             <div
               className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
               onClick={onPickFiles}

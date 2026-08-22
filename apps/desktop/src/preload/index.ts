@@ -26,6 +26,8 @@ export interface ProviderLoginResult {
   expiresAt?: number | null
   accountFingerprint?: string | null
   error?: string
+  /** 面向用户的友好提示，替代渲染层默认的「登录未获取到 Cookie」文案 */
+  friendlyMessage?: string
 }
 
 export interface HealthCheckResult {
