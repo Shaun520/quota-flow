@@ -21,6 +21,7 @@ import Select from './Select'
 import type { JobItem } from '../hooks/useJobs'
 import { useAuth } from '../hooks/useAuth'
 import type { ProvidersResult } from '../hooks/useProviders'
+import { getEncryptedKey } from '../hooks/useProviders'
 import type { JobsResult } from '../hooks/useJobs'
 import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
 import { getAuthService, getProviderService, getSupabaseConfig } from '../auth/service'
@@ -444,9 +445,9 @@ export default function Dashboard({
       const union = new Set<string>()
       for (const b of enabled) {
         try {
-          const secret = await svc.getProviderKeySecret(user.id, b.keyId)
-          if (!secret) continue
-          const res = await window.api.providers.apiModels('volcengine', secret.encrypted_key)
+          const encrypted = await getEncryptedKey(user.id, b.keyId)
+          if (!encrypted) continue
+          const res = await window.api.providers.apiModels('volcengine', encrypted)
           if (res.ok && res.models) res.models.forEach((m) => m && m.model && union.add(m.model))
         } catch {
           // 单个账号抓取失败不影响整体目录
@@ -474,9 +475,9 @@ export default function Dashboard({
       const union = new Set<string>()
       for (const b of enabled) {
         try {
-          const secret = await svc.getProviderKeySecret(user.id, b.keyId)
-          if (!secret) continue
-          const res = await window.api.providers.apiModels('bailian', secret.encrypted_key)
+          const encrypted = await getEncryptedKey(user.id, b.keyId)
+          if (!encrypted) continue
+          const res = await window.api.providers.apiModels('bailian', encrypted)
           if (res.ok && res.models)
             res.models.forEach((m) => {
               // detect/专用模型（unavailable='no_endpoint'）只进「查看模型」，不进调度台可生成列表
@@ -508,9 +509,9 @@ export default function Dashboard({
       const union = new Set<string>()
       for (const b of enabled) {
         try {
-          const secret = await svc.getProviderKeySecret(user.id, b.keyId)
-          if (!secret) continue
-          const res = await window.api.providers.apiModels('tokenhub', secret.encrypted_key)
+          const encrypted = await getEncryptedKey(user.id, b.keyId)
+          if (!encrypted) continue
+          const res = await window.api.providers.apiModels('tokenhub', encrypted)
           if (res.ok && res.models)
             res.models.forEach((m) => {
               if (m && m.model && m.unavailable !== 'no_endpoint') union.add(m.model)

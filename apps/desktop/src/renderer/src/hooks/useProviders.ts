@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getAuthService, getProviderService } from '../auth/service'
+import { getAuthService, getProviderService, getSupabaseConfig } from '../auth/service'
 import { ensureFreshSession, isAuthError } from '../auth/session'
 import { useAuth } from './useAuth'
 import { errMsg } from '../utils/error'
@@ -94,6 +94,45 @@ let healthCheckUserId: string | null = null
 /** 腾讯云 TokenHub 每模型额度补抓节流：`${userId}:${keyId}` -> 最近一次补抓时间戳（一账号每会话限一次，避免反复开隐藏窗口） */
 const tokenhubBackfillAt = new Map<string, number>()
 
+/* ================= 渲染层加密载荷会话缓存 =================
+   契约/额度/会话轮询不必每周期都从 PostgREST 拉取 encrypted_key 大字段（这是 PostgREST Egress 主来源）。
+   以 `userId:keyId` 为键缓存一次：续期/同步重建载荷后定向失效，keys 重拉（绑定/刷新/切账号）时全清。
+   取数改走主进程缓存解析（IPC 传 userId+keyId，主进程用已有 5 分钟密钥缓存返回 encrypted_key），
+   渲染层订阅后不新增任何 PostgREST 请求；纯内存、纯渲染层。 */
+const encryptedKeyCache = new Map<string, string>()
+
+/** 取某账号加密载荷：优先命中会话缓存，未命中才经 IPC 由主进程 5 分钟缓存解析。拿不到返回 null */
+export async function getEncryptedKey(userId: string, keyId: string): Promise<string | null> {
+  const k = `${userId}:${keyId}`
+  const hit = encryptedKeyCache.get(k)
+  if (hit) return hit
+  try {
+    const cfg = getSupabaseConfig()
+    const auth = getAuthService()
+    if (!cfg || !auth) return null
+    const session = await auth.getSession()
+    if (!session?.access_token) return null
+    const res = await window.api.providers.resolveKey({
+      supabaseUrl: cfg.url,
+      supabaseAnonKey: cfg.anonKey,
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
+      userId,
+      keyId
+    })
+    if (!res || !res.encrypted) return null
+    encryptedKeyCache.set(k, res.encrypted)
+    return res.encrypted
+  } catch {
+    return null
+  }
+}
+
+/** 某账号载荷被重建（续期/同步成功写入 DB）后失效，下一次读取重新拉取新密文 */
+function invalidateEncryptedKey(userId: string, keyId: string): void {
+  encryptedKeyCache.delete(`${userId}:${keyId}`)
+}
+
 /* ============ 智谱 consoleJwt 会话自动续期（静默隐式，后台完成，不打扰用户） ============ */
 
 /** keyId -> 该 key 最近一次续期尝试时间戳（后续期失败节流，避免反复开隐藏窗口） */
@@ -136,9 +175,9 @@ async function runHealthChecks(
       while (i < due.length) {
         const key = due[i++]
         try {
-          const secret = await svc.getProviderKeySecret(userId, key.id)
-          if (!secret) continue
-          const res = await window.api.providers.healthCheck(key.provider_id, secret.encrypted_key)
+          const encrypted = await getEncryptedKey(userId, key.id)
+          if (!encrypted) continue
+          const res = await window.api.providers.healthCheck(key.provider_id, encrypted)
           const newStatus = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, now)
           await svc.updateHealth(userId, key.id, newStatus)
           onResult(key.id, newStatus)
@@ -239,9 +278,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       const svc = getProviderService()
       if (!svc || !user) return null
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return null
-        const res = await window.api.providers.fetchQuota('zhipu', secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return null
+        const res = await window.api.providers.fetchQuota('zhipu', encrypted)
         if (res.ok && res.quota) {
           setZhipuQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
           return res.quota.remaining
@@ -291,6 +330,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
             healthStatus: 'healthy'
           })
           void window.api.keysCache.invalidate({ keyId })
+          invalidateEncryptedKey(user.id, keyId)
         }
         setZhipuSessionStatuses((prev) => ({
           ...prev,
@@ -316,22 +356,17 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     const now = Date.now()
     for (const key of keys.filter((k) => k.provider_id === 'zhipu')) {
       if (now - (zhipuRenewAt.get(key.id) ?? 0) < ZHIPU_RENEW_RETRY_MS) continue
-      let secret: { encrypted_key: string } | null = null
-      try {
-        secret = await svc.getProviderKeySecret(user.id, key.id)
-      } catch {
-        continue
-      }
-      if (!secret) continue
+      const encrypted = await getEncryptedKey(user.id, key.id)
+      if (!encrypted) continue
       let state
       try {
-        state = await window.api.providers.zhipuSessionStatus(key.id, secret.encrypted_key)
+        state = await window.api.providers.zhipuSessionStatus(key.id, encrypted)
       } catch {
         continue
       }
       setZhipuSessionStatuses((prev) => ({ ...prev, [key.id]: state }))
       if (state.hasSession && (state.status === 'expiring' || state.status === 'expired')) {
-        await renewZhipuSessionOnce(key.id, secret.encrypted_key)
+        await renewZhipuSessionOnce(key.id, encrypted)
         return
       }
     }
@@ -372,9 +407,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       const svc = getProviderService()
       if (!svc || !user) return null
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return null
-        const res = await window.api.providers.fetchQuota('volcengine', secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return null
+        const res = await window.api.providers.fetchQuota('volcengine', encrypted)
         if (res.ok && res.quota) return res.quota.remaining
         return null
       } catch {
@@ -393,9 +428,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       if (!svc || !user) return
       let found = false
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return
-        const res = await window.api.providers.apiModels('volcengine', secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return
+        const res = await window.api.providers.apiModels('volcengine', encrypted)
         const models = res.ok ? res.models : undefined
         if (Array.isArray(models) && models.length > 0) {
           let total = 0
@@ -431,9 +466,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       const svc = getProviderService()
       if (!svc || !user) return false
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return false
-        const res = await window.api.providers.fetchQuota('bailian', secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return false
+        const res = await window.api.providers.fetchQuota('bailian', encrypted)
         if (res.ok && res.quota) {
           setBailianQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
           return true
@@ -453,15 +488,16 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       const svc = getProviderService()
       if (!svc || !user) return false
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return false
-        const res = await window.api.providers.bailianRefreshQuota(keyId, secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return false
+        const res = await window.api.providers.bailianRefreshQuota(keyId, encrypted)
         if (res.ok && res.encrypted) {
           await svc.refreshProviderKey(user.id, keyId, {
             encryptedKey: res.encrypted,
             healthStatus: 'healthy'
           })
           void window.api.keysCache.invalidate({ keyId })
+          invalidateEncryptedKey(user.id, keyId)
           if (res.quota) setBailianQuotaOverrides((prev) => ({ ...prev, [keyId]: res.quota! }))
           return res.encrypted
         }
@@ -489,6 +525,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
             healthStatus: 'healthy'
           })
           void window.api.keysCache.invalidate({ keyId })
+          invalidateEncryptedKey(user.id, keyId)
         }
         setVolcSessionStatuses((prev) => ({
           ...prev,
@@ -513,9 +550,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       const svc = getProviderService()
       if (!svc || !user) return false
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return false
-        const res = await window.api.providers.volcSyncModels(keyId, secret.encrypted_key, opts?.maxStaleMs)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return false
+        const res = await window.api.providers.volcSyncModels(keyId, encrypted, opts?.maxStaleMs)
         if (res.cached) return false // 命中缓存：数据仍新鲜，无需回写与返回
         if (!res.ok || res.preserved || !res.encrypted) return false
         await svc.refreshProviderKey(user.id, keyId, {
@@ -525,6 +562,7 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
           accountFingerprint: res.accountFingerprint ?? null
         })
         void window.api.keysCache.invalidate({ keyId })
+        invalidateEncryptedKey(user.id, keyId)
         return res.encrypted
       } catch {
         return false
@@ -545,9 +583,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       if (!svc || !user) return false
       let found = false
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return false
-        const res = await window.api.providers.apiModels('tokenhub', secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return false
+        const res = await window.api.providers.apiModels('tokenhub', encrypted)
         const models = res.ok ? res.models : undefined
         if (Array.isArray(models) && models.length > 0) {
           let total = 0
@@ -579,13 +617,14 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       const svc = getProviderService()
       if (!svc || !user) return false
       try {
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return false
-        const res = await window.api.providers.tokenhubSyncModels(keyId, secret.encrypted_key, maxStaleMs)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return false
+        const res = await window.api.providers.tokenhubSyncModels(keyId, encrypted, maxStaleMs)
         if (res.cached) return false // 命中缓存：数据仍新鲜，无需回写与返回
         if (!res.ok || res.preserved || !res.encrypted) return false
         await svc.refreshProviderKey(user.id, keyId, { encryptedKey: res.encrypted, healthStatus: res.hasQuota ? 'healthy' : undefined })
         void window.api.keysCache.invalidate({ keyId })
+        invalidateEncryptedKey(user.id, keyId)
         // 同步命中 → 用最新负载重置各账号真实额度汇总（厂商列表行同步显示真实积分，而非 50/50）
         if (res.hasQuota) void fetchTokenhubQuotaSummaryOnce(keyId)
         return res.encrypted
@@ -629,22 +668,17 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
     const now = Date.now()
     for (const key of keys.filter((k) => k.provider_id === 'volcengine')) {
       if (now - (volcRenewAt.get(key.id) ?? 0) < ZHIPU_RENEW_RETRY_MS) continue
-      let secret: { encrypted_key: string } | null = null
-      try {
-        secret = await svc.getProviderKeySecret(user.id, key.id)
-      } catch {
-        continue
-      }
-      if (!secret) continue
+      const encrypted = await getEncryptedKey(user.id, key.id)
+      if (!encrypted) continue
       let state
       try {
-        state = await window.api.providers.volcSessionStatus(key.id, secret.encrypted_key)
+        state = await window.api.providers.volcSessionStatus(key.id, encrypted)
       } catch {
         continue
       }
       setVolcSessionStatuses((prev) => ({ ...prev, [key.id]: state }))
       if (state.hasSession && (state.status === 'expiring' || state.status === 'expired')) {
-        await renewVolcSessionOnce(key.id, secret.encrypted_key)
+        await renewVolcSessionOnce(key.id, encrypted)
         return
       }
     }
@@ -710,6 +744,8 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       setRefreshing(false)
       return
     }
+    // keys 重拉（初始/刷新/重新绑定/切账号）前清空会话加密缓存，避免外部载荷变更后仍读到陈旧密文
+    encryptedKeyCache.clear()
     // 仅首次加载显示 loading；reload 时保留旧数据，避免保存/操作后列表闪空白等待
     const isFirstLoad = providers.length === 0 && keys.length === 0
     if (isFirstLoad) setLoading(true)
@@ -959,9 +995,9 @@ export function useProviders(viewScope: ViewScope = 'personal'): ProvidersResult
       try {
         const key = keys.find((k) => k.id === keyId)
         if (!key) return
-        const secret = await svc.getProviderKeySecret(user.id, keyId)
-        if (!secret) return
-        const res = await window.api.providers.healthCheck(providerId, secret.encrypted_key)
+        const encrypted = await getEncryptedKey(user.id, keyId)
+        if (!encrypted) return
+        const res = await window.api.providers.healthCheck(providerId, encrypted)
         const status = resolveHealthAfterCheck(res.ok ? res.status : 'unknown', key.cookie_expires_at, Date.now())
         await svc.updateHealth(user.id, keyId, status)
         void window.api.keysCache.invalidate({ keyId })

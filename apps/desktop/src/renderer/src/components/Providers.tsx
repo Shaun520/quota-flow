@@ -5,6 +5,7 @@ import Pagination from './Pagination'
 import { EmptyState } from './EmptyState'
 import Select from './Select'
 import type { ProviderAgg, ProvidersResult } from '../hooks/useProviders'
+import { getEncryptedKey } from '../hooks/useProviders'
 import { getProviderService } from '../auth/service'
 import { useAuth } from '../hooks/useAuth'
 import type { UsageScope, ViewScope } from '@quota-flow/db-supabase'
@@ -217,12 +218,12 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         showToast('登录状态异常，无法测试', false)
         return
       }
-      const secret = await svc.getProviderKeySecret(user.id, keyId)
-      if (!secret) {
+      const encrypted = await getEncryptedKey(user.id, keyId)
+      if (!encrypted) {
         showToast('未找到该账号密钥', false)
         return
       }
-      const res = await window.api.providers.testApiKey(providerId, secret.encrypted_key)
+      const res = await window.api.providers.testApiKey(providerId, encrypted)
       if (res.ok) {
         setKeyHealth(keyId, 'healthy')
         showToast('API Key 可用', true)
@@ -251,8 +252,7 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
       if (providerId === 'volcengine' || providerId === 'bailian' || providerId === 'tokenhub') {
         const svc = getProviderService()
         if (svc && user) {
-          const secret = await svc.getProviderKeySecret(user.id, keyId)
-          if (secret) encrypted = secret.encrypted_key
+          encrypted = (await getEncryptedKey(user.id, keyId)) ?? undefined
         }
       }
       // 先立即用缓存展示模型目录，让弹窗第一次打开就秒出内容
@@ -356,12 +356,12 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         setSiteError('登录状态异常，无法打开官网')
         return
       }
-      const secret = await svc.getProviderKeySecret(user.id, keyId)
-      if (!secret) {
+      const encrypted = await getEncryptedKey(user.id, keyId)
+      if (!encrypted) {
         setSiteError('未找到该账号密钥，无法打开官网')
         return
       }
-      const res = await window.api.providers.openSite(providerId, keyId, secret.encrypted_key)
+      const res = await window.api.providers.openSite(providerId, keyId, encrypted)
       if (!res.ok) setSiteError(res.error || '无法打开官网')
     } catch (e) {
       setSiteError(e instanceof Error ? e.message : String(e))

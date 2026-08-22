@@ -247,6 +247,18 @@ export interface DesktopApi {
      */
     healthCheck: (providerId: string, encrypted: string, keyId?: string) => Promise<HealthCheckResult>
     /**
+     * 按 keyId+userId 解析加密凭证：主进程用已有 5 分钟密钥缓存解析，命中零 PostgREST 读；
+     * 兜底按 id 单次读（他人持有的团队密钥等不在本 user 分区）。拿不到返回 { encrypted: null }。
+     */
+    resolveKey: (input: {
+      supabaseUrl: string
+      supabaseAnonKey: string
+      accessToken: string
+      refreshToken: string
+      userId: string
+      keyId: string
+    }) => Promise<{ encrypted: string | null }>
+    /**
      * 打开已绑定账号对应的官网窗口
      * @param keyId 账号 key id；使用该账号自己的登录/生成分区
      * @param encryptedKey 可选：加密后的 Cookie/凭据，打开前会尝试注入到该账号分区
@@ -478,6 +490,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke('provider:encrypt', providerId, plain) as Promise<{ encrypted: string; fingerprint?: string | null }>,
     healthCheck: (providerId, encrypted, keyId) =>
       ipcRenderer.invoke('provider:health-check', providerId, encrypted, keyId) as Promise<HealthCheckResult>,
+    resolveKey: (input) =>
+      ipcRenderer.invoke('provider:resolve-key', input) as Promise<{ encrypted: string | null }>,
     openSite: (providerId, keyId, encryptedKey) =>
       ipcRenderer.invoke('provider:open-site', providerId, keyId, encryptedKey) as Promise<{ ok: boolean; error?: string }>,
     cancelLogin: (providerId, keyId) =>

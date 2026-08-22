@@ -42,6 +42,8 @@ import type {
   TokenhubFreeVideoModel,
   TokenhubModelQuota
 } from '@quota-flow/providers'
+import { createSupabaseClient, ProviderService } from '@quota-flow/db-supabase'
+import { resolveProviderKeyEncrypted } from './query-cache'
 
 /** 对「解密后的明文」仅做透明的 models 不可用标记写入，返回新明文（不触发网络；consoleJwt/accountId 原样保留）。 */
 export function markVolcModelUnavailable(
@@ -3204,6 +3206,48 @@ export function initProviders(): void {
   ipcMain.handle('provider:health-check', (_e, providerId: string, encrypted: string, keyId?: string) => {
     return healthCheck(providerId, encrypted, typeof keyId === 'string' ? keyId : undefined)
   })
+
+  // 按 keyId+userId 解析加密凭证：优先命中主进程个人维度密钥分区缓存（TTL 5 分钟，调度/续命已预热时零请求），
+  // 未命中（他人持有的团队密钥等不在本 user 分区）兜底按 id 单次读，行为与渲染层原 getProviderKeySecret 一致。
+  ipcMain.handle(
+    'provider:resolve-key',
+    async (
+      _e,
+      input: {
+        supabaseUrl: string
+        supabaseAnonKey: string
+        accessToken: string
+        refreshToken: string
+        userId: string
+        keyId: string
+      }
+    ) => {
+      try {
+        if (
+          !input ||
+          typeof input.userId !== 'string' ||
+          typeof input.keyId !== 'string' ||
+          !input.supabaseUrl ||
+          !input.accessToken
+        ) {
+          return { encrypted: null }
+        }
+        const client = createSupabaseClient({
+          supabaseUrl: input.supabaseUrl,
+          supabaseAnonKey: input.supabaseAnonKey
+        })
+        await client.auth.setSession({ access_token: input.accessToken, refresh_token: input.refreshToken })
+        const cached = await resolveProviderKeyEncrypted(client, input.userId, input.keyId)
+        if (cached !== null) return { encrypted: cached }
+        // 兜底：不在 user 分区（团队密钥等）时按 id 单次读，保持原语义
+        const svc = new ProviderService(client)
+        const secret = await svc.getProviderKeySecret(input.userId, input.keyId)
+        return { encrypted: secret?.encrypted_key ?? null }
+      } catch {
+        return { encrypted: null }
+      }
+    }
+  )
 
   // API Key 型厂商「测试」按钮：解密出 API Key 后调对应开放平台只读接口校验有效性，不产生费用
   ipcMain.handle('provider:test-api-key', async (_e, providerId: string, encrypted: string) => {

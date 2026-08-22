@@ -122,3 +122,15 @@ export function cachedListTeamProviderKeysWithSecrets(
     svc.listTeamProviderKeysWithSecrets(teamId, providerId)
   )
 }
+
+/** 按 userId+keyId 从个人维度密钥分区缓存解析 encrypted_key（未命中且 5 分钟 TTL 内不重复打库）。
+ *  复用主进程已有 5 分钟缓存，渲染层经 IPC 取凭证时命中即零请求。
+ *  仅覆盖 owner 为该 user 的密钥（个人/自己持有的团队密钥）；其余（他人持有的团队密钥）返回 null，交由调用方兜底 by-id 读。 */
+export async function resolveProviderKeyEncrypted(
+  client: ProviderServiceClient,
+  userId: string,
+  keyId: string
+): Promise<string | null> {
+  const keys = await cachedListProviderKeysWithSecrets(client, userId)
+  return keys.find((k) => k.id === keyId)?.encrypted_key ?? null
+}

@@ -66,6 +66,7 @@ const TABLE_ORDER = [
   'desktop_permissions',
   'creation_videos',
   'feedback',
+  'monitor_alert_rules',
   'jobs'
 ]
 
