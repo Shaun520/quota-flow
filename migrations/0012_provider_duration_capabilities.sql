@@ -4,8 +4,8 @@
 
 UPDATE providers
 SET capabilities = COALESCE(capabilities, '{}'::jsonb) || '{"supported_durations":[5,10]}'::jsonb
-WHERE id IN ('doubao', 'jimeng', 'qwen', 'qwenwan', 'hailuo', 'mathmind');
+WHERE id IN ('doubao', 'qwen', 'qwenwan', 'mathmind');
 
 UPDATE providers
 SET capabilities = COALESCE(capabilities, '{}'::jsonb) || '{"supported_durations":[5]}'::jsonb
-WHERE id IN ('yuanbao', 'kling');
+WHERE id IN ('yuanbao');

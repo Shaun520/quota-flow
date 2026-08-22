@@ -4,7 +4,7 @@
 
 ### One-Stop AI Video Generation Free-Quota Scheduler
 
-Aggregate daily free quotas from Doubao / Jimeng / Qwen / Yuanbao / Kling / Hailuo and more into a single schedulable, observable, and shareable pool.
+Aggregate daily free quotas from Doubao / Qwen / Yuanbao and more into a single schedulable, observable, and shareable pool.
 
 <p>
   <a href="https://github.com/Shaun520/quota-flow/releases">
@@ -36,7 +36,7 @@ Aggregate daily free quotas from Doubao / Jimeng / Qwen / Yuanbao / Kling / Hail
 
 - [Download](#download)
 - [Core Features](#core-features)
-- [Business Model](#business-model)
+- [Team Shared Quota](#team-shared-quota)
 - [Architecture](#architecture)
 - [Monorepo Structure](#monorepo-structure)
 - [Tech Stack](#tech-stack)
@@ -60,7 +60,7 @@ Aggregate daily free quotas from Doubao / Jimeng / Qwen / Yuanbao / Kling / Hail
 
 - **Dynamic multi-unit quota ledger**: Tracks each provider’s native unit (count / inspiration / credits), supports dynamic consumption by duration, resolution, and model; auto-rolls over at midnight.
 - **Equivalent-count overview**: Normalizes different units into a unified equivalent-count metric for UI dashboards and per-member daily caps.
-- **Admin-configurable cost tables**: `provider_cost_tables` is maintained in the admin console; rules like Doubao 5s/10s or Jimeng 720p/1080p can be changed anytime.
+- **Admin-configurable cost tables**: `provider_cost_tables` is maintained in the admin console; rules like Doubao 5s/10s can be changed anytime.
 - **Smart routing + estimateCost pre-check**: Estimates cost before selecting a provider, skipping accounts that cannot afford the call.
 - **Multi-account pooling**: Bind multiple accounts per provider to stack quotas; automatically failover when one account expires.
 - **Per-account enable switch**: Each bound account can be enabled/disabled individually (default enabled); disabled accounts are skipped by the scheduler without unbinding.
@@ -70,18 +70,14 @@ Aggregate daily free quotas from Doubao / Jimeng / Qwen / Yuanbao / Kling / Hail
 - **Desktop-first**: Electron local tool, no timeout or CORS issues; personal accounts decrypted locally, team shared accounts called via Edge Functions (keys never leave the cloud).
 - **Official hosting + self-hosting**: 95% of users use official hosting; technical users can fully self-host.
 
-## Business Model
+## Team Shared Quota
 
-**Open Source + Official Hosting + Self-Hosting**
+**Open Source + Free Team + Shared Quota Pool**
 
-| Plan | Price | Seats | Best For |
-|---|---|---|---|
-| Personal Free | $0 | 1 | Individual users |
-| Team Free | $0 | Up to 3 | Small teams trying it out |
-| Team Pro | $9/mo | Up to 10 | Serious small teams |
-| Team Business | $29/mo | Up to 30 | Larger teams |
-
-All plans have identical features; only the team size limit differs. Self-hosting is completely free, unlimited, and invisible to admin.
+- **Personal use**: Solo use; quota comes from the daily free quota of your own bound accounts.
+- **Free team**: Multiple people share one quota pool; shared accounts (team cookies) and member management are completely free with no subscription cost.
+- Offered solely as free teams with a shared quota pool; no subscription billing whatsoever.
+- Self-hosting is completely free, unlimited, and invisible to admin.
 
 ## Architecture
 
@@ -102,7 +98,7 @@ Desktop Electron (the only product entry point)
   React UI (4 tabs: Dispatch / History / Team / Settings) — users only see this
   Local scheduling engine (packages/core + providers)
   Unified WebView execution engine (hidden background, see REQUIREMENTS.md §5.12)
-    All 7 providers via WebView cookie injection + auto-submit (except mcp_mathmind real API)
+    All providers via WebView cookie injection + auto-submit (except mcp_mathmind real API)
     Each shared account uses an isolated session (session.fromPartition), no cross-contamination
     Two submit modes (simulate user actions / call page internal JS API) + three-tier result-extraction fallback
     Shared instance pool for submit/keep-alive, silent 3 AM homepage visits to renew cookies
@@ -160,16 +156,13 @@ apps/
 | Provider ID | Product | Quota Unit | Cost Factors | Capabilities | Invocation Method |
 |---|---|---|---|---|---|
 | doubao | Doubao doubao.com | count | Duration (5s/10s differ) | text/image | WebView cookie injection + auto-submit (Node.js HTTP adapter fallback) |
-| jimeng | Jimeng jimeng.jianying.com | inspiration | Duration + resolution + model | text/image/multi-image/video-extension | WebView cookie injection + auto-submit |
 | qwenwan | Tongyi Wanxiang tongyi.aliyun.com / qianwen.com | count | Duration | text/image/video-extension | WebView cookie injection + auto-submit (risk-control signatures bx-ua/clt-acs-sign, CLI cannot call directly) |
 | yuanbao | Yuanbao Hunyuan yuanbao.tencent.com | count | Fixed count | text/image | WebView cookie injection + auto-submit (Node.js HTTP adapter fallback) |
-| kling | Kling klingai.kuaishou.com | credits | Duration + resolution | text/image | WebView cookie injection + auto-submit |
-| hailuo | Hailuo hailuo.com | count | Fixed count | text | WebView cookie injection + auto-submit |
 | mathmind | mcp_mathmind-video | count | Fixed count | img2video/imgs2video/video2video | Real API (the only exception to the WebView approach) |
 
-Mainstream Chinese mainland providers tie free quotas to login state, not API keys. **mcp_mathmind is the only provider using a real API; the other 6 use the unified WebView execution engine** (cookie injection + auto-submit, see REQUIREMENTS.md §5.12). For providers like Qwen with risk-control signatures, the WebView front-end JS already contains the signing algorithm, so no reverse engineering is needed.
+Mainstream Chinese mainland providers tie free quotas to login state, not API keys. **mcp_mathmind is the only provider using a real API; the other 3 use the unified WebView execution engine** (cookie injection + auto-submit, see REQUIREMENTS.md §5.12). For providers like Qwen with risk-control signatures, the WebView front-end JS already contains the signing algorithm, so no reverse engineering is needed.
 
-Provider costs are not a fixed “1 per call” — Doubao 5s/10s, Jimeng 720p/1080p, Kling 5s/10s all deduct differently. These are driven by the `provider_cost_tables` table and ultimately normalized into a unified “equivalent count” for UI dashboards and per-member daily caps.
+Provider costs are not a fixed “1 per call” — Doubao 5s/10s deducts differently. These are driven by the `provider_cost_tables` table and ultimately normalized into a unified “equivalent count” for UI dashboards and per-member daily caps.
 
 ## Quick Start
 
@@ -259,7 +252,7 @@ pnpm release                            # Build and package desktop installer
 
 ## Roadmap
 
-1. **MVP core**: Monorepo + core + mathmind + Doubao + Jimeng + cost tables + desktop foundation
-2. **More providers + cookies**: Connect Qwen / Yuanbao / Kling / Hailuo + cookie manager + complete cost tables for all 7 providers
+1. **MVP core**: Monorepo + core + mathmind + Doubao + cost tables + desktop foundation
+2. **More providers + cookies**: Connect Qwen / Yuanbao + cookie manager + complete cost tables
 3. **Team + landing page**: Team quota pool + member management + admin cost-rule editor
 4. **Polish**: Auto-update + code signing + cost-table drift alerts + i18n

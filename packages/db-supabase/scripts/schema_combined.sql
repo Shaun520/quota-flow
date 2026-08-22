@@ -218,11 +218,8 @@ GRANT ALL ON TABLE team_invitations TO authenticated;
 -- ============ 6. Seed：7 家厂商 ============
 INSERT INTO providers (id, name, logo, capabilities, auth_type, unit_name, default_daily_quota) VALUES
   ('doubao',   '豆包',     '豆', '{"models":["Seedance 2.0 Mini"],"modes":["t2v","img"]}'::jsonb,            'cookie', '点',     10),
-  ('jimeng',   '即梦',     '梦', '{"models":["视频 S2.0","视频 S2.0 Pro"],"modes":["t2v","img"]}'::jsonb,   'cookie', '灵感值', 800),
   ('qwen',     '通义万相', '问', '{"models":["万相 2.7","万相 2.6","HappyHorse 1.0 Beta"],"modes":["t2v","img","multi_ref","first_last"]}'::jsonb, 'cookie', '额度', 10),
   ('yuanbao',  '元宝混元', '元', '{"models":["混元（固定）"],"modes":["t2v","img"]}'::jsonb,                  'cookie', '个',     5),
-  ('kling',    '可灵',     '灵', '{"models":["可灵-标准","可灵-大师"],"modes":["t2v","img"]}'::jsonb,       'cookie', '积分',   216),
-  ('hailuo',   '海螺',     '螺', '{"models":["海螺-标准"],"modes":["t2v","img"]}'::jsonb,                   'cookie', '次',     3),
   ('mathmind', 'MathMind', 'M',  '{"models":["mathmind-v1","mathmind-v2"],"modes":["t2v","img"]}'::jsonb, 'apikey', '次',     10)
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name, capabilities = EXCLUDED.capabilities,
@@ -799,43 +796,6 @@ DROP POLICY IF EXISTS "profiles_admin_all" ON profiles;
 CREATE POLICY "profiles_admin_all" ON profiles
   FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- ============ 3. subscriptions（订阅记录） ============
-CREATE TABLE IF NOT EXISTS subscriptions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  plan TEXT NOT NULL,
-  seats INTEGER NOT NULL DEFAULT 3 CHECK (seats > 0),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'cancelled')),
-  current_period_start TIMESTAMPTZ,
-  current_period_end TIMESTAMPTZ,
-  payment_method TEXT,
-  payment_note TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_subscriptions_team_created
-  ON subscriptions (team_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_status_end
-  ON subscriptions (status, current_period_end);
-
-ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "subscriptions_select_team" ON subscriptions;
-CREATE POLICY "subscriptions_select_team" ON subscriptions
-  FOR SELECT USING (
-    public.is_admin()
-    OR EXISTS (
-      SELECT 1 FROM team_members tm
-      WHERE tm.team_id = subscriptions.team_id
-        AND tm.user_id = auth.uid()
-    )
-  );
-
-DROP POLICY IF EXISTS "subscriptions_admin_all" ON subscriptions;
-CREATE POLICY "subscriptions_admin_all" ON subscriptions
-  FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
-
 -- ============ 4. provider_cost_tables（消耗表） ============
 CREATE TABLE IF NOT EXISTS provider_cost_tables (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -966,7 +926,6 @@ ALTER TABLE teams
 UPDATE providers SET equivalent_count_divisor = 1 WHERE equivalent_count_divisor IS NULL;
 UPDATE provider_keys SET equivalent_count_divisor = 1 WHERE equivalent_count_divisor IS NULL;
 UPDATE profiles SET updated_at = now() WHERE updated_at IS NULL;
-UPDATE subscriptions SET updated_at = now() WHERE updated_at IS NULL;
 
 -- ============ 9. 现有表 admin 访问策略 ============
 ALTER TABLE teams ENABLE ROW LEVEL SECURITY;
@@ -1011,7 +970,6 @@ CREATE POLICY "jobs_admin_all" ON jobs
 
 -- ============ 10. 权限授予 ============
 GRANT ALL ON TABLE profiles TO authenticated;
-GRANT ALL ON TABLE subscriptions TO authenticated;
 GRANT ALL ON TABLE provider_cost_tables TO authenticated;
 GRANT ALL ON TABLE member_usage TO authenticated;
 GRANT ALL ON TABLE announcements TO authenticated;
@@ -1053,14 +1011,8 @@ VALUES
   ('doubao', 'text2video', 1, 5, '480p', 'default', 1, 1, '豆包 5s 480p = 1次'),
   ('doubao', 'text2video', 6, 10, '480p', 'default', 2, 1, '豆包 10s 480p = 2次'),
   ('doubao', 'img2video', 1, 5, '480p', 'default', 1, 1, '豆包图生 5s 480p = 1次'),
-  ('jimeng', 'text2video', 1, 5, '720p', 'default', 80, 80, '即梦 5s 720p = 80灵感值'),
-  ('jimeng', 'text2video', 6, 10, '720p', 'default', 160, 80, '即梦 10s 720p = 160灵感值'),
-  ('jimeng', 'img2video', 1, 5, '720p', 'default', 80, 80, '即梦图生 5s 720p = 80灵感值'),
   ('qwenwan', 'text2video', 1, 10, '720p', 'default', 1, 1, '通义万相 10s 默认 = 1次'),
   ('yuanbao', 'text2video', 1, 10, '720p', 'default', 1, 1, '元宝 10s 默认 = 1次'),
-  ('kling', 'text2video', 1, 5, '720p', 'default', 5, 5, '可灵 5s 720p = 5积分'),
-  ('kling', 'text2video', 1, 5, '1080p', 'default', 10, 5, '可灵 5s 1080p = 10积分'),
-  ('hailuo', 'text2video', 1, 10, '720p', 'default', 1, 1, '海螺 10s 默认 = 1次'),
   ('mathmind', 'img2video', 1, 10, '720p', 'default', 1, 1, 'mathmind = 1次')
 ON CONFLICT (provider_id, mode, duration_min, duration_max, resolution, model) DO UPDATE SET
   unit_cost = EXCLUDED.unit_cost,
@@ -1069,7 +1021,6 @@ ON CONFLICT (provider_id, mode, duration_min, duration_max, resolution, model) D
   updated_at = now();
 
 COMMENT ON TABLE profiles IS '用户扩展信息，is_admin 控制后台登录授权';
-COMMENT ON TABLE subscriptions IS '订阅记录，MVP 阶段由 admin 手动开通';
 COMMENT ON TABLE provider_cost_tables IS '各厂商生成参数对应的扣减规则，admin 额度扣减规则数据源';
 COMMENT ON TABLE member_usage IS '成员当日等效消费统计';
 COMMENT ON TABLE announcements IS '后台公告通知';
@@ -1305,11 +1256,11 @@ END $$;
 
 UPDATE providers
 SET capabilities = COALESCE(capabilities, '{}'::jsonb) || '{"supported_durations":[5,10]}'::jsonb
-WHERE id IN ('doubao', 'jimeng', 'qwen', 'qwenwan', 'hailuo', 'mathmind');
+WHERE id IN ('doubao', 'qwen', 'qwenwan', 'mathmind');
 
 UPDATE providers
 SET capabilities = COALESCE(capabilities, '{}'::jsonb) || '{"supported_durations":[5]}'::jsonb
-WHERE id IN ('yuanbao', 'kling');
+WHERE id IN ('yuanbao');
 
 -- ============ 0013_team_rpc.sql ============
 -- 0013_team_rpc.sql
@@ -1370,19 +1321,6 @@ BEGIN
         WHERE tm.team_id = t.id
           AND mp.status = 'active'
       ) AS active_member_count,
-      (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      ) AS subscription,
       COALESCE((
         SELECT SUM(COALESCE(j.equivalent_count, 0))
         FROM jobs j
@@ -1418,7 +1356,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_list_teams(text, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.admin_list_teams(text, text, integer, integer)
-  IS 'Admin team list with owner, members, subscription, usage, and key count. Admin only.';
+  IS 'Admin team list with owner, members, usage, and key count. Admin only.';
 
 -- ============ 2. admin_list_team_members ============
 CREATE OR REPLACE FUNCTION public.admin_list_team_members(p_team_id UUID)
@@ -1673,23 +1611,6 @@ BEGIN
       JOIN profiles mp ON mp.id = tm.user_id
       WHERE tm.team_id = t.id AND mp.status = 'active'
     ),
-    'subscription', CASE
-      WHEN EXISTS (SELECT 1 FROM subscriptions s WHERE s.team_id = t.id)
-      THEN (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      )
-      ELSE NULL
-    END,
     'month_usage', COALESCE((
       SELECT SUM(COALESCE(j.equivalent_count, 0))
       FROM jobs j
@@ -2356,19 +2277,6 @@ BEGIN
         WHERE tm.team_id = t.id
           AND mp.status = 'active'
       ) AS active_member_count,
-      (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      ) AS subscription,
       public.team_quota_snapshot(t.id, 'doubao') AS quota,
       COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id AND j.created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'), 0) AS month_usage,
       COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id), 0) AS total_usage,
@@ -2392,7 +2300,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_list_teams(text, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.admin_list_teams(text, text, integer, integer)
-  IS 'Admin team list with owner, members, subscription, shared quota, usage, and key count. Admin only.';
+  IS 'Admin team list with owner, members, shared quota, usage, and key count. Admin only.';
 
 -- ============ 6. Extend get_team_detail with quota ============
 CREATE OR REPLACE FUNCTION public.get_team_detail(p_team_id UUID)
@@ -2429,23 +2337,6 @@ BEGIN
     'created_at', t.created_at,
     'member_count', (SELECT count(*) FROM team_members tm WHERE tm.team_id = t.id),
     'active_member_count', (SELECT count(*) FROM team_members tm JOIN profiles mp ON mp.id = tm.user_id WHERE tm.team_id = t.id AND mp.status = 'active'),
-    'subscription', CASE
-      WHEN EXISTS (SELECT 1 FROM subscriptions s WHERE s.team_id = t.id)
-      THEN (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      )
-      ELSE NULL
-    END,
     'quota', public.team_quota_snapshot(t.id, 'doubao'),
     'month_usage', COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id AND j.created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'), 0),
     'total_usage', COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id), 0),
@@ -3245,19 +3136,6 @@ VALUES
     10
   ),
   (
-    '00000000-0000-0000-0000-000000000002',
-    '雨夜霓虹巷战',
-    'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=640&q=80',
-    NULL,
-    5,
-    '动作打斗',
-    ARRAY['打斗', '雨夜', '慢镜头'],
-    '高速动作打斗，雨夜巷战，两道人影在霓虹灯光下贴身交锋，慢镜头捕捉拳脚与雨滴碰撞，镜头快速切换，压迫感强。',
-    '可灵 · 标准',
-    true,
-    20
-  ),
-  (
     '00000000-0000-0000-0000-000000000003',
     '霓虹雨幕天桥',
     'https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=640&q=80',
@@ -3284,19 +3162,6 @@ VALUES
     40
   ),
   (
-    '00000000-0000-0000-0000-000000000005',
-    '午后窗台的小猫',
-    'https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&w=640&q=80',
-    NULL,
-    5,
-    '治愈系',
-    ARRAY['治愈', '猫咪', '阳光'],
-    '治愈系田园短片，小猫在午后窗台伸懒腰，阳光洒进房间，窗帘随风轻摆，镜头缓慢靠近猫爪，画面温暖柔光。',
-    '海螺 · 标准',
-    true,
-    50
-  ),
-  (
     '00000000-0000-0000-0000-000000000006',
     '黄昏停机坪的机甲少女',
     'https://images.unsplash.com/photo-1528459801416-a9e53bbf4e17?auto=format&fit=crop&w=640&q=80',
@@ -3310,19 +3175,6 @@ VALUES
     60
   ),
   (
-    '00000000-0000-0000-0000-000000000007',
-    '悬浮载具追车',
-    'https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=640&q=80',
-    NULL,
-    10,
-    '赛博都市',
-    ARRAY['追车', '悬浮载具', '光轨'],
-    '科幻城市追车戏，悬浮载具贴着高架桥高速穿行，车灯拖出光轨，镜头跟拍并切换俯冲视角，城市灯火快速掠过。',
-    '可灵 · 大师',
-    true,
-    70
-  ),
-  (
     '00000000-0000-0000-0000-000000000008',
     '竹林红袖剑气',
     'https://images.unsplash.com/photo-1541701494587-cb58502866ab?auto=format&fit=crop&w=640&q=80',
@@ -3334,19 +3186,6 @@ VALUES
     '千问 · 万相',
     true,
     80
-  ),
-  (
-    '00000000-0000-0000-0000-000000000009',
-    '雨天咖啡馆窗边',
-    'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=640&q=80',
-    NULL,
-    5,
-    '治愈系',
-    ARRAY['治愈', '咖啡馆', '雨天'],
-    '治愈系动画，雨天咖啡馆窗边，热咖啡升起白雾，小猫趴在桌角看雨滴滑落，镜头缓慢推近，色调温柔安静。',
-    '海螺 · 标准',
-    true,
-    90
   )
 ON CONFLICT (id) DO NOTHING;
 

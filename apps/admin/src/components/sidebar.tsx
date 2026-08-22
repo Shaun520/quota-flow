@@ -53,16 +53,6 @@ const NAV_SECTIONS: Array<{
         )
       },
       {
-        href: "/subscriptions",
-        label: "订阅管理",
-        icon: (
-          <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="2" y="5" width="20" height="14" rx="2" />
-            <line x1="2" y1="10" x2="22" y2="10" />
-          </svg>
-        )
-      },
-      {
         href: "/creation-videos",
         label: "创作中心视频",
         icon: (

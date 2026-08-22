@@ -481,19 +481,6 @@ BEGIN
         WHERE tm.team_id = t.id
           AND mp.status = 'active'
       ) AS active_member_count,
-      (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      ) AS subscription,
       public.team_quota_snapshot(t.id, 'doubao') AS quota,
       COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id AND j.created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'), 0) AS month_usage,
       COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id), 0) AS total_usage,
@@ -517,7 +504,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_list_teams(text, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.admin_list_teams(text, text, integer, integer)
-  IS 'Admin team list with owner, members, subscription, shared quota, usage, and key count. Admin only.';
+  IS 'Admin team list with owner, members, shared quota, usage, and key count. Admin only.';
 
 -- ============ 6. Extend get_team_detail with quota ============
 CREATE OR REPLACE FUNCTION public.get_team_detail(p_team_id UUID)
@@ -554,23 +541,6 @@ BEGIN
     'created_at', t.created_at,
     'member_count', (SELECT count(*) FROM team_members tm WHERE tm.team_id = t.id),
     'active_member_count', (SELECT count(*) FROM team_members tm JOIN profiles mp ON mp.id = tm.user_id WHERE tm.team_id = t.id AND mp.status = 'active'),
-    'subscription', CASE
-      WHEN EXISTS (SELECT 1 FROM subscriptions s WHERE s.team_id = t.id)
-      THEN (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      )
-      ELSE NULL
-    END,
     'quota', public.team_quota_snapshot(t.id, 'doubao'),
     'month_usage', COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id AND j.created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'), 0),
     'total_usage', COALESCE((SELECT SUM(COALESCE(j.equivalent_count, 0)) FROM jobs j WHERE j.team_id = t.id), 0),

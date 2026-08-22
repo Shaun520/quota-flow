@@ -29,6 +29,7 @@ test.json
 
 # 运行时临时探测文件
 _probe_audio.*
+_probe*.mjs
 
 # 桌面端构建产物
 apps/desktop/out/

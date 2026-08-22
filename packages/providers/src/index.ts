@@ -20,7 +20,7 @@ export function createAllProviders(
 ): BaseProvider[] {
   const providers: BaseProvider[] = [];
   providers.push(new QwenWanProvider());
-  // TODO: 接入 seedance (豆包即梦)
+  // TODO: 接入 seedance (豆包)
   // providers.push(new SeedanceProvider(options));
   providers.push(new YuanbaoProvider());
   return providers;

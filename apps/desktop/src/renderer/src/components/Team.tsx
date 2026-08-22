@@ -416,10 +416,6 @@ export default function Team({ active, userId, team, onTeamChanged }: TeamProps)
               <div className="config-val">{detail?.name ?? '-'}</div>
             </div>
             <div className="config-card">
-              <div className="config-label">当前套餐</div>
-              <div className="config-val">{detail?.plan ?? '-'}</div>
-            </div>
-            <div className="config-card">
               <div className="config-label">席位上限</div>
               <div className="config-val">{detail?.seats_limit ?? '-'} 人</div>
             </div>

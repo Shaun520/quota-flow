@@ -1,6 +1,6 @@
 # Quota-Flow 需求文档
 
-> 视频生成免费额度统一调度平台 · 把豆包 / 即梦 / 通义万相 / 元宝混元 / 可灵 / 海螺 / mcp_mathmind-video 等多家厂商的每日免费额度聚合成一个可调度、可观测、可共享的池子。
+> 视频生成免费额度统一调度平台 · 把豆包 / 通义万相 / 元宝混元 / mcp_mathmind-video 等多家厂商的每日免费额度聚合成一个可调度、可观测、可共享的池子。
 
 ---
 
@@ -23,7 +23,7 @@
 | 多账号池化 | 是（per-key） | 可配多 key | 是（团队共享池） |
 | 分发形态 | npm/Docker/桌面端/SaaS | SaaS | 桌面端 + Skill |
 | 定位 | 商业 SaaS | 商业 SaaS | 开源工具 + 官方托管 |
-| 国内视频厂商支持 | 否 | 否 | 是（7 家） |
+| 国内视频厂商支持 | 否 | 否 | 是（4 家） |
 
 ---
 
@@ -31,79 +31,38 @@
 
 | 角色 | 描述 | 典型场景 |
 |---|---|---|
-| 个人用户 | 自用聚合多家免费额度 | 把 7 家厂商账号绑进来，每天用一个池子调 |
+| 个人用户 | 自用聚合多家免费额度 | 把 4 家厂商账号绑进来，每天用一个池子调 |
 | 团队 admin | 小团队管理员 | 绑团队公共 cookie，邀请成员，共享额度池 |
 | 团队 member | 被邀请加入团队 | 消费团队额度生成视频，看不到 admin 的 cookie 明文 |
 | 自部署用户 | 技术用户/隐私敏感 | 自己注册 Supabase，完全脱离官方托管 |
-| 平台运营者 | 你（admin 后台） | 管团队、配 Provider、监控、手动开通订阅、维护消耗表 |
+| 平台运营者 | 你（admin 后台） | 管团队、配 Provider、监控、维护消耗表 |
 
 ---
 
-## 3. 商业模式
+## 3. 免费团队与共享额度
 
-### 3.1 模式 A：开源 + 官方托管 + 自部署
+**开源 + 官方托管 + 自部署**，全部免费使用，无订阅、无付费套餐。
 
 **开源策略**：
 - 全部开源：packages/* + apps/web + apps/desktop + apps/cli + apps/skill + apps/admin（含运营后台与额度扣减规则）
 
-**两种使用方式**：
+**两种使用方式**（均免费）：
 
 | 维度 | 官方托管（推荐） | 自部署 |
 |---|---|---|
-| 数据库 | 用我的 Supabase | 用户自己注册 Supabase |
+| 数据库 | 用运营者的 Supabase | 用户自己注册 Supabase |
 | 首次配置 | 下载桌面端 注册账号 直接用 | 下载桌面端 注册 Supabase 填 URL+anon key 用 |
-| 数据归属 | 存在我的 Supabase（你运维） | 存在用户自己的 Supabase（用户运维） |
-| 席位限制 | 免费 3 人，付费扩展 | 无限制 |
-| 费用 | 免费层 $0，付费 $9/$29 月 | 永远 $0（用户自己养 Supabase） |
-| 可用性 | 跟着我的 Supabase 走 | 跟用户自己的 Supabase 走 |
-| 数据隐私 | 数据在我的 Supabase | 数据完全自己掌控 |
+| 数据归属 | 存在官方 Supabase | 存在用户自己的 Supabase |
+| 席位限制 | 免费团队，受席位上限（seats_limit）限制 | 无限制 |
+| 费用 | 免费 | 永远 $0（用户自己养 Supabase） |
+| 可用性 | 跟着运营者的 Supabase 走 | 跟用户自己的 Supabase 走 |
+| 数据隐私 | 数据在官方 Supabase | 数据完全自己掌控 |
 | 客服支持 | GitHub Issues + 邮箱 | 无客服支持，出问题自行排查 |
 | 自动更新 | electron-updater | 手动 git pull 或下 GitHub Releases |
 | admin 监控 | 可见 | 完全不可见 |
 | 适合 | 95% 普通用户 | 技术用户、隐私敏感、企业内网 |
 
-### 3.2 订阅体系（官方托管）
-
-| 套餐 | 价格 | 席位 | 适合 |
-|---|---|---|---|
-| 个人免费 | $0 | 1 人 | 个人用户 |
-| 团队免费 | $0 | 最多 3 人 | 小团队尝鲜 |
-| 团队 Pro | $9/月 | 最多 10 人 | 正经小团队 |
-| 团队 Business | $29/月 | 最多 30 人 | 大团队 |
-
-**关键设计**：所有套餐功能完全一致，唯一区别是**团队人数上限**。
-
-| 功能 | 个人免费 | 团队免费 | 团队 Pro | Business |
-|---|---|---|---|---|
-| 厂商数量 | 不限 | 不限 | 不限 | 不限 |
-| 生成次数 | 不限 | 不限 | 不限 | 不限 |
-| apikey/cookie 数量 | 不限 | 不限 | 不限 | 不限 |
-| 基础调度（轮询/降级） | 是 | 是 | 是 | 是 |
-| 额度账本 + 看板 | 是 | 是 | 是 | 是 |
-| 多账号池化 | 是 | 是 | 是 | 是 |
-| Skill / CLI 入口 | 是 | 是 | 是 | 是 |
-| 团队共享额度池 | 否 | 是 | 是 | 是 |
-| 成员管理 | 否 | 是 | 是 | 是 |
-| 防滥用机制 | 否 | 是 | 是 | 是 |
-| 历史记录 | 无限 | 无限 | 无限 | 无限 |
-| 客服优先级 | 普通 | 普通 | 优先 | 优先 |
-| 席位上限 | 1 | 3 | 10 | 30 |
-
-### 3.3 支付系统
-
-**MVP 阶段：手动开通**
-1. 用户在桌面端看到升级提示 联系运营者（邮件/GitHub Issues）
-2. 用户微信/支付宝转账
-3. 运营者在 admin 后台手动开通订阅（选套餐、设席位、设到期时间）
-4. 用户桌面端刷新看到订阅生效
-
-**后期**：接微信支付 + 支付宝商户号（需企业主体）
-
-### 3.4 赞助入口
-
-- 落地页顶部或侧边"赞助支持"按钮（GitHub Sponsors / Buy Me a Coffee）
-- 桌面端设置 Tab 的"关于"区域放赞助链接
-- README 顶部赞助徽章
+**免费团队 + 共享额度池**（核心创新点）：多人多账号额度叠加成一个池子，免费开放；包含共享账号（团队 cookie）、成员管理、席位限制（seats_limit）与防滥用上限；不涉及任何订阅收费。
 
 ---
 
@@ -125,9 +84,9 @@
 
 举例：3 人团队（admin 小张 + member 小王 + member 小李）
 - 小张绑团队公共：豆包x3 账号 + 千问x2 账号 = 50 次/日（豆包按次数，千问按次数）
-- 小王自带：即梦x1 = 800 灵感值/日（即梦按灵感值）
+- 小王自带：千问x1 = 50 次/日
 - 小李自带：元宝x1 = 30 次/日
-- **团队总池**：在 UI 上统一折算显示"约 110 等效次数/日"（灵感值按消耗表换算成等效次数用于总览展示，实际扣减仍按各厂商原生单位）
+- **团队总池**：在 UI 上统一折算显示"约 130 等效次数/日"（灵感值按消耗表换算成等效次数用于总览展示，实际扣减仍按各厂商原生单位）
 
 ### 4.3 等效次数换算（仅用于总览 UI）
 
@@ -196,9 +155,9 @@ Supabase（数据库 + Auth + Edge Functions）
   React UI（4 Tab：调度台/历史/团队/设置）
   内嵌注册/登录页 + 选模式（官方托管 vs 自部署）
   本地调度引擎（packages/core + providers）
-  全 7 家厂商支持（统一 WebView 提交方案，见 5.12）
+  全 4 家厂商支持（统一 WebView 提交方案，见 5.12）
     mcp_mathmind：真 API（仅例外）
-    豆包/即梦/通义/元宝/可灵/海螺：WebView cookie 注入 + 自动提交
+    豆包/通义万相/元宝：WebView cookie 注入 + 自动提交
   WebView 统一执行引擎（隐藏后台，用户不可见）
     每个团队共享 cookie → 独立隔离会话（session.fromPartition）
     提交：两种模式（模拟用户操作 / 调页面内部 JS API）
@@ -222,7 +181,7 @@ Supabase（数据库 + Auth + Edge Functions）
 quota-flow/
 packages/
   core/              调度核心（路由、降级、账本逻辑、等效次数换算）
-  providers/         7 家厂商适配器（含 estimateCost 动态估算）
+  providers/         各厂商适配器（含 estimateCost 动态估算）
   crypto/            AES 加密
   db-supabase/       Supabase 客户端 + 消耗表缓存
   shared-ui/         React 共享组件
@@ -282,12 +241,10 @@ only-built-dependencies = electron,better-sqlite3,vite,esbuild,sharp
 profiles                  用户扩展信息（display_name, avatar_url, created_at）
 
 -- 团队与订阅
-teams                     团队信息（name, owner_id, plan, seats_limit, created_at）
+teams                     团队信息（name, owner_id, seats_limit, created_at）
 team_members              成员关系（team_id, user_id, role: admin/member,
                           daily_quota_limit_equivalent, joined_at）
 team_invitations          邀请码（team_id, email, role, token, expires_at）
-subscriptions             订阅记录（team_id, plan, seats, status,
-                          current_period_end, payment_method）
 
 -- 厂商配置
 providers                 厂商元信息（id, name, logo, capabilities,
@@ -304,9 +261,8 @@ provider_cost_tables      消耗规则（provider_id, mode,
                           duration_min, duration_max,
                           resolution, model,
                           unit_cost, equivalent_count_divisor,
-                          display_text, created_at, updated_at）
+                          display_text, created_at, updated_at)
 -- 例：doubao, text2video, 1, 5, 480p, default, 1, 1, "5s内480p = 1次"
---     jimeng, img2video, 1, 5, 720p, default, 80, 80, "5s内720p = 80灵感值"
 
 -- 额度账本（按日、按团队、按厂商、按账号、按原生单位）
 quota_ledger              每日额度账本（date, team_id, provider_id, account_id,
@@ -337,7 +293,6 @@ audit_logs                审计日志（team_id, user_id, action, target, metad
 - provider_cost_tables：全员只读（admin 可写）
 - quota_ledger：团队成员可见本团队账本
 - jobs：团队成员可见本团队任务
-- subscriptions：admin 可见本团队订阅
 
 ### 5.9 packages/core 设计
 
@@ -395,8 +350,8 @@ Node.js HTTP adapter 代码保留作兜底/高级用户。
 
 ```ts
 abstract class BaseProvider {
-  abstract readonly id: string;              // 'doubao' | 'jimeng' | 'qwenwan' | ...
-  abstract readonly displayName: string;     // '豆包' | '即梦' | ...
+  abstract readonly id: string;              // 'doubao' | 'qwenwan' | ...
+  abstract readonly displayName: string;     // '豆包' | '通义万相' | ...
   abstract readonly authType: AuthType;      // 'apikey' | 'cookie' | 'session_token'
   abstract readonly unitName: string;        // 账本单位: 'count' | '灵感值' | '积分'
   abstract readonly capabilities: ProviderCapabilities;
@@ -436,13 +391,10 @@ abstract class BaseProvider {
 }
 ```
 
-**7 家适配器**：
+**厂商适配器**：
 - providers/doubao：豆包（doubao.com），cookie，单位 count，时长影响扣减
-- providers/jimeng：即梦 AI（jimeng.jianying.com），cookie，单位 inspiration，时长/分辨率/模型影响
 - providers/qwenwan：通义万相（tongyi.aliyun.com），cookie，单位 count，时长影响扣减
 - providers/yuanbao：元宝混元（yuanbao.tencent.com），cookie，单位 count
-- providers/kling：可灵（klingai.kuaishou.com），cookie，单位 credits（积分），时长影响
-- providers/hailuo：海螺（hailuo.com），cookie，单位 count
 - providers/mathmind：mcp_mathmind-video，真 API，单位 count
 
 ### 5.11 apps/cli 说明
@@ -620,16 +572,13 @@ WebView 是桌面端默认路径。**保留 Node.js HTTP adapter 代码**作兜�
 
 ## 6. 厂商接入清单
 
-### 6.1 厂商列表（7 家）
+### 6.1 厂商列表（4 家）
 
 | 厂商 id | 产品 | 每日免费额度 | 额度单位 | 扣减影响因素 | 能力 | 调用方式 |
 |---|---|---|---|---|---|---|
 | doubao | 豆包 doubao.com | 每日登录次数 | count（次数） | 时长（5s/10s 扣不同） | 文/图 | WebView cookie 注入 + 自动提交（兜底 HTTP adapter） |
-| jimeng | 即梦 jimeng.jianying.com | 每日登录灵感值 | inspiration（灵感值） | 时长 + 分辨率 + 模型 | 文/图/多图/视频续写 | WebView cookie 注入 + 自动提交 |
 | qwenwan | 通义万相 tongyi.aliyun.com / qianwen.com | 每日免费次数 | count（次数） | 时长 | 文/图/视频续写 | WebView cookie 注入 + 自动提交（风控签名，CLI 不可直调） |
 | yuanbao | 元宝混元 yuanbao.tencent.com | 每日免费次数 | count（次数） | 按固定次数 | 文/图 | WebView cookie 注入 + 自动提交（兜底 HTTP adapter） |
-| kling | 可灵 klingai.com/ | 每月免费216积分 | credits（积分） | 时长 + 分辨率 | 文/图 | WebView cookie 注入 + 自动提交 |
-| hailuo | 海螺 hailuoai.com | 有限免费 | count（次数） | 按固定次数 | 文 | WebView cookie 注入 + 自动提交 |
 | mathmind | mcp_mathmind-video | 工具内置额度 | count（次数） | 按固定次数 | img2video/imgs2video/video2video | 真 API（WebView 方案的唯一例外） |
 
 ### 6.2 关键现实
@@ -637,7 +586,7 @@ WebView 是桌面端默认路径。**保留 Node.js HTTP adapter 代码**作兜�
 - **国内主流厂商的免费额度绑登录态，不绑 apikey**
 - 公开 API 是商用付费的（按量计费），走不了每日免费额度
 - **唯一例外**：mcp_mathmind-video 是真 API
-- **次数 ≠ 固定 1 次**：豆包/即梦/可灵等选择不同时长/分辨率/模型会扣不同额度，不能简单按 1 扣
+- **次数 ≠ 固定 1 次**：豆包等选择不同时长/分辨率/模型会扣不同额度，不能简单按 1 扣
 - default_daily_quota / provider_cost_tables 必须可在 admin 后台调整下发
 - admin 后台可控制厂商全局启用/禁用，用户可在设置里临时禁用某家（调度器自动跳过）
 - **账号级启用/停用**：每个绑定账号有 `enabled` 开关（默认开），停用后该账号不被调度器选号（生成视频、保活、健康检查聚合均跳过），额度/绑定信息保留
@@ -647,31 +596,15 @@ WebView 是桌面端默认路径。**保留 Node.js HTTP adapter 代码**作兜�
 豆包生成视频时可选择 5s / 10s，扣减次数不同（例：5s 扣 1 次，10s 扣 2 次）。
 适配器 estimateCost 基于 options.duration 查 provider_cost_tables 返回扣减次数。
 
-### 6.4 即梦：灵感值积分制
-
-即梦不是按次数，是按灵感值（例：5s 720p 文生视频 = 80 灵感值，每日约 800 灵感值）。
-estimateCost 返回 `{ unit: 'inspiration', cost: 80, equivalentCount: 1 }`。
-账本按灵感值原生单位存储，UI 统一换算等效次数展示。
-
-### 6.5 可灵：积分制
-
-可灵按积分，时长/分辨率影响积分消耗。estimateCost 基于参数查表。
-
-### 6.6 provider_cost_tables 示例数据
+### 6.4 provider_cost_tables 示例数据
 
 | provider_id | mode | duration_min | duration_max | resolution | model | unit_cost | equivalent_count_divisor | display_text |
 |---|---|---|---|---|---|---|---|---|
 | doubao | text2video | 1 | 5 | 480p | default | 1 | 1 | 豆包 5s 480p = 1次 |
 | doubao | text2video | 6 | 10 | 480p | default | 2 | 1 | 豆包 10s 480p = 2次 |
 | doubao | img2video | 1 | 5 | 480p | default | 1 | 1 | 豆包图生 5s 480p = 1次 |
-| jimeng | text2video | 1 | 5 | 720p | default | 80 | 80 | 即梦 5s 720p = 80灵感值 |
-| jimeng | text2video | 6 | 10 | 720p | default | 160 | 80 | 即梦 10s 720p = 160灵感值 |
-| jimeng | img2video | 1 | 5 | 720p | default | 80 | 80 | 即梦图生 5s 720p = 80灵感值 |
 | qwenwan | text2video | 1 | 10 | 720p | default | 1 | 1 | 通义万相 10s 内 = 1次 |
 | yuanbao | text2video | 1 | 10 | 720p | default | 1 | 1 | 元宝 10s 内 = 1次 |
-| kling | text2video | 1 | 5 | 720p | default | 5 | 5 | 可灵 5s 720p = 5积分 |
-| kling | text2video | 1 | 5 | 1080p | default | 10 | 5 | 可灵 5s 1080p = 10积分 |
-| hailuo | text2video | 1 | 10 | 720p | default | 1 | 1 | 海螺 10s 内 = 1次 |
 | mathmind | img2video | 1 | 10 | 720p | default | 1 | 1 | mathmind = 1次 |
 
 ---
@@ -692,7 +625,7 @@ estimateCost 返回 `{ unit: 'inspiration', cost: 80, equivalentCount: 1 }`。
 - 每天凌晨 4 点 pg_cron 触发健康检查
 - 对所有 cookie 调一个轻量 API 验证
 - 快过期的标记 health_status = expiring
-- 用户打开桌面端时看到提示"即梦登录将在 6 小时后失效"
+- 用户打开桌面端时看到提示"cookie 登录将在 6 小时后失效"
 
 **方案 5：失败自动切其他账号**
 - cookie 突然失效时，调度器检测失败 自动切下一个账号
@@ -705,11 +638,8 @@ estimateCost 返回 `{ unit: 'inspiration', cost: 80, equivalentCount: 1 }`。
 | 厂商 | 登录方式 | cookie 寿命 |
 |---|---|---|
 | 豆包 | 抖音/手机号 | 7-30 天 |
-| 即梦 | 抖音/手机号 | 7-30 天 |
 | 通义万相 | 阿里云账号 | 7-30 天 |
 | 元宝 | 微信/QQ 扫码 | 1-7 天 |
-| 可灵 | 快手账号 | 7-30 天 |
-| 海螺 | 手机号 | 7-30 天 |
 
 ### 7.3 现实约束
 
@@ -817,7 +747,7 @@ apps/skill/
 
 ### 10.5 代码签名
 
-MVP 阶段不买证书（Mac $99/年、Windows $200-400/年），用户安装时会看到"未知发布者"警告。有 10+ 付费用户后再买。
+MVP 阶段不买证书（Mac $99/年、Windows $200-400/年），用户安装时会看到"未知发布者"警告。产品有足够规模用户后再考虑购买。
 
 ---
 
@@ -837,13 +767,12 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 **不登录可看**：
 - 首页（产品介绍、特性展示、对比表）
-- 定价页（个人免费 + 团队免费 3 人 + Pro $9 + Business $29）
 - 下载页（自动检测 OS，给下载链接）
 - 文档站（怎么用、FAQ、Provider 清单、自部署教程）
 - 注册页（注册完跳下载页，不注册也可下载）
 
 **登录后可选看**：
-- 账号管理（改密码、看订阅状态）
+- 账号管理（改密码）
 - 团队成员邀请（发邀请链接）
 
 **明确不做**：
@@ -875,19 +804,13 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 ### 13.4 功能模块
 
 **13.4.1 团队与用户管理**
-- 所有团队列表（订阅档、成员数、到期时间、用量）
+- 所有团队列表（成员数、席位、用量）
 - 团队详情（成员、key 数量、消费明细）
 - 用户列表（注册时间、所属团队、消费统计）
 - 封禁/解封团队或用户
 - 重置某团队的额度（客诉用）
 
-**13.4.2 订阅管理**（MVP 手动开通）
-- 手动开通订阅（选套餐、设席位、设到期时间）
-- 订阅记录列表
-- 取消/续费订阅
-- 支付记录（用户微信/支付宝转账后手动登记）
-
-**13.4.3 Provider 与消耗表管理**
+**13.4.2 Provider 与消耗表管理**
 - 厂商列表（全局启用/禁用、改 default_daily_quota、改 unit_name、改 equivalent_count_divisor）
 - **provider_cost_tables 可视化编辑器**：
   - 按厂商列出所有消耗规则
@@ -897,14 +820,14 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 - 厂商健康监控（成功率、平均时长、最近故障）
 - 适配器版本管理（灰度上线新适配器）
 
-**13.4.4 系统监控**
+**13.4.3 系统监控**
 - 调用总量趋势（按厂商、按团队、按等效次数）
 - 错误率告警（某家厂商失败率 >30%）
 - 消耗偏离告警（某厂商实际扣减与表偏差 >20%，提醒运营者更新消耗表）
 - Supabase 用量（DB 占用、MAU 接近免费层上限）
 - pg_cron 任务状态
 
-**13.4.5 安全与合规**
+**13.4.4 安全与合规**
 - cookie/key 审计日志（谁绑了/解了哪个 key）
 - 异常行为检测（某账号 1 小时调 500 次，疑似刷量）
 - 内容审核队列（生成的视频被举报后进队列）
@@ -922,7 +845,7 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 | 渠道 | 入口 | SLA |
 |---|---|---|
-| GitHub Issues | README + Web 端 footer | 48 小时响应（免费）、12 小时（付费） |
+| GitHub Issues | README + Web 端 footer | 48 小时响应 |
 | 邮箱 | Web 端 footer + 桌面端"帮助"菜单 | 同上 |
 
 **不做 Discord 社区**。
@@ -962,7 +885,7 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 - 厂商改版会让适配器失效
 - cookie 机制可能变化
-- **消耗表需要持续维护**：豆包/即梦/可灵的扣减规则一变，provider_cost_tables 就要跟着改
+- **消耗表需要持续维护**：豆包/通义万相/元宝的扣减规则一变，provider_cost_tables 就要跟着改
 - admin 后台监控"实际扣减 vs 预估偏差"，偏差大时告警运营者手动更新
 - 允许每个 provider 适配器在 generate() 成功后返回实际扣减（从厂商响应里解析 actual_cost），与 estimateCost 预估对比，偏差大时写 audit_logs
 
@@ -974,8 +897,8 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 - Monorepo 骨架（pnpm + Turbo）
 - packages/core：调度核心 + 多单位账本 + 等效次数换算 + provider_cost_tables 缓存
-- packages/providers：先接 mcp_mathmind（真 API）+ 豆包（cookie，按次数）+ 即梦（cookie，灵感值）
-- provider_cost_tables：3 家初始数据
+- packages/providers：先接 mcp_mathmind（真 API）+ 豆包（cookie，按次数）
+- provider_cost_tables：2 家初始数据
 - apps/desktop：Electron + React UI 基础框架
 - 桌面端 4 Tab 基础页面（额度总览卡片显示多单位）
 - Supabase 表结构 + RLS + pg_cron 0 点滚动
@@ -983,8 +906,8 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 
 ### 阶段 2：多厂商 + cookie 管理（1 个月）
 
-- 接通义万相、元宝、可灵、海螺（共 4 家 cookie 厂商）
-- 补全 7 家的 provider_cost_tables 数据
+- 接通义万相、元宝（共 2 家 cookie 厂商）
+- 补全各家厂商的 provider_cost_tables 数据
 - packages/cookie-manager：WebView 登录 + 健康检查 + 自动续期
 - 桌面端账号健康页面
 - 失败自动切账号
@@ -1000,10 +923,9 @@ Web 端**只做营销不做功能**。用户不登录可看大部分内容，所
 ### 阶段 3.5：后台管理系统细化
 
 - apps/admin：独立部署
-- 6 大功能块（团队用户/订阅管理/Provider+消耗表/监控/安全合规/公告）
-- Stripe / 微信支付接入（或继续手动开通）
+- 5 大功能块（团队用户/Provider+消耗表/监控/安全合规/公告）
 
-### 阶段 4：打磨 + 商业化
+### 阶段 4：打磨
 
 - electron-updater 自动更新
 - 代码签名证书

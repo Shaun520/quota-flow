@@ -98,13 +98,10 @@ const CHROME_UA =
 
 export type ProviderId =
   | 'doubao'
-  | 'jimeng'
   | 'qwen'
   | 'qwenwan'
   | 'yuanbao'
   | 'dola'
-  | 'kling'
-  | 'hailuo'
   | 'bailian'
   | 'tokenhub'
 
@@ -118,10 +115,6 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   doubao: {
     loginUrl: 'https://www.doubao.com/chat/',
     healthUrl: 'https://www.doubao.com/chat/'
-  },
-  jimeng: {
-    loginUrl: 'https://jimeng.jianying.com/ai-tool/video/generate',
-    healthUrl: 'https://jimeng.jianying.com/'
   },
   qwen: {
     loginUrl: 'https://tongyi.aliyun.com/wanxiang/create',
@@ -138,14 +131,6 @@ const PROVIDER_SITES: Record<ProviderId, ProviderSite> = {
   dola: {
     loginUrl: 'https://www.dola.com/',
     healthUrl: 'https://www.dola.com/'
-  },
-  kling: {
-    loginUrl: 'https://klingai.com/global/',
-    healthUrl: 'https://klingai.com/global/'
-  },
-  hailuo: {
-    loginUrl: 'https://hailuoai.com/video',
-    healthUrl: 'https://hailuoai.com/'
   },
   // 阿里云百炼：bailian 为 apikey 厂商，走 openProviderSite 通用分支打开 API Key 管理页
   bailian: {
@@ -260,14 +245,64 @@ interface StoredV2 {
   localStorage?: Array<{ key: string; value: string }>
 }
 
+// 单条 Storage value 上限：阻止单条大缓存把 encrypted_key 撑到 MB 级（与 dola 的 256KB 上限一致）
+// 实测 doubao 控制台 localStorage 里存在 ~2.5MB 的缓存条目，被无上限 dump 进凭证列导致 PostgREST Egress 异常
+const STORAGE_MAX_VALUE_BYTES = 262144
+
+// 走网页 cookie 登录、靠 localStorage 补全会话的厂商：这类站点的 localStorage 多为缓存/埋点，需按白名单过滤。
+// 控制台 API 型厂商（bailian/tokenhub/volcengine/zhipu）不在其中，它们的 localStorage 存的是额度缓存
+// （free_quota 等任意键名），不能一刀切过滤，否则额度读取会断——所以它们只做 256KB cap。
+const STORAGE_ALLOWLIST_PROVIDERS = new Set([
+  'doubao',
+  'qwen',
+  'qwenwan',
+  'yuanbao',
+  'dola'
+])
+
+// 白名单：仅保留会话/账号/票据类键，丢弃体积无上限的缓存、埋点。配合上面的 cap 兜底，避免误伤登录。
+// 维护注意：cookie-web 厂商的登录会话以 cookie 为主、localStorage 只是补全。若实测某站点在过滤后登录异常，
+// 且确实依赖某个「非本正则命名」的 localStorage 键（如自定义的 userProfile/store/userSessionId 等），
+// 把该键的特征片段加入本正则即可补回；不要为省事改成全量保留，否则 MB 级缓存会重新撑大 encrypted_key。
+const STORAGE_KEEP_KEY = /session|sso|passport|token|uid|user|auth|cookie|login|account/i
+
+function sanitizeStorageProvider(providerId: string | undefined): 'allowlist' | 'cap' {
+  return providerId && STORAGE_ALLOWLIST_PROVIDERS.has(providerId) ? 'allowlist' : 'cap'
+}
+
+function sanitizeStorageEntries(
+  mode: 'allowlist' | 'cap',
+  entries: Array<{ key: string; value: string }> | undefined
+): Array<{ key: string; value: string }> {
+  return (entries ?? []).filter((e) => {
+    if (e.value.length > STORAGE_MAX_VALUE_BYTES) return false // 单条 256KB 上限，全部厂商生效
+    if (mode === 'allowlist' && !STORAGE_KEEP_KEY.test(e.key)) return false // cookie 型厂商再按白名单
+    return true
+  })
+}
+
+function sanitizeStorages(
+  providerId: string | undefined,
+  storages: OriginStorage[] = []
+): OriginStorage[] {
+  const mode = sanitizeStorageProvider(providerId)
+  return storages.map((s) => ({
+    origin: s.origin,
+    localStorage: sanitizeStorageEntries(mode, s.localStorage),
+    sessionStorage: sanitizeStorageEntries(mode, s.sessionStorage ?? [])
+  }))
+}
+
 function encryptCookies(
   cookies: ProviderCookie[],
-  storages: OriginStorage[] = []
+  storages: OriginStorage[] = [],
+  providerId?: string
 ): string {
+  const clean = sanitizeStorages(providerId, storages)
   const payload: StoredV2 = { cookies }
-  if (storages.length > 0) payload.storages = storages
+  if (clean.length > 0) payload.storages = clean
   // 兼容 v1 字段，供老代码读取
-  const main = storages.find((s) => s.origin.includes('doubao.com') || s.origin.includes('qianwen.com')) || storages[0]
+  const main = clean.find((s) => s.origin.includes('doubao.com') || s.origin.includes('qianwen.com')) || clean[0]
   if (main?.localStorage.length) payload.localStorage = main.localStorage
   const plain = JSON.stringify(payload)
   return safeStorage.encryptString(plain).toString('base64')
@@ -404,16 +439,13 @@ const COMMON_FINGERPRINT_SCRIPT = `(() => {
 const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtractor>> = {
   // 实测豆包分区 cookie：uid_tt/uid_tt_ss = 字节用户 ID（稳定），sid_tt/sessionid 为会话令牌（会变）
   doubao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
-  jimeng: { script: COMMON_FINGERPRINT_SCRIPT },
   qwen: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   qwenwan: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   // 实测元宝分区 cookie：QQ 登录产生 pt2gguin(o+QQ号) 与 hy_user(元宝账号UUID)，均按账号稳定；
   // uin/wxuin/openid 实际不存在，cookie 标识已验证，优先于泛用 DOM 脚本
   yuanbao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
   // Dola 为字节系国际站 cookie 登录，暂用通用脚本 + cookie 优先；指纹 key 后续按真实登录记录校准。
-  dola: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
-  kling: { script: COMMON_FINGERPRINT_SCRIPT },
-  hailuo: { script: COMMON_FINGERPRINT_SCRIPT }
+  dola: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true }
 }
 
 // DOM 提取不到时，从登录 cookie 中找「稳定账号标识」cookie 兜底。
@@ -421,16 +453,13 @@ const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtr
 const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   // 实测值：抖音扫码登录时 uid_tt/uid_tt_ss 每次登录会变；flow_cur_user_sec_id 才是账号级稳定标识（两次登录一致）
   doubao: ['flow_cur_user_sec_id', 'uid_tt', 'uid_tt_ss'],
-  jimeng: ['user_id', 'uid', 'userId'],
   // 实测千问登录后 .www.qianwen.com 会下发 b-user-id；_QW_HASH_UID/_QW_WG_UID 是账号级标识兜底。
   qwen: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
   qwenwan: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
   // 实测值：pt2gguin = o<QQ号>（.ptlogin2.qq.com），hy_user = 元宝账号 UUID（.tencent.com）
   yuanbao: ['pt2gguin', 'hy_user'],
   // Dola 同属字节系；避免使用 msToken / s_v_web_id 等会话级易变值做账号指纹。
-  dola: ['flow_cur_user_sec_id', 'sessionid', 'sid_tt'],
-  kling: ['userId', 'user_id', 'kk_u'],
-  hailuo: ['user_id', 'uid', 'userId']
+  dola: ['flow_cur_user_sec_id', 'sessionid', 'sid_tt']
 }
 
 function normalizeAccountId(raw: string): string {
@@ -783,7 +812,7 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
 
               done({
                 ok: true,
-                encrypted: encryptCookies(cookies, storages),
+                encrypted: encryptCookies(cookies, storages, providerId),
                 cookieCount: viewCookies,
                 expiresAt: maxExp > 0 ? maxExp : null,
                 accountFingerprint
@@ -805,6 +834,47 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
  * 复用登录/生成分区（persist:qf-p:<provider>:<keyId>），不清理登录态，
  * 也不会注入登录流程的“已完成登录”操作条。
  */
+/**
+ * 按厂商类型向「进入官网」窗口分区重建登录态。
+ * - bailian/tokenhub：从加密负载读取绑定时持久化的控制台 cookie 重注入；
+ * - 其余 cookie 型厂商：从加密负载解析 cookies 注入账号分区；
+ * - zhipu/volcengine：走共享控制台分区，无需注入。
+ */
+async function injectSiteCredentials(providerId: string, keyId: string, encryptedKey?: string): Promise<void> {
+  if (!encryptedKey) return
+  if (providerId === 'zhipu' || providerId === 'volcengine') return // 共享控制台分区，无需账号级注入
+  if (providerId === 'bailian') {
+    let payloadCookies = 0
+    try {
+      const plain = safeStorage.decryptString(Buffer.from(encryptedKey, 'base64'))
+      const d = decodeBailianPayload(plain)
+      payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
+      const before = await collectBailianConsoleCookies(keyId)
+      if (payloadCookies > 0) await injectBailianConsoleCookies(keyId, d.cookies!)
+      const after = await collectBailianConsoleCookies(keyId)
+      console.log(
+        `[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} before=${before.length} after=${after.length}`
+      )
+    } catch (e) {
+      console.log(`[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
+    }
+  } else if (providerId === 'tokenhub') {
+    let payloadCookies = 0
+    try {
+      const plain = safeStorage.decryptString(Buffer.from(encryptedKey, 'base64'))
+      const d = decodeTokenhubPayload(plain)
+      payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
+      if (payloadCookies > 0) await injectTokenhubConsoleCookies(keyId, d.cookies!)
+      console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies}`)
+    } catch (e) {
+      console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
+    }
+  } else {
+    const parsed = parseStoredCredentials(encryptedKey, providerId)
+    if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
+  }
+}
+
 async function openProviderSite(
   providerId: string,
   keyId: string,
@@ -862,46 +932,10 @@ async function openProviderSite(
 
   const ses = session.fromPartition(partition)
   ses.setUserAgent(CHROME_UA)
-  // 智谱走共享控制台分区，无需注入账号级 cookie；其余厂商按账号分区并注入 cookie
+  // 有加密负载时开窗前预注入登录态（兼容渲染层同步传入的老路径）。
+  // 渲染层并行化路径会先开窗再通过 injectSiteCookies 补注入并 reload，这里仅在 loads 前拿到时注入。
   if (injectableEncrypted) {
-    try {
-      if (providerId === 'bailian') {
-        // 百炼把「进入官网」落在其控制台持久分区，重启后 persist 分区可能未留存登录 cookie，
-        // 从加密负载中读取绑定时持久化的控制台 cookie 重新注入，重建登录态（不覆盖目标分区已有 cookie）
-        let payloadCookies = 0
-        try {
-          const plain = safeStorage.decryptString(Buffer.from(injectableEncrypted, 'base64'))
-          const d = decodeBailianPayload(plain)
-          payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
-          const before = await collectBailianConsoleCookies(keyId)
-          if (payloadCookies > 0) await injectBailianConsoleCookies(keyId, d.cookies!)
-          const after = await collectBailianConsoleCookies(keyId)
-          console.log(
-            `[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} before=${before.length} after=${after.length}`
-          )
-        } catch (e) {
-          console.log(`[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
-        }
-      } else if (providerId === 'tokenhub') {
-        // TokenHub 同百炼：登录态落在持久控制台分区，重启后未必留存 authenticating cookie，
-        // 从加密负载读取绑定时持久化的控制台 cookie 重注入，重建登录态（不覆盖目标分区已有 cookie）
-        let payloadCookies = 0
-        try {
-          const plain = safeStorage.decryptString(Buffer.from(injectableEncrypted, 'base64'))
-          const d = decodeTokenhubPayload(plain)
-          payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
-          if (payloadCookies > 0) await injectTokenhubConsoleCookies(keyId, d.cookies!)
-          console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies}`)
-        } catch (e) {
-          console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
-        }
-      } else {
-        const parsed = parseStoredCredentials(injectableEncrypted, providerId)
-        if (parsed.cookies.length > 0) await injectCookies(providerId, parsed.cookies, keyId)
-      }
-    } catch {
-      // 解密失败时仍尝试打开官网，至少让用户看到站点本身。
-    }
+    await injectSiteCredentials(providerId, keyId, injectableEncrypted)
   }
 
   const win = new BrowserWindow({
@@ -3602,6 +3636,23 @@ export function initProviders(): void {
     'provider:open-site',
     (_e, providerId: string, keyId: string, encryptedKey?: string) =>
       openProviderSite(providerId, keyId, typeof encryptedKey === 'string' ? encryptedKey : undefined)
+  )
+
+  // 并行化首击：官网已开窗后，后台拿到登录 cookie 再注入并 reload，恢复登录态（不阻塞弹窗）
+  ipcMain.handle(
+    'provider:inject-site-cookies',
+    async (_e, providerId: string, keyId: string, encryptedKey?: string) => {
+      const winKey = `${providerId}:${keyId}`
+      if (typeof encryptedKey === 'string' && encryptedKey) {
+        await injectSiteCredentials(providerId, keyId, encryptedKey)
+      }
+      // 注入完成后 reload 已打开的官网窗口，让 cookie 生效
+      const win = siteWindows.get(winKey)
+      if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
+        win.webContents.reload()
+      }
+      return { ok: true }
+    }
   )
 
   ipcMain.handle('provider:login-cancel', (_e, providerId: string, keyId?: string) => {

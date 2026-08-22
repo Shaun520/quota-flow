@@ -356,13 +356,23 @@ export default function Providers({ fresh, viewScope, usageScope, onBound, provi
         setSiteError('登录状态异常，无法打开官网')
         return
       }
-      const encrypted = await getEncryptedKey(user.id, keyId)
-      if (!encrypted) {
-        setSiteError('未找到该账号密钥，无法打开官网')
+      // 并行化首击：立即开窗渲染官网，登录 cookie 走后台异步解析后补注入，避免冷缓存时卡在密钥查询上
+      const res = await window.api.providers.openSite(providerId, keyId)
+      if (!res.ok) {
+        setSiteError(res.error || '无法打开官网')
         return
       }
-      const res = await window.api.providers.openSite(providerId, keyId, encrypted)
-      if (!res.ok) setSiteError(res.error || '无法打开官网')
+      // 后台并行：解析该账号加密负载注入登录态；失败不阻断官网已打开
+      void (async () => {
+        try {
+          const encrypted = await getEncryptedKey(user.id, keyId)
+          if (encrypted) {
+            await window.api.providers.injectSiteCookies(providerId, keyId, encrypted)
+          }
+        } catch {
+          // 注入失败不影响官网已打开
+        }
+      })()
     } catch (e) {
       setSiteError(e instanceof Error ? e.message : String(e))
     }

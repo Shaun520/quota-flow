@@ -5,14 +5,6 @@ export type TeamStatus = "active" | "banned" | "exhausted" | "expired";
 export type TeamStatusFilter = "" | TeamStatus;
 export type TeamRole = "admin" | "member";
 
-export interface AdminTeamSubscription {
-  plan: string | null;
-  status: string | null;
-  seats: number | null;
-  current_period_start: string | null;
-  current_period_end: string | null;
-}
-
 export interface AdminTeamQuota {
   provider_id: string;
   daily_total: number;
@@ -28,13 +20,11 @@ export interface AdminTeam {
   owner_email: string | null;
   owner_name: string | null;
   owner_status: string | null;
-  plan: string;
   seats_limit: number;
   status: TeamStatus;
   created_at: string;
   member_count: number;
   active_member_count: number;
-  subscription: AdminTeamSubscription | null;
   quota: AdminTeamQuota | null;
   month_usage: number;
   total_usage: number;
@@ -68,7 +58,6 @@ export interface TeamListParams {
 }
 
 export interface TeamSettingsInput {
-  plan?: string;
   seats_limit?: number;
   status?: TeamStatus;
 }
@@ -123,7 +112,6 @@ export async function updateTeamSettings(teamId: string, input: TeamSettingsInpu
   const supabase = createAdminBrowserClient();
 
   const payload: Record<string, unknown> = {};
-  if (input.plan !== undefined) payload.plan = input.plan;
   if (input.seats_limit !== undefined) payload.seats_limit = input.seats_limit;
   if (input.status !== undefined) payload.status = input.status;
 
@@ -160,24 +148,6 @@ export function statusLabel(status: TeamStatus | string): string {
   return "正常";
 }
 
-export function planLabel(plan: string | null | undefined): string {
-  const value = plan || "free";
-  const map: Record<string, string> = {
-    free: "Free",
-    pro: "Pro",
-    business: "Business",
-    team: "Team"
-  };
-  return map[value] ?? value;
-}
-
-export function subscriptionLabel(status: string | null | undefined): string {
-  if (status === "active") return "生效中";
-  if (status === "expired") return "已过期";
-  if (status === "cancelled") return "已取消";
-  return status ?? "无订阅";
-}
-
 function normalizeTeam(it: Record<string, unknown>): AdminTeam {
   return {
     id: String(it.id ?? ""),
@@ -186,13 +156,11 @@ function normalizeTeam(it: Record<string, unknown>): AdminTeam {
     owner_email: (it.owner_email as string) ?? null,
     owner_name: (it.owner_name as string) ?? null,
     owner_status: (it.owner_status as string) ?? null,
-    plan: String(it.plan ?? "free"),
     seats_limit: Number(it.seats_limit ?? 0),
     status: (it.status as TeamStatus) ?? "active",
     created_at: String(it.created_at ?? ""),
     member_count: Number(it.member_count ?? 0),
     active_member_count: Number(it.active_member_count ?? 0),
-    subscription: normalizeSubscription(it.subscription as Record<string, unknown> | null),
     quota: normalizeQuota(it.quota as Record<string, unknown> | null),
     month_usage: Number(it.month_usage ?? 0),
     total_usage: Number(it.total_usage ?? 0),
@@ -208,17 +176,6 @@ function normalizeQuota(it: Record<string, unknown> | null | undefined): AdminTe
     used: Number(it.used ?? 0),
     remaining: Number(it.remaining ?? 0),
     reserved: Number(it.reserved ?? 0)
-  };
-}
-
-function normalizeSubscription(it: Record<string, unknown> | null | undefined): AdminTeamSubscription | null {
-  if (!it) return null;
-  return {
-    plan: (it.plan as string) ?? null,
-    status: (it.status as string) ?? null,
-    seats: it.seats == null ? null : Number(it.seats),
-    current_period_start: (it.current_period_start as string) ?? null,
-    current_period_end: (it.current_period_end as string) ?? null
   };
 }
 
