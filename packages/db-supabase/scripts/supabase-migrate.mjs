@@ -76,7 +76,12 @@ const CHUNK_BYTES = 400 * 1024 // 单次 insert 载荷上限，保守低于 Supa
 /* ================= schema ================= */
 async function generateSchema() {
   const dir = path.resolve(scriptDir, '../../../migrations')
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+  // 排除历史「一次性组合部署」脚本（如 0007_deploy_combined.sql）：
+  // 它们内容与 0005/0006/0007 重复，且含顶层 SET LOCAL search_path='' 会污染后续语句。
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.sql') && !/deploy_combined/i.test(f))
+    .sort()
   if (!files.length) throw new Error(`migrations 目录为空：${dir}`)
   const parts = files.map((f) => {
     // 迁移体量小，合并成一个完整文件；文件按文件名数字序拼接保持依赖
@@ -84,8 +89,19 @@ async function generateSchema() {
   })
   const sql =
     `-- 合并自 migrations/（${files.length} 个文件）。对新库（空 schema）执行本文件即可。` +
-    `\n-- 重复执行幂等（IF NOT EXISTS / ON CONFLICT / DROP POLICY IF EXISTS）。\n\n` +
-    parts.join('\n\n') + '\n'
+    `\n-- 重复执行幂等（IF NOT EXISTS / ON CONFLICT / DROP POLICY IF EXISTS）。` +
+    `\n-- 显式指定 search_path：迁移含大量无 schema 前缀的 DDL，避免依赖执行环境默认值。\n\n` +
+    `SET search_path = public, auth;\n\n` +
+    parts.join('\n\n') +
+    `\n\n-- ===== 迁移用授权（仅新库 schema 导入时追加） =====\n` +
+    `-- 业务正常用 authenticated（RLS 拦截）；此处仅给 service_role 补表级权限，` +
+    `-- 供数据迁移直连读取（service_role 凭 BYPASSRLS 绕过 RLS 策略，但表级 GRANT 不足仍会被拒）。\n` +
+    `GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;\n` +
+    `GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;\n` +
+    `GRANT USAGE ON SCHEMA public TO service_role;\n` +
+    `GRANT USAGE ON SCHEMA auth TO service_role;\n` +
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;\n` +
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;\n`
   const out = process.env.MIGRATE_SCHEMA_OUT || path.join(scriptDir, 'schema_combined.sql')
   fs.writeFileSync(out, sql, 'utf8')
   console.log(`[schema] 合并 ${files.length} 个迁移 → ${out}`)
