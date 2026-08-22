@@ -27,6 +27,9 @@ apps/desktop/.env
 test.json
 *.env.migrate
 
+# 运行时临时探测文件
+_probe_audio.*
+
 # 桌面端构建产物
 apps/desktop/out/
 apps/desktop/release/

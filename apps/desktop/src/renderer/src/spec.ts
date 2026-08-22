@@ -26,7 +26,8 @@ export const MODELS: Record<string, string[]> = {
   hailuo: ['海螺-标准'],
   zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2'],
   volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-lite-i2v-250428'],
-  bailian: ['wan2.7-t2v-2026-06-12', 'wan2.7-i2v-2026-04-25', 'wan2.7-r2v-2026-06-12']
+  bailian: ['wan2.7-t2v-2026-06-12', 'wan2.7-i2v-2026-04-25', 'wan2.7-r2v-2026-06-12'],
+  tokenhub: ['hy-video-1.5', 'yt-video-2.0', 'yt-video-fx', 'yt-video-humanactor']
 }
 
 /** 智谱模型展示价格（与主进程 api-branch 保持一致） */
@@ -205,9 +206,9 @@ export const TKH_MODEL_PRICE: Record<string, string> = {
   'yt-video-fx': '按模板积分'
 }
 
-/** 腾讯云 TokenHub 各模型固定生成时长（秒）；官方 OpenAI 兼容示例未给出，先按项目默认档 [5] TEMP 兜底，待真实提交实测修正 */
+/** 腾讯云 TokenHub 各模型固定生成时长（秒）；hy-video-1.5 为实测确认（5/10 均接受），其余模型未实测确认前仅默认 [5]，不猜测档位 */
 export const TKH_MODEL_DURATIONS: Record<string, number[]> = {
-  'hy-video-1.5': [5],
+  'hy-video-1.5': [5, 10],
   'yt-video-2.0': [5],
   'yt-video-humanactor': [5],
   'yt-video-fx': [5]
@@ -218,14 +219,14 @@ export function tkhModelDurations(model: string): number[] {
   return TKH_MODEL_DURATIONS[model ?? ''] ?? DEFAULT_SUPPORTED_DURATIONS
 }
 
-/** 腾讯云 TokenHub 各模型可用的生成模式（与主进程 api-branch.TOKENHUB_MODEL_MODES 口径一致） */
+/** 腾讯云 TokenHub 各模型可用的生成模式（与主进程 api-branch.TOKENHUB_MODEL_MODES 口径一致；图生均为「首帧」引导，非首尾帧/多参考） */
 const TKH_MODEL_MODES: Record<string, Array<{ value: string; label: string }>> = {
   'hy-video-1.5': [
     { value: 'text2video', label: '文生视频' },
-    { value: 'img2video', label: '图生视频' }
+    { value: 'img2video', label: '图生视频(首帧)' }
   ],
-  'yt-video-2.0': [{ value: 'img2video', label: '图生视频' }],
-  'yt-video-humanactor': [{ value: 'img2video', label: '图生视频' }],
+  'yt-video-2.0': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'yt-video-humanactor': [{ value: 'img2video', label: '图生视频(首帧)' }],
   'yt-video-fx': []
 }
 
@@ -376,7 +377,8 @@ export function durationOptions(
 export function resolutionOptions(
   provider: string
 ): Array<{ value: string; label: string }> {
-  if (provider === 'yuanbao') return [{ value: '720', label: '720p' }]
+  // 腾讯云 TokenHub 视频生成实测仅支持 720p（官方文档 1823/135716），不开放 1080p 选项，避免用户踩坑
+  if (provider === 'yuanbao' || provider === 'tokenhub') return [{ value: '720', label: '720p' }]
   return [
     { value: '720', label: '720p' },
     { value: '1080', label: '1080p' }
@@ -440,8 +442,9 @@ export function uploadHint(provider: string, mode: string): string {
   if (provider === 'yuanbao') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'dola') return '上传图片作为参考（最多 10 张，Ctrl+V 可粘贴）'
   if (provider === 'tokenhub') {
+    // 图生为首帧引导（单图）；上传的本地图会自动转成公网 URL，用户无需关心「HTTPs」，只说上传图片即可
     const map: Record<string, string> = {
-      img2video: '图生视频需上传 1 张公网 HTTPS 图片',
+      img2video: '图生视频需上传 1 张首帧图片',
       text2video: '文生视频无需上传素材'
     }
     return map[mode] ?? '文生视频无需上传素材'

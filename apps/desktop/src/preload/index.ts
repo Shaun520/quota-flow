@@ -215,6 +215,8 @@ export interface GenerateRequest {
   audioUrl?: string
   /** 音频本地副本路径（历史回显/重新生成回填） */
   audioLocalPath?: string
+  /** 特效模板（yt-video-fx）：控制台创建的特效模板标识，透传提交 body 的 Template 字段 */
+  template?: string
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
   showWebview?: boolean
 }

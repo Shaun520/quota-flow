@@ -48,6 +48,8 @@ export interface GenerateInput {
   videoUrls?: string[]
   /** 文生视频音频参考的公网 https URL（bailian 等透传 input.audio_url） */
   audioUrl?: string
+  /** 特效模板（yt-video-fx）：控制台创建的特效模板标识，透传提交 body 的 Template 字段 */
+  template?: string
   /** 音频本地副本路径（历史回显/重新生成回填）；公网 http(s) URL 原样保留 */
   audioLocalPath?: string
   /** 测试开关：显示豆包 WebView 窗口（默认隐藏） */
@@ -828,6 +830,7 @@ async function runApiBranch(
     // 参考生（r2v）视频为前端上传后的公网 https URL（videoUrls）；厂商不依赖历史本地展示路径
     videos: input.videoUrls ?? input.videos ?? [],
     audioUrl: input.audioUrl,
+    template: input.template,
     durationSec: input.durationSec,
     onProgress: (msg) => emit({ jobId: job.id, status: 'running', stage: 'progress', message: msg })
   }

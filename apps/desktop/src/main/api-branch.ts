@@ -60,6 +60,8 @@ export interface ApiGenerateParams {
   videos?: string[]
   /** 文生视频音频参考的 https URL（bailian 等模型透传 input.audio_url） */
   audioUrl?: string
+  /** 特效模板（yt-video-fx）：控制台创建的特效模板标识，透传提交 body 的 Template 字段 */
+  template?: string
   durationSec: number
   /** 生成过程实时回调（限流重试等），供调度台推送 UI 提示 */
   onProgress?: (message: string) => void
@@ -605,15 +607,16 @@ let apiIpcRegistered = false
  * 时长档官方 OpenAI 兼容示例未给出（见计划 §4.3），先按项目默认档 [5] 作为 TEMP 兜底，待真实提交实测后修正。
  */
 const TOKENHUB_MODELS = tokenhubFreeVideoModels()
-/** 各模型生成模式（FX 需「特效模板」参数，现调度台无模板选择器，暂不开放生成入口） */
+/** 各模型生成模式（图生均为「首帧」引导；FX 需「特效模板」参数，现调度台无模板选择器，暂不开放生成入口） */
 const TOKENHUB_MODEL_MODES: Record<string, Array<{ value: string; label: string }>> = {
   'hy-video-1.5': [
     { value: 'text2video', label: '文生视频' },
-    { value: 'img2video', label: '图生视频' }
+    { value: 'img2video', label: '图生视频(首帧)' }
   ],
-  'yt-video-2.0': [{ value: 'img2video', label: '图生视频' }],
-  'yt-video-humanactor': [{ value: 'img2video', label: '图生视频' }],
-  'yt-video-fx': []
+  'yt-video-2.0': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  'yt-video-humanactor': [{ value: 'img2video', label: '图生视频(首帧)' }],
+  // FX 依赖「特效模板」参数（Template），调度台通过特效模板输入透传
+  'yt-video-fx': [{ value: 'img2video', label: '图生视频(首帧)' }]
 }
 
 function makeTokenhubBranch(): ApiGenerationBranch {
@@ -633,22 +636,58 @@ function makeTokenhubBranch(): ApiGenerationBranch {
       // 本轮接入的均为免费视频模型，cost=0；本地账本不对 tokenhub 做原子扣减（Uin 级共享积分）
       return 0
     },
-    supportedDurations() {
-      // TEMP: 时长档待真实提交实测（计划 §4.3），先按项目默认档兜底
-      return [5]
+    supportedDurations(model = 'hy-video-1.5') {
+      // 时长档以模型元数据 durations 为准（未实测确认前为空 → 兜底 [5] TEMP，见计划 §3.1）
+      const m = TOKENHUB_MODELS.find((x) => x.id === model)
+      return m?.durations?.length ? m.durations : [5]
+    },
+    pick(keys, model) {
+      // 多账号按「该模型剩下免费额度」择优：known 且有剩余 +1、known 且耗尽 -2、unknown 记 0 不误伤；
+      // 同 Uin 多 key 共享额度，仍按剩余额度避免选到耗尽账号（对齐火山方舟 pick 能力分主导）。
+      try {
+        let bestIdx: number | null = null
+        let bestScore = -Infinity
+        keys.forEach((k, idx) => {
+          const payload = decodeTokenhubPayload(k.plain)
+          const m = Array.isArray(payload.models) ? payload.models.find((x) => x.id === model) : undefined
+          const fq = m?.freeQuota
+          let cap = 0
+          if (fq && typeof fq.remaining === 'number') cap += fq.remaining > 0 ? 1 : -2
+          const score = cap * 10 + (k.isDefault ? 1 : 0)
+          if (score > bestScore) {
+            bestScore = score
+            bestIdx = idx
+          }
+        })
+        return bestIdx
+      } catch {
+        return null
+      }
+    },
+    preflight(model, plain) {
+      // 硬性拦截：该模型免费额度已知且耗尽 / 已过期 → 提交前拦截；未知不退不拦（对齐百炼），耗尽由服务端拒绝并归类提示
+      try {
+        const payload = decodeTokenhubPayload(plain)
+        const m = Array.isArray(payload.models) ? payload.models.find((x) => x.id === model) : undefined
+        const fq = m?.freeQuota
+        if (fq && typeof fq.remaining === 'number' && fq.remaining <= 0) {
+          return { ok: false, reason: `${model} 免费额度已用完（剩余 ${fq.remaining}）` }
+        }
+        if (fq && fq.expired === true) {
+          return { ok: false, reason: `${model} 免费额度已过期` }
+        }
+      } catch {}
+      return { ok: true }
     },
     async remaining() {
       // Uin 级积分接口尚未实测（计划 §4.2），返回 null 表示「未知」，不做公开 API 实时查询
       return null
     },
-    preflight() {
-      // Uin 级积分未知时不做客户端硬拦截：免费额度耗尽由服务端拒绝（含 403 未领取），生成错误分类提示即可，
-      // 避免「额度未知→全拦死」导致无法生成（对齐百炼 bailian 的做法）。
-      return { ok: true }
-    },
     catalog(perModelFreeQuota) {
+      // humanactor 不可用（配音音频托管源待适配）、fx 需特效模板透传，均保留在目录供调度台展示/实测
+      const blocked: Record<string, string> = {}
       return TOKENHUB_MODELS.map((m) => {
-        const isFx = m.id === 'yt-video-fx'
+        const label = blocked[m.id]
         return {
           model: m.id,
           priceLabel: m.price,
@@ -657,7 +696,7 @@ function makeTokenhubBranch(): ApiGenerationBranch {
           size: null,
           modes: TOKENHUB_MODEL_MODES[m.id] ?? [],
           freeQuota: perModelFreeQuota?.[m.id],
-          ...(isFx ? { unavailable: 'no_endpoint' as const, unavailableLabel: '已识别免费模型，待模板选择器' } : {})
+          ...(label ? { unavailable: 'no_endpoint' as const, unavailableLabel: label } : {})
         }
       })
     },
@@ -666,14 +705,27 @@ function makeTokenhubBranch(): ApiGenerationBranch {
         return { ok: false, error: '腾讯云TokenHub 当前仅支持文生视频 / 图生视频' }
       }
       const images = (params.images ?? []).filter((u) => /^https?:\/\//i.test(u))
-      if (params.mode === 'img2video' && images.length < 1) {
-        return { ok: false, error: '图生视频需要至少上传 1 张公网 HTTPS 图片' }
+      const model = params.model
+      // 数字人口播（yt-video-humanactor）仅需配音音频（audioUrl 小写透传），不要求图片
+      if (model === 'yt-video-humanactor') {
+        if (!/^https?:\/\//i.test((params.audioUrl ?? '').trim())) {
+          return { ok: false, error: '数字人口播视频需要上传 1 段配音音频' }
+        }
+      } else if (params.mode === 'img2video' && images.length < 1) {
+        return { ok: false, error: '图生视频需要至少上传 1 张首帧图片' }
       }
       const r = await tokenhubGenerateWithKey(creds.apiKey, {
         mode: params.mode,
-        model: params.model,
+        model,
         prompt: params.prompt,
         images,
+        durationSec: params.durationSec,
+        // TokenHub 视频实测仅支持 720p（字符串 "720p"），UI 的 720/1080 均归一化到 "720p"
+        resolution: '720p',
+        // 数字人口播（yt-video-humanactor）需配音音频：公网 URL 透传给提交 body 的小写 audioUrl
+        audioUrl: params.audioUrl ?? undefined,
+        // 特效模板（yt-video-fx）：透传给提交 body 的 Template 字段
+        template: params.template ?? undefined,
         onProgress: params.onProgress
       })
       return {

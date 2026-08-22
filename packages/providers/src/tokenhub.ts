@@ -279,6 +279,8 @@ export function tokenhubFreeVideoModels(): TokenhubFreeVideoModel[] {
       price: "1.5 积分/次",
       costType: "per_call",
       pointsPerCall: 1.5,
+      // 实测（2026-08-22 真实 submit）：hy-video-1.5 时长 5 / 10 均被接受；分辨率固定 "720p"
+      durations: [5, 10],
       quotaHint: "免费生视频包（启用管理页领取）",
     },
     {
@@ -368,6 +370,19 @@ export function captureTokenhubFreeModels(
   return { models: Array.from(byId.values()), source: "console" }
 }
 
+/**
+ * 从 TokenHub 错误响应体提取错误码（形如 {"error":{"code":"401006",...}}），无则返回空串。
+ */
+function tokenhubErrCode(msg: string): string {
+  if (!msg) return ""
+  try {
+    const code = JSON.parse(msg)?.error?.code
+    return typeof code === "string" ? code : ""
+  } catch {
+    return ""
+  }
+}
+
 /** TokenHub 提交/查询失败的响应归类为「不可用」标记（镜像火山）；本轮端点简单，保留扩展 */
 export function tokenhubGenUnavailableKind(_code?: string, _msg?: string): 'decommissioned' | 'no_endpoint' | undefined {
   const msgText = String(_msg ?? "")
@@ -376,6 +391,14 @@ export function tokenhubGenUnavailableKind(_code?: string, _msg?: string): 'deco
   return undefined
 }
 
+/**
+ * 实测/文档结论（2026-08-22，官方文档 1823/135716 + 真实 submit 验证）：
+ *   - `model` 字段填模型名（如 hy-video-1.5），TokenHub 层无「服务 ID」概念；
+ *   - 时长/分辨率实测可下发，但调度台对齐腾讯云混元 prompt 规范后，不再依赖独立字段，
+ *     而是作为参数说明并入 prompt 文本（见 buildTokenhubPrompt）。
+ *   - 多参考生成 TokenHub 调用层无此能力（HY 仅文生/图生），不接。
+ */
+
 /** TokenHub 视频生成入参（mode 仅文生/图生；图生用公网 HTTPS 图片 URL） */
 export interface TokenhubGenerateOptions {
   mode: "text2video" | "img2video"
@@ -383,7 +406,28 @@ export interface TokenhubGenerateOptions {
   prompt: string
   /** 公网 HTTPS 图片 URL 数组（图生取首张） */
   images?: string[]
+  /** 数字人口播（yt-video-humanactor）配音音频：公网 HTTPS URL，透传提交 body 的 AudioUrl */
+  audioUrl?: string
+  /** 生成时长（秒）；并入 prompt 文本表达，不再作为独立字段下发 */
+  durationSec?: number
+  /** 分辨率（字符串 "720p"）；并入 prompt 文本表达，不再作为独立字段下发 */
+  resolution?: string
+  /** 特效模板（yt-video-fx）：腾讯云特效模板标识，透传提交 body 的 Template 字段；取值需实测确认 */
+  template?: string
   onProgress?: (message: string) => void
+}
+
+/**
+ * 按腾讯云混元推荐结构把视频参数并入 prompt 文本。
+ * 眉：腾讯云将 prompt 视为「主体/剧情 + 运动方式 + 镜头语言 + 光影氛围 + 参数(时长/分辨率)」一段自然语言；
+ * 用户的 prompt 已承载主体/运镜/氛围描述，这里仅把调度台选定的时长、分辨率作为参数说明并入尾部，
+ * 使模型稳定感知成片规格，同时避免再依赖独立字段。
+ */
+function buildTokenhubPrompt(opts: Pick<TokenhubGenerateOptions, "prompt" | "durationSec" | "resolution" | "mode">): string {
+  const parts: string[] = [opts.prompt.trim()]
+  if (typeof opts.durationSec === "number" && opts.durationSec > 0) parts.push(`视频时长约 ${opts.durationSec} 秒`)
+  if (opts.resolution) parts.push(opts.resolution === "720p" ? "720p 分辨率" : `${opts.resolution} 分辨率`)
+  return parts.filter(Boolean).join("，")
 }
 
 export interface TokenhubGenerateOutcome {
@@ -412,16 +456,34 @@ export async function tokenhubGenerateWithKey(
   const imageUrl = ((opts.images ?? []).filter((u) => /^https?:\/\//i.test(u))[0] ?? "").trim()
 
   const submitBody: Record<string, unknown> = { model }
+  // 时长/分辨率按腾讯云混元结构并入 prompt 文本（buildTokenhubPrompt），不再作为独立字段下发
+  const prompt = buildTokenhubPrompt(opts)
   if (model === "hy-video-1.5") {
-    // HY：文生传 prompt；图生随附 image:{url}
-    submitBody["prompt"] = opts.prompt
+    // HY：文生传 prompt；图生随附 image:{url}（实测 queued 成功）
+    submitBody["prompt"] = prompt
     if (opts.mode === "img2video" && imageUrl) submitBody["image"] = { url: imageUrl }
-  } else if (model === "yt-video-2.0" || model === "yt-video-humanactor") {
-    if (!imageUrl) return { ok: false, error: "该模型为图生视频，需要至少 1 张公网 HTTPS 图片" }
-    submitBody["image"] = { url: imageUrl }
+  } else if (model === "yt-video-2.0") {
+    // 实测（2026-08-22）：yt-video-2.0 图像参数字段为大写 `Image:{url}`（非 image），必填；时长/分辨率未实测确认，不透传
+    if (!imageUrl) return { ok: false, error: "该模型为图生视频，请至少上传 1 张首帧图片" }
+    submitBody["Image"] = { url: imageUrl }
+  } else if (model === "yt-video-humanactor") {
+    // 对齐官方文档（2026-08-22，TokenHub Hy 调用指南）：数字人口播仅需 model + prompt + audioUrl（小写）；
+    // 不要求图片（image 不是该模型提交字段），音频字段名为小写 audioUrl（非 AudioUrl）。
+    const audioUrl = (opts.audioUrl ?? "").trim()
+    if (!audioUrl) return { ok: false, error: "该模型为数字人口播视频，请上传 1 段配音音频" }
+    submitBody["prompt"] = prompt
+    submitBody["audioUrl"] = audioUrl
+    // [DEBUG] 便于排查 AudioUrl invalid：只打片段避免泄露完整 URL 路径
+    const urlTail = audioUrl.length > 80 ? audioUrl.slice(0, 40) + "..." + audioUrl.slice(-16) : audioUrl
+    console.log("[qf-tokenhub] humanactor submit audioUrl:", urlTail, "length:", audioUrl.length)
   } else if (model === "yt-video-fx") {
-    // FX 需要「特效模板」参数，现调度台无模板选择器，先不虚构模板代入生成。
-    return { ok: false, error: "YT-Video-FX 需特效模板参数，暂不支持在调度台生成" }
+    // FX 需「特效模板」参数（实测缺 Template 报错）。模板必须在控制台先创建，此处透传用户输入的模板标识。
+    const template = (opts.template ?? "").trim()
+    if (!imageUrl) return { ok: false, error: "该模型为图生视频，请至少上传 1 张首帧图片" }
+    if (!template) return { ok: false, error: "该模型需填写特效模板，请先在控制台创建特效模板后填入模板标识" }
+    // TEMP: 字段名/取值格式以「Image」大写惯例推断为 `Template`，待真实提交实测确认后修正
+    submitBody["Image"] = { url: imageUrl }
+    submitBody["Template"] = template
   } else {
     return { ok: false, error: `TokenHub 未知模型 ${model}` }
   }
@@ -438,12 +500,26 @@ export async function tokenhubGenerateWithKey(
     if (submitRes.status === 401) return { ok: false, error: "API Key 无效或已失效（身份验证失败）" }
     if (submitRes.status === 403) return { ok: false, error: "无权限或未开通（免费额度需先在启用管理页领取）", unavailable: "no_endpoint" }
     if (!submitRes.ok) {
-      const kind = tokenhubGenUnavailableKind(String(submitRes.status), await safeText(submitRes))
+      const bodyText = await safeText(submitRes)
+      // 401006：在线推理服务未开通/服务 ID 与模型不匹配（网关层报错，常见于服务未启用）
+      const code = tokenhubErrCode(bodyText)
+      if (code === "401006") {
+        return {
+          ok: false,
+          error: "该模型的视频服务未开通或不可用：请在腾讯云 TokenHub 控制台确认已启用对应的在线推理服务后重试。",
+          unavailable: "no_endpoint"
+        }
+      }
+      const kind = tokenhubGenUnavailableKind(String(submitRes.status), bodyText)
       return { ok: false, error: `提交失败（HTTP ${submitRes.status}）`, unavailable: kind }
     }
-    const submitData = (await submitRes.json().catch(() => null)) as { id?: string; status?: string } | null
-    traceId = typeof submitData?.id === "string" && submitData.id ? submitData.id : undefined
-    if (!traceId) return { ok: false, error: "提交响应缺少任务 id" }
+    const submitData = (await submitRes.json().catch(() => null)) as Record<string, unknown> | null
+    traceId = typeof submitData?.id === "string" && submitData?.id ? String(submitData.id) : undefined
+    if (!traceId) {
+      // 实测定位：humanactor 等模型的 submit 响应可能不含 id（或返回了错误对象但 HTTP 200），把原始 body 透出便于诊断
+      const raw = submitData ? JSON.stringify(submitData).slice(0, 300) : "(空响应)"
+      return { ok: false, error: `提交响应缺少任务 id（原始响应：${raw}）` }
+    }
   } catch {
     return { ok: false, error: "提交失败（网络错误或超时）" }
   }
@@ -464,7 +540,15 @@ export async function tokenhubGenerateWithKey(
       })
       if (qRes.status === 401) return { ok: false, error: "API Key 失效（查询被拒绝）" }
       if (!qRes.ok) {
-        const kind = tokenhubGenUnavailableKind(String(qRes.status), await safeText(qRes))
+        const bodyText = await safeText(qRes)
+        if (tokenhubErrCode(bodyText) === "401006") {
+          return {
+            ok: false,
+            error: "该模型的视频服务未开通或不可用：请在腾讯云 TokenHub 控制台确认已启用对应的在线推理服务后重试。",
+            unavailable: "no_endpoint"
+          }
+        }
+        const kind = tokenhubGenUnavailableKind(String(qRes.status), bodyText)
         return { ok: false, error: `查询失败（HTTP ${qRes.status}）`, unavailable: kind }
       }
       state = (await qRes.json().catch(() => null)) as { status?: string; progress?: number; data?: { url?: string } } | null

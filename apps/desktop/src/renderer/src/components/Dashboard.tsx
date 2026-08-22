@@ -12,7 +12,8 @@ import {
   uploadHint,
   zhipuModelDurations,
   bailianModelDurations,
-  bailianModelInputs
+  bailianModelInputs,
+  tkhModelDurations
 } from '../spec'
 import { IconInfo, IconMaximize, IconPlay, IconUpload, ProviderIconMark } from './icons'
 import { EmptyState } from './EmptyState'
@@ -33,8 +34,8 @@ import AudioCropModal from './AudioCropModal'
 
 const VIP = false
 
-/** 需要通过公网 https URL 才能做图生/参考的 API 型厂商（历史图生记录重新生成时需重传本地图取新 URL） */
-const API_IMAGE_PROVIDERS = ['zhipu', 'volcengine', 'bailian']
+/** 需要通过公网上传（本地图转公网 URL）才能做图生/参考的 API 型厂商（历史图生记录重新生成时需重传本地图取新 URL） */
+const API_IMAGE_PROVIDERS = ['zhipu', 'volcengine', 'bailian', 'tokenhub']
 
 // 文生视频音频参考：扩展名 → MIME（与 github-upload 的 EXT_RE 及本地副本保存共用）
 const AUDIO_TYPES: Record<string, string> = {
@@ -108,6 +109,8 @@ function maxImageUploadCount(provider: string, model: string): number {
   }
   if (provider === 'yuanbao' || provider === 'dola') return 10
   if (provider === 'doubao') return 10
+  // TokenHub 图生为首帧引导（单图，后端仅取首张），限 1 张；不放开成多图/多参考
+  if (provider === 'tokenhub') return 1
   return 5
 }
 
@@ -260,6 +263,9 @@ export default function Dashboard({
   const [audioName, setAudioName] = useState('')
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [audioLocalPath, setAudioLocalPath] = useState<string | null>(null)
+  // TokenHub 特效模板（yt-video-fx）：控制台创建的特效模板标识，随目标模型生成时透传提交 body 的 Template 字段
+  const [tkhFxTemplate, setTkhFxTemplate] = useState('')
+  const isTkhFx = provider === 'tokenhub' && model === 'yt-video-fx'
   const [audioUploading, setAudioUploading] = useState(false)
   // 音频裁剪弹窗：文件时长超过厂商上限时弹出，让用户自行拖选起止区间后上传
   const [cropAudio, setCropAudio] = useState<{ file: File; duration: number } | null>(null)
@@ -309,9 +315,12 @@ export default function Dashboard({
   const [volcModels, setVolcModels] = useState<string[] | null>(null)
   // 阿里云百炼：调度台模型列表 = 各已启用账号「绑定捕获」的免费/可用视频模型并集（优先），未抓到回退 spec 固定目录
   const [bailianModels, setBailianModels] = useState<string[] | null>(null)
+  // 腾讯云 TokenHub：调度台模型列表 = 各已启用账号目录中可生成模型的并集（排除 FX，未抓到回退 spec 固定目录）
+  const [tokenhubModels, setTokenhubModels] = useState<string[] | null>(null)
   const modelList = (p: string): string[] => {
     if (p === 'volcengine' && volcModels && volcModels.length > 0) return volcModels
     if (p === 'bailian' && bailianModels && bailianModels.length > 0) return bailianModels
+    if (p === 'tokenhub' && tokenhubModels && tokenhubModels.length > 0) return tokenhubModels
     return providerCaps[p]?.models ?? MODELS[p] ?? MODELS.doubao
   }
 
@@ -482,6 +491,40 @@ export default function Dashboard({
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, provAggs, bailianModels === null])
+
+  // 腾讯云 TokenHub：调度台模型下拉 = 各已启用账号目录中「可生成」模型并集（unavailable=no_endpoint 的 FX 不进列表），未抓到回退 spec 固定目录
+  useEffect(() => {
+    const svc = getProviderService()
+    if (!svc || !user) return
+    const agg = provAggs.find((a) => a.providerId === 'tokenhub' && a.enabled)
+    if (!agg || agg.bindings.length === 0) {
+      if (tokenhubModels === null) setTokenhubModels([])
+      return
+    }
+    const enabled = agg.bindings.filter((b) => b.enabled)
+    if (enabled.length === 0) return
+    let cancelled = false
+    void (async () => {
+      const union = new Set<string>()
+      for (const b of enabled) {
+        try {
+          const secret = await svc.getProviderKeySecret(user.id, b.keyId)
+          if (!secret) continue
+          const res = await window.api.providers.apiModels('tokenhub', secret.encrypted_key)
+          if (res.ok && res.models)
+            res.models.forEach((m) => {
+              if (m && m.model && m.unavailable !== 'no_endpoint') union.add(m.model)
+            })
+        } catch {
+          // 单个账号抓取失败不影响整体目录
+        }
+      }
+      if (!cancelled) setTokenhubModels(Array.from(union))
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, provAggs, tokenhubModels === null])
+
   const providerDurations = useMemo(() => {
     return new Map(provAggs.map((a) => [a.providerId, a.durations]))
   }, [provAggs])
@@ -490,6 +533,7 @@ export default function Dashboard({
     // 与主进程 api-branch 的模型时长校验保持一致，避免 UI 可选但与生成校验冲突。
     if (provider === 'zhipu') return zhipuModelDurations(model)
     if (provider === 'bailian') return bailianModelDurations(model)
+    if (provider === 'tokenhub') return tkhModelDurations(model)
     return providerDurations.get(provider) ?? DEFAULT_SUPPORTED_DURATIONS
   }, [provider, model, providerDurations])
   const durations = durationOptions(provider, model, mode, VIP, selectedDurations)
@@ -504,6 +548,8 @@ export default function Dashboard({
   // 文生视频（bailian）音频参考能力：仅当属百炼且当前为文生视频（text2video）模型且能力卡含 Audio 时开放音频上传
   // 注意：mode 用长键（text2video/img2video），而非短键（t2v/img），与 providerModeOptions 下拉 value 一致
   const t2vSupportsAudio = provider === 'bailian' && mode === 'text2video' && bailianModelInputs(model).includes('Audio')
+  // TokenHub 数字人（yt-video-humanactor）需配音音频：图生模式上开放音频上传，音频公网 URL 透传提交 body 的 AudioUrl
+  const tkhHumanactorSupportsAudio = provider === 'tokenhub' && model === 'yt-video-humanactor' && mode === 'img2video'
   // 参考生（r2v）视频参考：仅当属百炼且当前为 multi_ref（参考生）且模型能力卡含 Video 时开放视频上传
   const r2vVideoActive = provider === 'bailian' && mode === 'multi_ref' && bailianModelInputs(model).includes('Video')
 
@@ -928,20 +974,39 @@ export default function Dashboard({
       return
     }
     const validModes = visibleModeOptions(provider, model, features, caps).map((m) => m.value)
+    // TokenHub 数字人（yt-video-humanactor）：当前不可用（配音音频需公网可达托管源），生成前友好拦截
+    if (provider === 'tokenhub' && model === 'yt-video-humanactor') {
+      setGenError('yt-video-humanactor（数字人）暂不可用：其配音音频需公网可达的托管源，正在适配中')
+      return
+    }
+    // TokenHub 特效模型（yt-video-fx）：当前暂不可用（特效模板调用参数待实测适配），生成前友好拦截
+    if (provider === 'tokenhub' && model === 'yt-video-fx') {
+      setGenError('yt-video-fx（特效视频）暂不可用：其特效模板调用参数待适配，正在适配中')
+      return
+    }
     if (!validModes.includes(currentMode)) {
       setGenError('当前生成模式已被管理员关闭，请选择可用的生成模式')
       return
     }
     const imageCount = savedImagePaths.length + imageFiles.length
-    // 文生视频需图片：排除 t2v（网页厂商）与 text2video（智谱 API）两种文案枚举；参考生（r2v）允许视频替代图片故一并放行
-    if (currentMode !== 't2v' && currentMode !== 'text2video' && imageCount === 0 && !(r2vVideoActive && refVideoLocalPaths.length > 0)) {
-      const modeLabel = visibleModeOptions(provider, model, features, caps).find((m) => m.value === currentMode)?.label ?? '多参考'
-      setGenError(`${modeLabel}需要至少上传一张素材图片`)
-      return
-    }
-    if ((currentMode === 'img' || currentMode === 'img2video') && imageCount === 0) {
-      setGenError('图生视频需要先上传图片')
-      return
+    // TokenHub 数字人（yt-video-humanactor）为纯音频驱动，不需图片，单独放行并校验音频
+    const isTkhHumanactor = provider === 'tokenhub' && model === 'yt-video-humanactor'
+    if (isTkhHumanactor) {
+      if (!audioUrl) {
+        setGenError('数字人口播需要上传 1 段配音音频')
+        return
+      }
+    } else {
+      // 文生视频需图片：排除 t2v（网页厂商）与 text2video（智谱 API）两种文案枚举；参考生（r2v）允许视频替代图片故一并放行
+      if (currentMode !== 't2v' && currentMode !== 'text2video' && imageCount === 0 && !(r2vVideoActive && refVideoLocalPaths.length > 0)) {
+        const modeLabel = visibleModeOptions(provider, model, features, caps).find((m) => m.value === currentMode)?.label ?? '多参考'
+        setGenError(`${modeLabel}需要至少上传一张素材图片`)
+        return
+      }
+      if ((currentMode === 'img' || currentMode === 'img2video') && imageCount === 0) {
+        setGenError('图生视频需要先上传图片')
+        return
+      }
     }
     if (!durations.some((d) => d.value === duration)) {
       setGenError('当前厂商不支持该时长')
@@ -998,10 +1063,12 @@ export default function Dashboard({
           : [...savedImagePaths, ...imageFiles.map((f) => window.api.files.getPath(f)).filter(Boolean)].slice(0, maxImageUploadCount(provider, model)),
         // 厂商 API 用图片仅取公网 https URL（API 型厂商图生参考图）；WebView 厂商不传，主进程回退 images
         imageUrls: apiImageUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u)),
-        // 文生视频音频参考：公网 https URL 透传厂商（input.audio_url）+ 本地副本供历史回显/重新生成回填。
-        // 仅当当前模型能力卡明确暴露 Audio 时才随生成下发，避免残留音频状态误发到不支持（或字段未确认）的模型。
-        audioUrl: t2vSupportsAudio ? (audioUrl ?? undefined) : undefined,
-        audioLocalPath: t2vSupportsAudio ? (audioLocalPath ?? undefined) : undefined,
+        // 音频参考：公网 https URL 透传厂商（bailian→input.audio_url；tokenhub humanactor→提交 body AudioUrl）+ 本地副本供历史回显/重新生成回填。
+        // 仅当当前模型能力卡明确暴露 Audio（bailian）或数字人模型（tokenhub）时才随生成下发，避免残留音频状态误发到不支持（或字段未确认）的模型。
+        audioUrl: t2vSupportsAudio || tkhHumanactorSupportsAudio ? (audioUrl ?? undefined) : undefined,
+        audioLocalPath: t2vSupportsAudio || tkhHumanactorSupportsAudio ? (audioLocalPath ?? undefined) : undefined,
+        // 特效模板（yt-video-fx）：仅当前为 TokenHub FX 模型时透传，避免残留状态误发到其它模型
+        template: isTkhFx ? (tkhFxTemplate.trim() || undefined) : undefined,
         // 参考生（r2v）参考视频：videos=本地副本路径（历史回显/回填），videoUrls=公网 https URL（透传厂商 input.media reference_video）。
         videos: r2vVideoActive ? refVideoLocalPaths.filter(Boolean) : undefined,
         videoUrls: r2vVideoActive
@@ -1026,7 +1093,7 @@ export default function Dashboard({
       cancellingRef.current = false
       submittedRef.current = false
     }
-  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, apiImageUrls, uploadingCount, audioUploading, audioUrl, audioLocalPath, t2vSupportsAudio, r2vVideoActive, refVideoLocalPaths, refVideoUrls, refVideoUploading, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
+  }, [generating, fresh, step, prompt, mode, provider, model, features, caps, providerCaps, duration, durations, resolution, audio, ratio, imageFiles, savedImagePaths, apiImageUrls, uploadingCount, audioUploading, audioUrl, audioLocalPath, t2vSupportsAudio, r2vVideoActive, refVideoLocalPaths, refVideoUrls, refVideoUploading, isTkhFx, tkhFxTemplate, user, team, usageScope, onGenerate, reloadJobs, onGoProviders, providerOptions])
 
   /** 终止生成：发送前有效；点击后按钮锁定「正在终止…」直到任务真正结束，防止连点 */
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -1084,6 +1151,16 @@ export default function Dashboard({
   }
 
   const onModelChange = (value: string): void => {
+    // TokenHub 数字人（yt-video-humanactor）当前不可用：列表可见，选中仅给友好提示，不实际切换
+    if (provider === 'tokenhub' && value === 'yt-video-humanactor') {
+      setGenError('yt-video-humanactor（数字人）暂不可用：其配音音频需公网可达的托管源，正在适配中')
+      return
+    }
+    // TokenHub 特效模型（yt-video-fx）当前不可用：列表可见，选中仅给友好提示，不实际切换
+    if (provider === 'tokenhub' && value === 'yt-video-fx') {
+      setGenError('yt-video-fx（特效视频）暂不可用：其特效模板调用参数待适配，正在适配中')
+      return
+    }
     setModel(value)
     const nextModes = visibleModeOptions(provider, value, features, caps)
     if (!nextModes.some((m) => m.value === mode)) {
@@ -1415,6 +1492,18 @@ export default function Dashboard({
                 />
               </div>
             )}
+            {isTkhFx && (
+              <div className="param-field param-field-template">
+                <label htmlFor="fx-template">特效模板</label>
+                <input
+                  id="fx-template"
+                  type="text"
+                  value={tkhFxTemplate}
+                  placeholder="控制台创建的模板标识"
+                  onChange={(e) => setTkhFxTemplate(e.target.value)}
+                />
+              </div>
+            )}
           </div>
 
           <div className="param-row ratio-row">
@@ -1462,6 +1551,8 @@ export default function Dashboard({
             ) : null}
           </div>
 
+          {/* 文生视频音频参考（百炼独立音频参考场景）：仅此场景用独立音频上传框；
+          TokenHub 数字人（yt-video-humanactor）的音频已并入下方统一素材框渲染 */}
           {t2vSupportsAudio && (
             <div className={'audio-upload' + (audioName ? ' has-audio' : '')}>
               {audioUploading ? (
@@ -1611,7 +1702,58 @@ export default function Dashboard({
                 onChange={onPickRefMixed}
               />
             </div>
-          ) : ((mode !== 'text2video' || provider === 'yuanbao') && !t2vSupportsAudio && (
+          ) : tkhHumanactorSupportsAudio ? (
+            // TokenHub 数字人（yt-video-humanactor）：官方文档为纯音频驱动，无需图片，仅提供配音音频上传框
+            <div className={'upload-zone humanactor-zone' + (audioName ? ' has-images' : '')}>
+              {audioUploading ? (
+                <div className="audio-loading">
+                  <span className="audio-loading-spinner" /> 音频上传中…
+                </div>
+              ) : audioName && audioUrl ? (
+                <>
+                  <audio ref={audioRef} src={audioUrl} preload="metadata" style={{ display: 'none' }} />
+                  <div
+                    className={'audio-player' + (audioPlaying ? ' playing' : '')}
+                    onClick={(e) => { e.stopPropagation(); toggleAudioPlay() }}
+                  >
+                    <button className="audio-play-btn">
+                      {audioPlaying ? (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                          <rect x="6" y="4" width="4" height="16" rx="1" />
+                          <rect x="14" y="4" width="4" height="16" rx="1" />
+                        </svg>
+                      ) : (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      )}
+                    </button>
+                    <div className="audio-player-main">
+                      <div className="audio-player-progress" onClick={(e) => { e.stopPropagation(); seekAudio(e) }}>
+                        <div
+                          className="audio-player-bar"
+                          style={{ width: `${audioDuration > 0 ? (audioCurrentTime / audioDuration) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <div className="audio-player-name" title={audioName}>{audioName}</div>
+                    </div>
+                    <button className="audio-remove" onClick={(e) => { e.stopPropagation(); onRemoveAudio() }}>×</button>
+                  </div>
+                </>
+              ) : (
+                <label title="上传配音音频" className="upload-empty">
+                  <IconUpload size={20} />
+                  <span className="upload-text">配音音频（数字人口播）</span>
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    style={{ display: 'none' }}
+                    onChange={onPickAudio}
+                  />
+                </label>
+              )}
+            </div>
+          ) : (mode !== 'text2video' || provider === 'yuanbao') && !t2vSupportsAudio && (
             <div
               className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
               onClick={onPickFiles}
@@ -1658,7 +1800,7 @@ export default function Dashboard({
                 onChange={onFilesSelected}
               />
             </div>
-          ))}
+          )}
 
           <div className="generate-actions">
             {genError && (
