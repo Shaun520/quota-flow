@@ -4,13 +4,11 @@ import { useEffect, useState } from "react";
 import type { AdminTeam, AdminTeamMember, TeamStatus } from "@/lib/api/teams";
 import {
   listTeamMembers,
-  planLabel,
   resetTeamQuota,
   statusLabel,
-  subscriptionLabel,
   updateTeamSettings
 } from "@/lib/api/teams";
-import { formatCount, formatDate, formatDateTime } from "@/lib/utils/format";
+import { formatCount, formatDate } from "@/lib/utils/format";
 
 export function TeamDetailModal({
   team,
@@ -25,7 +23,6 @@ export function TeamDetailModal({
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [membersError, setMembersError] = useState<string | null>(null);
 
-  const [plan, setPlan] = useState("free");
   const [seats, setSeats] = useState("3");
   const [status, setStatus] = useState<TeamStatus>("active");
   const [saving, setSaving] = useState(false);
@@ -36,7 +33,6 @@ export function TeamDetailModal({
   useEffect(() => {
     if (!team) return;
 
-    setPlan(team.plan || "free");
     setSeats(String(team.seats_limit || 3));
     setStatus(team.status);
     setSaveError(null);
@@ -76,13 +72,11 @@ export function TeamDetailModal({
     setSaveError(null);
     try {
       await updateTeamSettings(currentTeam.id, {
-        plan,
         seats_limit: seatsNumber,
         status
       });
       onSaved({
         ...currentTeam,
-        plan,
         seats_limit: seatsNumber,
         status
       });
@@ -142,19 +136,6 @@ export function TeamDetailModal({
 
           <div className="form-row" style={{ marginBottom: 20 }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">套餐</label>
-              <select
-                className="form-select"
-                value={plan}
-                onChange={(e) => setPlan(e.target.value)}
-              >
-                <option value="free">Free</option>
-                <option value="pro">Pro</option>
-                <option value="business">Business</option>
-                <option value="team">Team</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">席位上限</label>
               <input
                 type="number"
@@ -208,36 +189,6 @@ export function TeamDetailModal({
               <label className="form-label">累计用量</label>
               <div className="cell-mono" style={{ fontSize: 14 }}>{formatCount(team.total_usage)}</div>
             </div>
-          </div>
-
-          <div className="form-group" style={{ marginBottom: 20 }}>
-            <label className="form-label">订阅信息</label>
-            {team.subscription ? (
-              <div className="table-container">
-                <table className="table">
-                  <tbody>
-                    <tr>
-                      <td>套餐</td>
-                      <td>{planLabel(team.subscription.plan)}</td>
-                      <td>状态</td>
-                      <td>{subscriptionLabel(team.subscription.status)}</td>
-                      <td>订阅席位</td>
-                      <td>{team.subscription.seats ?? "-"}</td>
-                    </tr>
-                    <tr>
-                      <td>周期开始</td>
-                      <td>{formatDateTime(team.subscription.current_period_start)}</td>
-                      <td>周期结束</td>
-                      <td>{formatDateTime(team.subscription.current_period_end)}</td>
-                      <td>绑定账号</td>
-                      <td>{team.key_count}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div style={{ fontSize: 13, color: "#94A3B8" }}>无订阅记录</div>
-            )}
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>

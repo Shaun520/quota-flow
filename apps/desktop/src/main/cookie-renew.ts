@@ -129,7 +129,7 @@ async function tick(): Promise<void> {
         const res = await visitAndCapture(key.provider_id, key.id, key.encrypted_key, site.healthUrl)
         if (res.ok && res.status === 'healthy' && res.cookies && res.cookies.length > 0) {
           await providerSvc.refreshProviderKey(config.userId, key.id, {
-            encryptedKey: encryptCookies(res.cookies, res.storages ?? []),
+            encryptedKey: encryptCookies(res.cookies, res.storages ?? [], key.provider_id),
             expiresAt: res.expiresAt ? new Date(res.expiresAt).toISOString() : null,
             healthStatus: 'healthy'
           })

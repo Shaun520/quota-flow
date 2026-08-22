@@ -24,7 +24,6 @@ const DEFAULT_WEB_MODES = ["text2video", "img2video", "multi_ref", "first_last"]
 
 export const PROVIDER_GENERATION_CATALOG: ProviderGenerationCatalog = {
   doubao: { modes: DEFAULT_WEB_MODES, models: ["Seedance 2.0 Mini"] },
-  jimeng: { modes: DEFAULT_WEB_MODES, models: ["视频 S2.0", "视频 S2.0 Pro"] },
   qwen: {
     modes: DEFAULT_WEB_MODES,
     models: ["万相 2.7", "万相 2.6", "HappyHorse 1.0 Beta"]
@@ -35,8 +34,6 @@ export const PROVIDER_GENERATION_CATALOG: ProviderGenerationCatalog = {
   },
   yuanbao: { modes: ["multi_ref"], models: ["混元"] },
   dola: { modes: ["multi_ref"], models: ["Dreamina Seedance 2.5", "Dreamina Seedance 2.0 Fast", "Dreamina Seedance 1.0"] },
-  kling: { modes: DEFAULT_WEB_MODES, models: ["可灵-标准", "可灵-大师"] },
-  hailuo: { modes: DEFAULT_WEB_MODES, models: ["海螺-标准"] },
   zhipu: {
     modes: ["text2video", "img2video", "multi_ref", "first_last"],
     models: ["cogvideox-flash", "cogvideox-2", "cogvideox-3", "Vidu Q1", "Vidu 2"]

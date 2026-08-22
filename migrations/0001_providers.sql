@@ -208,14 +208,11 @@ GRANT ALL ON TABLE teams TO authenticated;
 GRANT ALL ON TABLE team_members TO authenticated;
 GRANT ALL ON TABLE team_invitations TO authenticated;
 
--- ============ 6. Seed：7 家厂商 ============
+-- ============ 6. Seed：4 家厂商 ============
 INSERT INTO providers (id, name, logo, capabilities, auth_type, unit_name, default_daily_quota) VALUES
   ('doubao',   '豆包',     '豆', '{"models":["Seedance 2.0 Mini"],"modes":["t2v","img"]}'::jsonb,            'cookie', '点',     10),
-  ('jimeng',   '即梦',     '梦', '{"models":["视频 S2.0","视频 S2.0 Pro"],"modes":["t2v","img"]}'::jsonb,   'cookie', '灵感值', 800),
   ('qwen',     '通义万相', '问', '{"models":["万相 2.7","万相 2.6","HappyHorse 1.0 Beta"],"modes":["t2v","img","multi_ref","first_last"]}'::jsonb, 'cookie', '额度', 10),
   ('yuanbao',  '元宝混元', '元', '{"models":["混元（固定）"],"modes":["t2v","img"]}'::jsonb,                  'cookie', '个',     5),
-  ('kling',    '可灵',     '灵', '{"models":["可灵-标准","可灵-大师"],"modes":["t2v","img"]}'::jsonb,       'cookie', '积分',   216),
-  ('hailuo',   '海螺',     '螺', '{"models":["海螺-标准"],"modes":["t2v","img"]}'::jsonb,                   'cookie', '次',     3),
   ('mathmind', 'MathMind', 'M',  '{"models":["mathmind-v1","mathmind-v2"],"modes":["t2v","img"]}'::jsonb, 'apikey', '次',     10)
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name, capabilities = EXCLUDED.capabilities,

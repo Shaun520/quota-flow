@@ -13,7 +13,7 @@ export interface WatermarkBBox {
 
 export interface JobRecord {
   at: string // ISO 时间戳
-  provider: string // 中文名：豆包、即梦...
+  provider: string // 中文名：豆包、通义万相...
   /** 原始 provider id（auto/doubao/qwenwan/yuanbao/dola 等），旧记录可能缺失 */
   providerId?: string
   /** 生成时使用的模型名，旧记录可能缺失 */

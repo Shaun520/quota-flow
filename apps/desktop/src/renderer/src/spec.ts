@@ -2,13 +2,10 @@
 
 export const PROVIDER_LABEL: Record<string, string> = {
   doubao: '豆包',
-  jimeng: '即梦',
   qwen: '通义万相',
   qwenwan: '千问（通义万相）',
   yuanbao: '元宝混元',
   dola: 'Dola',
-  kling: '可灵',
-  hailuo: '海螺',
   zhipu: '智谱（bigmodel）',
   volcengine: '火山方舟',
   bailian: '阿里云百炼',
@@ -17,13 +14,10 @@ export const PROVIDER_LABEL: Record<string, string> = {
 
 export const MODELS: Record<string, string[]> = {
   doubao: ['Seedance 2.0 Mini'],
-  jimeng: ['视频 S2.0', '视频 S2.0 Pro'],
   qwen: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   qwenwan: ['万相 2.7', '万相 2.6', 'HappyHorse 1.0 Beta'],
   yuanbao: ['混元'],
   dola: ['Dreamina Seedance 2.5', 'Dreamina Seedance 2.0 Fast', 'Dreamina Seedance 1.0'],
-  kling: ['可灵-标准', '可灵-大师'],
-  hailuo: ['海螺-标准'],
   zhipu: ['cogvideox-flash', 'cogvideox-2', 'cogvideox-3', 'Vidu Q1', 'Vidu 2'],
   volcengine: ['doubao-seedance-1-0-pro-250528', 'doubao-seedance-1-5-pro-251215', 'doubao-seedance-1-0-pro-fast-251015', 'doubao-seedance-1-0-lite-t2v-250428', 'doubao-seedance-1-0-lite-i2v-250428'],
   bailian: ['wan2.7-t2v-2026-06-12', 'wan2.7-i2v-2026-04-25', 'wan2.7-r2v-2026-06-12'],

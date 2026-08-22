@@ -76,44 +76,7 @@ DROP POLICY IF EXISTS "profiles_admin_all" ON profiles;
 CREATE POLICY "profiles_admin_all" ON profiles
   FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- ============ 3. subscriptions（订阅记录） ============
-CREATE TABLE IF NOT EXISTS subscriptions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  plan TEXT NOT NULL,
-  seats INTEGER NOT NULL DEFAULT 3 CHECK (seats > 0),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'cancelled')),
-  current_period_start TIMESTAMPTZ,
-  current_period_end TIMESTAMPTZ,
-  payment_method TEXT,
-  payment_note TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_subscriptions_team_created
-  ON subscriptions (team_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_status_end
-  ON subscriptions (status, current_period_end);
-
-ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "subscriptions_select_team" ON subscriptions;
-CREATE POLICY "subscriptions_select_team" ON subscriptions
-  FOR SELECT USING (
-    public.is_admin()
-    OR EXISTS (
-      SELECT 1 FROM team_members tm
-      WHERE tm.team_id = subscriptions.team_id
-        AND tm.user_id = auth.uid()
-    )
-  );
-
-DROP POLICY IF EXISTS "subscriptions_admin_all" ON subscriptions;
-CREATE POLICY "subscriptions_admin_all" ON subscriptions
-  FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
-
--- ============ 4. provider_cost_tables（消耗表） ============
+-- ============ 3. provider_cost_tables（消耗表） ============
 CREATE TABLE IF NOT EXISTS provider_cost_tables (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
@@ -243,9 +206,8 @@ ALTER TABLE teams
 UPDATE providers SET equivalent_count_divisor = 1 WHERE equivalent_count_divisor IS NULL;
 UPDATE provider_keys SET equivalent_count_divisor = 1 WHERE equivalent_count_divisor IS NULL;
 UPDATE profiles SET updated_at = now() WHERE updated_at IS NULL;
-UPDATE subscriptions SET updated_at = now() WHERE updated_at IS NULL;
 
--- ============ 9. 现有表 admin 访问策略 ============
+-- ============ 8. 现有表 admin 访问策略 ============
 ALTER TABLE teams ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "teams_admin_all" ON teams;
 CREATE POLICY "teams_admin_all" ON teams
@@ -286,9 +248,8 @@ DROP POLICY IF EXISTS "jobs_admin_all" ON jobs;
 CREATE POLICY "jobs_admin_all" ON jobs
   FOR ALL USING (public.is_admin()) WITH CHECK (public.is_admin());
 
--- ============ 10. 权限授予 ============
+-- ============ 9. 权限授予 ============
 GRANT ALL ON TABLE profiles TO authenticated;
-GRANT ALL ON TABLE subscriptions TO authenticated;
 GRANT ALL ON TABLE provider_cost_tables TO authenticated;
 GRANT ALL ON TABLE member_usage TO authenticated;
 GRANT ALL ON TABLE announcements TO authenticated;
@@ -302,7 +263,7 @@ GRANT ALL ON TABLE team_members TO authenticated;
 GRANT ALL ON TABLE team_invitations TO authenticated;
 GRANT ALL ON TABLE jobs TO authenticated;
 
--- ============ 11. Seed：qwenwan 兼容 + provider_cost_tables 初始规则 ============
+-- ============ 10. Seed：qwenwan 兼容 + provider_cost_tables 初始规则 ============
 INSERT INTO providers (id, name, logo, capabilities, auth_type, unit_name, default_daily_quota, equivalent_count_divisor)
 VALUES
   (
@@ -330,14 +291,8 @@ VALUES
   ('doubao', 'text2video', 1, 5, '480p', 'default', 1, 1, '豆包 5s 480p = 1次'),
   ('doubao', 'text2video', 6, 10, '480p', 'default', 2, 1, '豆包 10s 480p = 2次'),
   ('doubao', 'img2video', 1, 5, '480p', 'default', 1, 1, '豆包图生 5s 480p = 1次'),
-  ('jimeng', 'text2video', 1, 5, '720p', 'default', 80, 80, '即梦 5s 720p = 80灵感值'),
-  ('jimeng', 'text2video', 6, 10, '720p', 'default', 160, 80, '即梦 10s 720p = 160灵感值'),
-  ('jimeng', 'img2video', 1, 5, '720p', 'default', 80, 80, '即梦图生 5s 720p = 80灵感值'),
   ('qwenwan', 'text2video', 1, 10, '720p', 'default', 1, 1, '通义万相 10s 默认 = 1次'),
   ('yuanbao', 'text2video', 1, 10, '720p', 'default', 1, 1, '元宝 10s 默认 = 1次'),
-  ('kling', 'text2video', 1, 5, '720p', 'default', 5, 5, '可灵 5s 720p = 5积分'),
-  ('kling', 'text2video', 1, 5, '1080p', 'default', 10, 5, '可灵 5s 1080p = 10积分'),
-  ('hailuo', 'text2video', 1, 10, '720p', 'default', 1, 1, '海螺 10s 默认 = 1次'),
   ('mathmind', 'img2video', 1, 10, '720p', 'default', 1, 1, 'mathmind = 1次')
 ON CONFLICT (provider_id, mode, duration_min, duration_max, resolution, model) DO UPDATE SET
   unit_cost = EXCLUDED.unit_cost,
@@ -346,7 +301,6 @@ ON CONFLICT (provider_id, mode, duration_min, duration_max, resolution, model) D
   updated_at = now();
 
 COMMENT ON TABLE profiles IS '用户扩展信息，is_admin 控制后台登录授权';
-COMMENT ON TABLE subscriptions IS '订阅记录，MVP 阶段由 admin 手动开通';
 COMMENT ON TABLE provider_cost_tables IS '各厂商生成参数对应的扣减规则，admin 额度扣减规则数据源';
 COMMENT ON TABLE member_usage IS '成员当日等效消费统计';
 COMMENT ON TABLE announcements IS '后台公告通知';

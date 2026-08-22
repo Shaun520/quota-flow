@@ -4,7 +4,7 @@
 
 ### 一站式 AI 视频生成免费额度调度平台
 
-把豆包 / 即梦 / 通义万相 / 元宝混元 / 可灵 / 海螺 等多家厂商的每日免费额度，聚合成一个可调度、可观测、可共享的池子。
+把豆包 / 通义 / 元宝 / 智谱 / Dola / 阿里云 / 腾讯云 等多家厂商的免费视频生成额度，聚合成一个可调度、可观测、可共享的池子。
 
 <p>
   <a href="https://github.com/Shaun520/quota-flow/releases">
@@ -36,7 +36,7 @@
 
 - [下载最新版](#下载最新版)
 - [核心特性](#核心特性)
-- [商业模式](#商业模式)
+- [团队共享额度](#团队共享额度)
 - [技术架构](#技术架构)
 - [Monorepo 结构](#monorepo-结构)
 - [技术选型](#技术选型)
@@ -60,7 +60,7 @@
 
 - **动态额度账本（多单位）**：按厂商原生单位记账（次数/灵感值/积分），支持“时长+分辨率+模型”的动态消耗；0 点自动滚动。
 - **等效次数总览**：不同单位统一折算等效次数，用于 UI 总览 + 成员日额度上限。
-- **消耗表 Admin 可配**：`provider_cost_tables` 由 admin 后台维护，豆包 5s/10s、即梦 720p/1080p 等消耗规则随时可改。
+- **消耗表 Admin 可配**：`provider_cost_tables` 由 admin 后台维护，豆包 5s/10s 等消耗规则随时可改。
 - **智能调度 + estimateCost 预检查**：按策略选家前先预估算消耗，跳过“剩余不够本次调用”的账号。
 - **多账号池化**：同一家厂商绑多个账号，额度叠加，单账号失效自动切下一个。
 - **账号级启用开关**：每个绑定账号可单独启用/停用（默认启用），停用账号被智能调度自动跳过，无需解绑。
@@ -70,18 +70,14 @@
 - **桌面端优先**：Electron 本地工具，无超时无 CORS；个人账号本地解密，团队公共账号走 Edge Function 代调用（key 不出云端）。
 - **官方托管 + 自部署**：95% 用户用官方托管，技术用户可完全自部署。
 
-## 商业模式
+## 团队共享额度
 
-**开源 + 官方托管 + 自部署**
+**开源 + 免费团队 + 共享额度池**
 
-| 套餐 | 价格 | 席位 | 适合 |
-|---|---|---|---|
-| 个人免费 | $0 | 1 人 | 个人用户 |
-| 团队免费 | $0 | 最多 3 人 | 小团队尝鲜 |
-| 团队 Pro | $9/月 | 最多 10 人 | 正经小团队 |
-| 团队 Business | $29/月 | 最多 30 人 | 大团队 |
-
-所有套餐功能完全一致，唯一区别是团队人数上限。自部署完全免费、无限制、admin 不可见。
+- **个人使用**：单人使用，额度为个人所绑定账号的每日免费额度。
+- **团队免费**：多人共用一个额度池，共享账号（团队 cookie）与成员管理完全免费，无订阅费用。
+- 仅以免费团队 + 共享额度模式对外，不涉及任何订阅收费。
+- 自部署完全免费、无限制、admin 不可见。
 
 ## 技术架构
 
@@ -102,7 +98,7 @@ Supabase（数据库 + Auth + Edge Functions）
   React UI（4 Tab：调度台/历史/团队/设置）── 用户只看这个
   本地调度引擎（packages/core + providers）
   WebView 统一执行引擎（后台隐藏，用户不可见）── 见 REQUIREMENTS.md §5.12
-    全 7 家厂商通过 WebView cookie 注入 + 自动提交（mcp_mathmind 真 API 除外）
+    各家厂商通过 WebView cookie 注入 + 自动提交（mcp_mathmind 真 API 除外）
     每个共享账号独立隔离会话（session.fromPartition），互不污染
     两种提交方式（模拟用户操作 / 调页面内部 JS API）+ 三级结果提取 fallback
     提交/保活共享实例池，凌晨 3 点静默访问厂商首页自动续命 cookie
@@ -160,16 +156,13 @@ apps/
 | 厂商 id | 产品 | 额度单位 | 扣减影响因素 | 能力 | 调用方式 |
 |---|---|---|---|---|---|
 | doubao | 豆包 doubao.com | count（次数） | 时长（5s/10s 扣不同） | 文/图 | WebView cookie 注入 + 自动提交（保留 Node.js HTTP adapter 兜底） |
-| jimeng | 即梦 jimeng.jianying.com | inspiration（灵感值） | 时长 + 分辨率 + 模型 | 文/图/多图/视频续写 | WebView cookie 注入 + 自动提交 |
 | qwenwan | 通义万相 tongyi.aliyun.com / qianwen.com | count（次数） | 时长 | 文/图/视频续写 | WebView cookie 注入 + 自动提交（风控签名 bx-ua/clt-acs-sign，CLI 无法直调） |
 | yuanbao | 元宝混元 yuanbao.tencent.com | count（次数） | 固定次数 | 文/图 | WebView cookie 注入 + 自动提交（保留 Node.js HTTP adapter 兜底） |
-| kling | 可灵 klingai.kuaishou.com | credits（积分） | 时长 + 分辨率 | 文/图 | WebView cookie 注入 + 自动提交 |
-| hailuo | 海螺 hailuo.com | count（次数） | 固定次数 | 文 | WebView cookie 注入 + 自动提交 |
 | mathmind | mcp_mathmind-video | count（次数） | 固定次数 | img2video/imgs2video/video2video | 真 API（WebView 方案的唯一例外） |
 
-国内主流厂商的免费额度绑登录态，不绑 apikey。**mcp_mathmind 是唯一走真 API 的厂商，其余 6 家全部走 WebView 统一执行引擎**（cookie 注入 + 自动提交，参考 REQUIREMENTS.md §5.12）。对于千问这类含风控签名的厂商，WebView 前端 JS 自带签名算法，无需逆向。
+国内主流厂商的免费额度绑登录态，不绑 apikey。**mcp_mathmind 是唯一走真 API 的厂商，其余 3 家全部走 WebView 统一执行引擎**（cookie 注入 + 自动提交，参考 REQUIREMENTS.md §5.12）。对于千问这类含风控签名的厂商，WebView 前端 JS 自带签名算法，无需逆向。
 
-所有厂商消耗不是固定“1 次”——豆包 5s/10s、即梦 720p/1080p、可灵 5s/10s 的扣减都不一样，由 `provider_cost_tables` 表驱动，最后折算统一的“等效次数”用于 UI 总览 + 成员日额度上限。
+所有厂商消耗不是固定“1 次”——豆包 5s/10s 的扣减都不一样，由 `provider_cost_tables` 表驱动，最后折算统一的“等效次数”用于 UI 总览 + 成员日额度上限。
 
 ## 快速开始
 
@@ -259,7 +252,7 @@ pnpm release                            # 构建并打包桌面端安装包
 
 ## 落地路径
 
-1. **MVP 核心**：Monorepo + core + mathmind + 豆包 + 即梦 + 消耗表 + 桌面端基础
-2. **多厂商 + cookie**：接通义/元宝/可灵/海螺 + cookie 管理器 + 7 家消耗表补齐
+1. **MVP 核心**：Monorepo + core + mathmind + 豆包 + 消耗表 + 桌面端基础
+2. **多厂商 + cookie**：接通义/元宝 + cookie 管理器 + 消耗表补齐
 3. **团队 + 落地页**：团队额度池 + 成员管理 + admin 额度扣减规则
 4. **打磨**：自动更新 + 代码签名 + 消耗表自动偏差告警 + i18n

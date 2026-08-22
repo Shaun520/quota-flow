@@ -236,7 +236,7 @@ export interface DesktopApi {
   providers: {
     /**
      * 打开登录窗口
-     * @param providerId 厂商 id（doubao / jimeng 等）
+     * @param providerId 厂商 id（yuanbao / qwenwan 等）
      * @param keyId 可选：账号 key id。传入后登录分区与生成分区共用（persist:qf-p:<provider>:<keyId>），避免跨分区迁移会话
      */
     login: (providerId: string, keyId?: string) => Promise<ProviderLoginResult>
@@ -264,6 +264,7 @@ export interface DesktopApi {
      * @param encryptedKey 可选：加密后的 Cookie/凭据，打开前会尝试注入到该账号分区
      */
     openSite: (providerId: string, keyId: string, encryptedKey?: string) => Promise<{ ok: boolean; error?: string }>
+    injectSiteCookies: (providerId: string, keyId: string, encryptedKey?: string) => Promise<{ ok: boolean; error?: string }>
     /**
      * 取消登录窗口
      * @param keyId 可选：对应 login 传入的 keyId，关闭同一账号的登录窗口
@@ -494,6 +495,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke('provider:resolve-key', input) as Promise<{ encrypted: string | null }>,
     openSite: (providerId, keyId, encryptedKey) =>
       ipcRenderer.invoke('provider:open-site', providerId, keyId, encryptedKey) as Promise<{ ok: boolean; error?: string }>,
+    injectSiteCookies: (providerId, keyId, encryptedKey) =>
+      ipcRenderer.invoke('provider:inject-site-cookies', providerId, keyId, encryptedKey) as Promise<{ ok: boolean; error?: string }>,
     cancelLogin: (providerId, keyId) =>
       ipcRenderer.invoke('provider:login-cancel', providerId, keyId) as Promise<void>,
     migratePartition: (providerId, srcKeyId, dstKeyId) =>

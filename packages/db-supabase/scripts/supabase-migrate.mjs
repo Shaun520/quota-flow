@@ -58,7 +58,6 @@ const TABLE_ORDER = [
   'quota_operations',
   'provider_caps',
   'profiles',
-  'subscriptions',
   'provider_cost_tables',
   'member_usage',
   'announcements',

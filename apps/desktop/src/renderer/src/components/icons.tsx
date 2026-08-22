@@ -180,15 +180,6 @@ export const IconDoubao = (p: IconProps) => (
   </svg>
 )
 
-export const IconJimeng = (p: IconProps) => {
-  const uid = useId()
-  return (
-    <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24" aria-hidden="true">
-      <g clipPath={`url(#${uid}-j0)`}><g transform="matrix(-0.009271 -0.017448 0.0215011 -0.0134883 13.0472 18.2292)"><rect fill={`url(#${uid}-j1)`} height="666.506" opacity="1" shapeRendering="crispEdges" width="1077.71" x="0" y="0"></rect><rect fill={`url(#${uid}-j1)`} height="666.506" opacity="1" shapeRendering="crispEdges" transform="scale(1 -1)" width="1077.71" x="0" y="0"></rect><rect fill={`url(#${uid}-j1)`} height="666.506" opacity="1" shapeRendering="crispEdges" transform="scale(-1 1)" width="1077.71" x="0" y="0"></rect><rect fill={`url(#${uid}-j1)`} height="666.506" opacity="1" shapeRendering="crispEdges" transform="scale(-1)" width="1077.71" x="0" y="0"></rect></g></g><g clipPath={`url(#${uid}-j2)`}><g transform="matrix(-0.00282575 -0.00489434 0.00971874 -0.00561112 16.5909 23.2227)"><rect fill={`url(#${uid}-j3)`} height="1485.61" opacity="1" shapeRendering="crispEdges" width="4828.03" x="0" y="0"></rect><rect fill={`url(#${uid}-j3)`} height="1485.61" opacity="1" shapeRendering="crispEdges" transform="scale(1 -1)" width="4828.03" x="0" y="0"></rect><rect fill={`url(#${uid}-j3)`} height="1485.61" opacity="1" shapeRendering="crispEdges" transform="scale(-1 1)" width="4828.03" x="0" y="0"></rect><rect fill={`url(#${uid}-j3)`} height="1485.61" opacity="1" shapeRendering="crispEdges" transform="scale(-1)" width="4828.03" x="0" y="0"></rect></g></g><defs><clipPath id={`${uid}-j0`}><path d="M5.25711 1.80765C8.76812 6.74075 14.4314 9.45056 20.0636 8.40323C20.4619 8.32917 20.8947 8.19661 21.3451 8.02311C22.2001 7.69374 23.3197 9.03389 22.6709 9.68084C22.2415 10.1091 21.8312 10.5013 21.4634 10.8278C18.9269 13.0793 16.1264 15.1096 13.0744 16.8717C10.003 18.6449 6.8237 20.0618 3.58429 21.1352C3.13145 21.2853 2.60446 21.4391 2.038 21.5917C1.15348 21.8301 0.554197 20.1919 1.2674 19.617C1.6464 19.3114 1.98071 19.0005 2.246 18.6902C5.96908 14.3363 6.29888 8.17371 3.71732 2.69665C3.6056 2.45961 3.48162 2.17153 3.35287 1.85684C2.99465 0.981289 4.04156 0.335123 4.65576 1.05462C4.89891 1.33945 5.10904 1.5996 5.25711 1.80765Z"></path></clipPath><clipPath id={`${uid}-j2`}><path d="M19.529 13.6948C17.2056 16.5579 16.7138 19.6388 17.1514 22.2781C17.1594 22.3264 17.1678 22.3799 17.1763 22.4375C17.2926 23.2284 16.3596 23.7154 15.7279 23.2254C15.6957 23.2004 15.6645 23.1765 15.6347 23.1538C13.5149 21.5401 11.0142 20.326 7.68635 20.7079C9.70085 20.1175 11.7605 19.243 13.7728 18.0812C15.9822 16.8056 17.9201 15.3074 19.529 13.6948Z"></path></clipPath><linearGradient gradientUnits="userSpaceOnUse" id={`${uid}-j1`} x1="0" x2="500" y1="0" y2="500"><stop stopColor="#27B2F0"></stop><stop offset="0.203234" stopColor="#26DFFB"></stop><stop offset="0.406468" stopColor="#30F5FE"></stop><stop offset="0.652506" stopColor="#F0FEFC"></stop><stop offset="0.863327" stopColor="#FBC610"></stop><stop offset="1" stopColor="#FD9C22"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id={`${uid}-j3`} x1="0" x2="500" y1="0" y2="500"><stop stopColor="#1C6FFF"></stop><stop offset="1" stopColor="#24B5EF"></stop></linearGradient></defs>
-    </svg>
-  )
-}
-
 export const IconTongyi = (p: IconProps) => {
   const uid = useId()
   return (
@@ -204,35 +195,14 @@ export const IconYuanbao = (p: IconProps) => (
   </svg>
 )
 
-export const IconKling = (p: IconProps) => {
-  const uid = useId()
-  return (
-    <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5.412 13.775A23.193 23.193 0 017.41 9.32c3.17-5.492 7.795-8.757 10.33-7.294C12.038-1.266 4.598.944 1.122 6.964A13.378 13.378 0 00.085 9.22c-.259.739.092 1.534.77 1.926l4.557 2.63z" fill={`url(#${uid}-k0)`}></path><path d="M18.588 10.164a23.188 23.188 0 01-1.999 4.455c-3.17 5.492-7.795 8.758-10.33 7.294 5.703 3.293 13.143 1.082 16.619-4.938a13.392 13.392 0 001.037-2.255c.259-.738-.092-1.534-.77-1.925l-4.557-2.63z" fill={`url(#${uid}-k1)`}></path><path d="M16.59 14.62c3.17-5.492 3.686-11.13 1.15-12.594C15.207.563 10.582 3.83 7.41 9.32c2.074-3.59 5.809-5.315 8.344-3.852 2.534 1.464 2.908 5.56.835 9.151z" fill={`url(#${uid}-k2)`}></path><path d="M7.41 9.32c-3.17 5.492-3.686 11.13-1.15 12.593 2.534 1.464 7.159-1.802 10.33-7.294-2.074 3.591-5.809 5.316-8.344 3.852-2.534-1.463-2.908-5.56-.835-9.15z" fill={`url(#${uid}-k3)`}></path><defs><radialGradient cx="0" cy="0" gradientTransform="matrix(7.47772 -12.51022 17.14368 10.24728 5.173 13.637)" gradientUnits="userSpaceOnUse" id={`${uid}-k0`} r="1"><stop offset=".095" stopColor="#FFF959"></stop><stop offset=".326" stopColor="#0DF35E"></stop><stop offset=".64" stopColor="#0BF2F9"></stop><stop offset="1" stopColor="#04A6F0"></stop></radialGradient><radialGradient cx="0" cy="0" gradientTransform="rotate(120.868 6.491 10.491) scale(14.5747 19.9728)" gradientUnits="userSpaceOnUse" id={`${uid}-k1`} r="1"><stop offset=".095" stopColor="#FFF959"></stop><stop offset=".326" stopColor="#0DF35E"></stop><stop offset=".64" stopColor="#0BF2F9"></stop><stop offset="1" stopColor="#04A6F0"></stop></radialGradient><linearGradient gradientUnits="userSpaceOnUse" id={`${uid}-k2`} x1="15.578" x2="18.062" y1="1.798" y2="9.861"><stop stopColor="#003EFF"></stop><stop offset="1" stopColor="#0BFFE7"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id={`${uid}-k3`} x1="8.422" x2="5.938" y1="22.142" y2="14.079"><stop stopColor="#003EFF"></stop><stop offset="1" stopColor="#0BFFE7"></stop></linearGradient></defs>
-    </svg>
-  )
-}
-
-export const IconHailuo = (p: IconProps) => {
-  const uid = useId()
-  return (
-    <svg width={p.size ?? 16} height={p.size ?? 16} viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M24 12C24 5.373 18.6-.017 11.97 0 5.39.017.015 5.39 0 11.97-.017 18.6 5.373 24 12 24h7.885a4.108 4.108 0 004.108-4.108V12.4c.004-.133.007-.266.007-.4zM5.829 18.664c-1.91-1.63-3.088-4.24-3.033-6.9.004-.186.013-.372.03-.558v-.012c.277-3.174 2.327-6.134 5.2-7.509 2.874-1.375 6.466-1.112 9.11.664 2.644 1.777 4.243 5.004 4.056 8.184a11.38 11.38 0 01-.329 2.063c-.066.27-.147.549-.338.75-.19.201-.524.295-.75.134-.216-.154-.248-.456-.266-.72-.15-2.134-.72-4.335-2.162-5.915A6.636 6.636 0 0013.1 6.743a6.858 6.858 0 00-4.577 1.252c-1.099.787-1.962 1.914-2.38 3.2-.416 1.285-.374 2.726.175 3.962a5.24 5.24 0 001.9 2.24c1.467.963 3.475 1.1 5 .23 1.524-.87 2.435-2.758 2.047-4.47-.389-1.712-2.124-3.047-3.87-2.866-.266.027-.648-.002-.657-.27-.008-.207.241-.316.445-.353 1.771-.318 3.67.582 4.64 2.097.973 1.515 1.022 3.544.229 5.16-.794 1.615-2.37 2.795-4.118 3.221-2.357.575-4.491-.105-6.103-1.482h-.002z" fill={`url(#${uid}-h0)`}></path><defs><linearGradient gradientUnits="userSpaceOnUse" id={`${uid}-h0`} x1=".539" x2="27.487" y1=".884" y2="27.022"><stop offset=".09" stopColor="#FFAB0C"></stop><stop offset=".31" stopColor="#FF5538"></stop><stop offset=".46" stopColor="#E9405D"></stop><stop offset=".75" stopColor="#D266DA"></stop><stop offset=".89" stopColor="#D584EF"></stop></linearGradient></defs>
-    </svg>
-  )
-}
-
 export type ProviderIcon = (p: IconProps) => ReactNode
 
 /** 厂商 id -> 官方 logo 图标（调度台 / 厂商管理 / 新增厂商共用） */
 export const PROVIDER_ICONS: Record<string, ProviderIcon> = {
   doubao: IconDoubao,
-  jimeng: IconJimeng,
   qwenwan: IconTongyi,
   qwen: IconTongyi,
-  yuanbao: IconYuanbao,
-  kling: IconKling,
-  hailuo: IconHailuo
+  yuanbao: IconYuanbao
 }
 
 /** 只接受可由 <img> 安全展示的厂商 logo，避免把纯文本首字符当成图片地址 */

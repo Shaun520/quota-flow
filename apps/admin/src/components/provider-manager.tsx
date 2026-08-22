@@ -22,11 +22,8 @@ export interface ProviderRow {
 
 const PROVIDER_ORDER = [
   "doubao",
-  "jimeng",
   "qwenwan",
   "yuanbao",
-  "kling",
-  "hailuo",
   "qwen"
 ];
 

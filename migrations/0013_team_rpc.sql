@@ -56,19 +56,6 @@ BEGIN
         WHERE tm.team_id = t.id
           AND mp.status = 'active'
       ) AS active_member_count,
-      (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      ) AS subscription,
       COALESCE((
         SELECT SUM(COALESCE(j.equivalent_count, 0))
         FROM jobs j
@@ -104,7 +91,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_list_teams(text, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.admin_list_teams(text, text, integer, integer)
-  IS 'Admin team list with owner, members, subscription, usage, and key count. Admin only.';
+  IS 'Admin team list with owner, members, usage, and key count. Admin only.';
 
 -- ============ 2. admin_list_team_members ============
 CREATE OR REPLACE FUNCTION public.admin_list_team_members(p_team_id UUID)
@@ -359,23 +346,6 @@ BEGIN
       JOIN profiles mp ON mp.id = tm.user_id
       WHERE tm.team_id = t.id AND mp.status = 'active'
     ),
-    'subscription', CASE
-      WHEN EXISTS (SELECT 1 FROM subscriptions s WHERE s.team_id = t.id)
-      THEN (
-        SELECT json_build_object(
-          'plan', s.plan,
-          'status', s.status,
-          'seats', s.seats,
-          'current_period_start', s.current_period_start,
-          'current_period_end', s.current_period_end
-        )
-        FROM subscriptions s
-        WHERE s.team_id = t.id
-        ORDER BY s.created_at DESC
-        LIMIT 1
-      )
-      ELSE NULL
-    END,
     'month_usage', COALESCE((
       SELECT SUM(COALESCE(j.equivalent_count, 0))
       FROM jobs j
