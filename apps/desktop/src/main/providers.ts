@@ -550,6 +550,22 @@ const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   chatglm: ['chatglm_user_id', 'chatglm_token', 'chatglm_refresh_token']
 }
 
+// 账号级「稳定」cookie 键：指纹只从这些键提取，避免会话级易变值（uid_tt/sid_tt/sessionid 等每次登录会变）
+// 导致同一账号两次登录指纹不同 → 渲染层去重判不到 → 反复新插大行（曾把 encrypted_key 撑到 MB 级）。
+// 与 FINGERPRINT_COOKIE_KEYS（仍负责登录判定、可包含会变键）分离：这里仅收录跨登录稳定的账号标识。
+const ACCOUNT_IDENTITY_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
+  // 实测：flow_cur_user_sec_id 账号级稳定；uid_tt/uid_tt_ss 每次登录会变，绝不能作为指纹来源。
+  doubao: ['flow_cur_user_sec_id'],
+  dola: ['flow_cur_user_sec_id'],
+  // 实测：iw.userid / alipay 账号级稳定；tongyi_sso_ticket_hash 等会话级值已排除。
+  qwen: ['iw.userid', 'alipay'],
+  qwenwan: ['iw.userid', 'alipay'],
+  // 实测：pt2gguin = o<QQ号>、hy_user = 元宝账号 UUID，均账号级稳定。
+  yuanbao: ['pt2gguin', 'hy_user'],
+  // 实测：chatglm_user_id 为真实账号 UUID，稳定；chatglm_token/refresh_token 是票据（变化），不作指纹。
+  chatglm: ['chatglm_user_id']
+}
+
 function normalizeAccountId(raw: string): string {
   // 全角转半角 + 去首尾引号/空白 + 小写
   return raw
@@ -613,8 +629,10 @@ async function extractAccountFingerprint(
 ): Promise<string | null> {
   const extractor = ACCOUNT_FINGERPRINT_EXTRACTORS[providerId as ProviderId]
 
+  // 指纹只从「账号级稳定 cookie」提取，绝不用会话级易变值（uid_tt/sid_tt/sessionid 每次登录会变）。
+  // 这样同一账号重复登录始终得到相同指纹，渲染层去重才能命中，避免反复新插大行。
   const tryCookieFallback = (): string | null => {
-    const keys = FINGERPRINT_COOKIE_KEYS[providerId as ProviderId]
+    const keys = ACCOUNT_IDENTITY_COOKIE_KEYS[providerId as ProviderId]
     if (keys && cookies.length > 0) {
       for (const key of keys) {
         const match = cookies.find((c) => c.name.toLowerCase() === key.toLowerCase())
@@ -646,18 +664,18 @@ async function extractAccountFingerprint(
   let source: string | null = null
   let fingerprint: string | null = null
 
-  if (extractor?.cookieFirst) {
+  // 有账号级稳定 cookie 键定义的厂商：指纹只取稳定 cookie，绝不退到 DOM 或会话级 cookie。
+  // DOM 脚本(COMMON_FINGERPRINT_SCRIPT)抓的 data-uid/userId 等也可能随会话变化，用于去重会不稳定，
+  // 因此仅对「无稳定键定义」的厂商（kling/hailuo）用 DOM 兜底。
+  const hasIdentityKeys = !!ACCOUNT_IDENTITY_COOKIE_KEYS[providerId as ProviderId]?.length
+  if (hasIdentityKeys) {
     const cookieRaw = tryCookieFallback()
     if (cookieRaw) {
       source = 'cookie'
       fingerprint = fingerprintFor(providerId, cookieRaw)
-    } else {
-      const domFp = await tryDom()
-      if (domFp) {
-        source = 'dom'
-        fingerprint = domFp
-      }
     }
+    // 取不到稳定 Cookie 时指纹置空（宁缺毋滥）：空指纹在渲染层会被当作「无法去重」而非「错误指纹」，
+    // 避免用会变值生成一个「看似稳定实则每次不同」的指纹，从而绕过去重判定。
   } else {
     const domFp = await tryDom()
     if (domFp) {
