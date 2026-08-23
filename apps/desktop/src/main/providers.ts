@@ -106,6 +106,9 @@ export type ProviderId =
   | 'bailian'
   | 'tokenhub'
 
+/** cookie 型厂商：loginUrl 即厂商主站（登录窗口一直停在主站），已登录判定须检测真实用户标识 */
+const COOKIE_LOGIN_PROVIDER_IDS = new Set(['doubao', 'qwen', 'qwenwan', 'yuanbao', 'dola', 'chatglm'])
+
 interface ProviderSite {
   loginUrl?: string
   healthUrl: string
@@ -387,6 +390,45 @@ function hasSessionCookie(providerId: string, cookies: ProviderCookie[]): boolea
   return cookies.some((c) => generic.test(c.name) || (tencent ? tencent.test(c.name) : false))
 }
 
+// 已登录的「硬」判定：仅有真正的登录态才会种下账号身份证 cookie。
+// 依据 FINGERPRINT_COOKIE_KEYS（各厂商实测的登录后账号标识 cookie），未登录时这些 cookie 不存在。
+// 该判定不依赖 DOM，避免各厂商页面结构差异导致的误判。
+function hasAccountIdentityCookie(providerId: string, cookies: ProviderCookie[]): boolean {
+  const keys = FINGERPRINT_COOKIE_KEYS[providerId as ProviderId]
+  // 智谱清言特判：token 访问即生成。访客态 JWT 含 is_guest:true；登录后 is_guest 字段消失并携带真实 uid。
+  // 登录态 = 非访客（is_guest 为空或 false）且存在用户标识（uid/sub）
+  if (providerId === 'chatglm') {
+    const token = cookies.find((c) => c.name.toLowerCase() === 'chatglm_token')
+    if (!token || !token.value) return false
+    try {
+      const payload = JSON.parse(Buffer.from(token.value.split('.')[1], 'base64').toString('utf8'))
+      return payload && payload.is_guest !== true && !!(payload.uid || payload.sub)
+    } catch {
+      // JWT 解析失败：回退到普通身份 cookie 判定（兜底，避免误拦已登录）
+    }
+    const lower = new Set((keys ?? []).map((k) => k.toLowerCase()))
+    return cookies.some((c) => lower.has(c.name.toLowerCase()) && !!c.value)
+  }
+  // 千问/qwenwan 特判：登录态的登录判定信号与去重指纹分离。
+  // 登录信号用「仅登录后才存在」的 tongyi_sso_ticket_hash / _qk_bx_um_v1（未登录无）；
+  // 去重指纹不在此判定（FINGERPRINT_COOKIE_KEYS 里的稳定值仅用于 fingerprint，见 extractAccountFingerprint）。
+  if (providerId === 'qwen' || providerId === 'qwenwan') {
+    return cookies.some((c) => {
+      const n = c.name.toLowerCase()
+      return !!c.value && (n === 'tongyi_sso_ticket_hash' || n === '_qk_bx_um_v1')
+    })
+  }
+  if (!keys || keys.length === 0) {
+    // 未配置指纹的厂商：退化为会话 cookie + 账号信号判定
+    return cookies.some((c) => {
+      const n = c.name.toLowerCase()
+      return !!c.value && /session|token|uid|user|auth|account/i.test(n) && !/^(msToken|s_v_web_id|__utm|_ga)/i.test(n)
+    })
+  }
+  const lowerKeys = new Set(keys.map((k) => k.toLowerCase()))
+  return cookies.some((c) => lowerKeys.has(c.name.toLowerCase()) && !!c.value)
+}
+
 async function collectPartitionCookies(providerId: string, keyId?: string): Promise<ProviderCookie[]> {
   const ses = session.fromPartition(partitionFor(providerId, keyId))
   const all = await ses.cookies.get({})
@@ -448,12 +490,40 @@ const COMMON_FINGERPRINT_SCRIPT = `(() => {
   return null;
 })()`
 
+// 千问专用提取脚本：手机号/支付宝登录后，cookie 中稳定账号标识不统一（ud/票证均会变），
+// 但页面始终显示账号级唯一的用户名（如 Qwen6195，同账号稳定、不同账号不同），优先提取它作为指纹。
+const QWEN_FINGERPRINT_SCRIPT = `(() => {
+  try {
+    // 1) 从可见的按钮/文本中提取千问用户名（Qwen 或 Qwen前面带数字的统一账号名）
+    const nodes = [...document.querySelectorAll('button, a, span, div')];
+    for (const el of nodes) {
+      if (el.offsetParent === null) continue;
+      const t = (el.textContent || '').trim();
+      if (t && /^Qwen\\d{3,}$|^Qwen[\\w-]{3,}$/.test(t)) return t;
+    }
+  } catch {}
+  try {
+    const attrs = ['data-user-id', 'data-uid', 'data-userid', 'data-account', 'user-id', 'user_id', 'uid', 'userId'];
+    for (const a of attrs) {
+      const el = document.querySelector('[' + a + ']');
+      if (el && el.getAttribute(a)) return el.getAttribute(a);
+    }
+  } catch {}
+  try {
+    const text = document.body ? document.body.innerText : '';
+    const m = text.match(/1[3-9]\\d{9}/);
+    if (m) return m[0];
+  } catch {}
+  return null;
+})()`
+
 // 每厂商一个提取脚本（结构差异化时单独实现；先用通用脚本兜底联调）
 const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtractor>> = {
   // 实测豆包分区 cookie：uid_tt/uid_tt_ss = 字节用户 ID（稳定），sid_tt/sessionid 为会话令牌（会变）
   doubao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
-  qwen: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
-  qwenwan: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
+  // 千问：cookie 中 ud/票证不稳定，改为优先 DOM 提取账号级稳定用户名（Qwen6195 等），失败再走 cookie
+  qwen: { script: QWEN_FINGERPRINT_SCRIPT, cookieFirst: false },
+  qwenwan: { script: QWEN_FINGERPRINT_SCRIPT, cookieFirst: false },
   // 实测元宝分区 cookie：QQ 登录产生 pt2gguin(o+QQ号) 与 hy_user(元宝账号UUID)，均按账号稳定；
   // uin/wxuin/openid 实际不存在，cookie 标识已验证，优先于泛用 DOM 脚本
   yuanbao: { script: COMMON_FINGERPRINT_SCRIPT, cookieFirst: true },
@@ -466,20 +536,26 @@ const ACCOUNT_FINGERPRINT_EXTRACTORS: Partial<Record<ProviderId, FingerprintExtr
 const FINGERPRINT_COOKIE_KEYS: Partial<Record<ProviderId, string[]>> = {
   // 实测值：抖音扫码登录时 uid_tt/uid_tt_ss 每次登录会变；flow_cur_user_sec_id 才是账号级稳定标识（两次登录一致）
   doubao: ['flow_cur_user_sec_id', 'uid_tt', 'uid_tt_ss'],
-  // 实测千问登录后 .www.qianwen.com 会下发 b-user-id；_QW_HASH_UID/_QW_WG_UID 是账号级标识兜底。
-  qwen: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
-  qwenwan: ['b-user-id', '_QW_HASH_UID', '_QW_WG_UID', 'login_aliyunid', 'loginaliyunid'],
+  // 实测千问经支付宝登录后，.alipay.com 会下发 iw.userid / alipay（账号级稳定标识，去重指纹用此二值）；
+  // tongyi_sso_ticket_hash 每次登录会变（会话级），仅作「已登录」信号，不适合做去重指纹，
+  // 故将其从指纹 key 中剔除，避免同一账号登录两次指纹不同导致去重失效。
+  qwen: ['iw.userid', 'alipay', '_QW_HASH_UID', '_QW_WG_UID'],
+  qwenwan: ['iw.userid', 'alipay', '_QW_HASH_UID', '_QW_WG_UID'],
   // 实测值：pt2gguin = o<QQ号>（.ptlogin2.qq.com），hy_user = 元宝账号 UUID（.tencent.com）
   yuanbao: ['pt2gguin', 'hy_user'],
   // Dola 同属字节系；避免使用 msToken / s_v_web_id 等会话级易变值做账号指纹。
-  dola: ['flow_cur_user_sec_id', 'sessionid', 'sid_tt']
+  dola: ['flow_cur_user_sec_id', 'sessionid', 'sid_tt'],
+  // 实测智谱清言（chatglm.cn）C 端：token/用户标识 cookie 均以 chatglm_ 为前缀，未登录为访客态、登录后为真实用户 ID。
+  // 注意：这些 cookie 访问即生成（含访客态），不能仅靠「存在」判定，须区分值（登录后 chatglm_user_id 为真实账号 UUID）。
+  chatglm: ['chatglm_user_id', 'chatglm_token', 'chatglm_refresh_token']
 }
 
 function normalizeAccountId(raw: string): string {
-  // 全角转半角 + trim + 小写
+  // 全角转半角 + 去首尾引号/空白 + 小写
   return raw
     .replace(/[\uff01-\uff5e]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
     .replace(/\u3000/g, ' ')
+    .replace(/^["']|["']$/g, '')
     .trim()
     .toLowerCase()
 }
@@ -709,52 +785,99 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
     })
 
     // 轮询用户是否点击"已完成登录"
+    let doneEntered = false
     const pollTimer = setInterval(() => {
       if (win.isDestroyed()) return
       void win.webContents
         .executeJavaScript('window.__QF_LOGIN_DONE__ === true')
         .then((flag: boolean) => {
           if (!flag) return
+          // 原子锁：防止多个 pollTimer 并发进入流程（点击完成后立即清除轮询，避免重复启动）
+          if (doneEntered) return
+          doneEntered = true
+          clearInterval(pollTimer)
           void collectPartitionCookies(providerId, keyId)
             .then(async (cookies) => {
-              // 1) 等待页面真正进入已登录状态，且确保跳转到该厂商主站（最多 20s）
-              //    候选 D 优化 + 候选 A 校验：确保在主站而不是 SSO 中间页
+              // 1) 等待页面真正进入已登录状态（最多 20s）
               let loggedIn = false
+              let winGone = false
               let onMainSite = false
               let currentUrl = ''
+              const needsRealLogin = COOKIE_LOGIN_PROVIDER_IDS.has(providerId)
+              // 已登录判定：用「登录后才下发、且值非空」的账号身份证 cookie 做硬校验（未登录仅存在空值 cookie）；
+              // 同时以页面「已无登录入口且在主站」作为可靠回退信号——实测豆包/元宝登录后页面会移除「登录」按钮。
+              // 二者任一命中即视为已登录，避免依赖各厂商不统一的头像/菜单 DOM 结构。
               for (let i = 0; i < 20; i++) {
+                // 窗口已销毁（用户关闭/登录完成销毁）：停止轮询
+                if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+                  winGone = true
+                  console.log(`[qf-login] provider=${providerId} win-destroyed, aborting`)
+                  break
+                }
+                // 主判定：登录后才下发的账号身份证 cookie（不依赖 DOM，最可靠）
+                const cookiesNow = await collectPartitionCookies(providerId, keyId)
+                const hasIdentity = hasAccountIdentityCookie(providerId, cookiesNow)
+                if (hasIdentity) {
+                  cookies = cookiesNow
+                  loggedIn = true
+                  console.log(`[qf-login] provider=${providerId} t=${i} HAS-IDENTITY cookies=${cookiesNow.length}`)
+                  break
+                }
+                // 辅助信号：页面已无登录入口 且 在主站（脚本失败不影响主判定）
+                let state: { hasLoginIntent?: boolean; url?: string } | undefined
                 try {
-                  const state = (await win.webContents.executeJavaScript(
-                    `(() => {
-                      const norm = (s) => (s || '').trim();
-                      const btns = [...document.querySelectorAll('button, [role="button"]')]
-                        .filter((b) => b.offsetParent !== null)
-                        .map((b) => norm(b.textContent));
-                      // 登录墙特征（大号按钮），而非导航栏常驻的「登录」按钮
-                      const hasLoginWall = btns.some((t) => /^(扫码登录|立即登录|手机号登录|短信登录)$/.test(t));
-                      const hasAvatar = !!document.querySelector('[class*="avatar" i], [class*="userinfo" i], [class*="user-info" i]');
-                      return { hasLoginWall, hasAvatar, url: location.href };
-                    })()`,
-                    true
-                  )) as { hasLoginWall?: boolean; hasAvatar?: boolean; url?: string }
-                  currentUrl = state.url || ''
-                  onMainSite = isProviderMainSite(providerId, currentUrl)
-                  if (state && !state.hasLoginWall && (state.hasAvatar || onMainSite)) {
-                    loggedIn = true
-                    break
-                  }
-                } catch {}
+                  state = (await win.webContents.executeJavaScript(
+                    `(function () {
+                      var texts = [];
+                      try {
+                        var nodes = document.querySelectorAll('button, [role="button"], a, span');
+                        for (var j = 0; j < nodes.length; j++) {
+                          var el = nodes[j];
+                          if (el.offsetParent === null) continue;
+                          var t = (el.textContent || '').trim();
+                          if (t && t.length <= 12) texts.push(t);
+                        }
+                      } catch (e) {}
+                      var hasLoginIntent = texts.some(function (t) {
+                        return /^(扫码登录|立即登录|手机号登录|短信登录|登录|注册|登录\/注册|注册\/登录)$/.test(t);
+                      });
+                      return { hasLoginIntent: hasLoginIntent, url: location.href };
+                    })()`
+                  )) as { hasLoginIntent?: boolean; url?: string }
+                } catch (e) {
+                  console.log(`[qf-login] provider=${providerId} t=${i} auxScriptErr=${e instanceof Error ? e.message : String(e)}`)
+                }
+                currentUrl = state?.url || ''
+                onMainSite = isProviderMainSite(providerId, currentUrl)
+                const noLoginIntentAndMain = !state?.hasLoginIntent && onMainSite
+                if (noLoginIntentAndMain) {
+                  cookies = cookiesNow
+                  loggedIn = true
+                  console.log(`[qf-login] provider=${providerId} t=${i} NO-LOGIN-INTENT-AND-MAIN onMainSite=${onMainSite} cookies=${cookiesNow.length}`)
+                  break
+                }
                 await sleep(1000)
               }
-              if (!loggedIn || !onMainSite) {
+              // 未检测到已登录态 → 报错并终止（窗口在检测中被关闭销毁按「已取消」处理）
+              if (!loggedIn) {
+                if (winGone) {
+                  done({ ok: false, canceled: true, error: 'window-closed', friendlyMessage: '窗口已关闭，未获取到登录信息' })
+                } else {
+                  done({
+                    ok: false,
+                    error: 'login-state-not-detected',
+                    friendlyMessage: '未检测到登录状态，请确认已完成登录后重试'
+                  })
+                }
+                return
+              }
+              // 非 cookie 型厂商（loginUrl 可能是 SSO/子域名）需确认回到主站再采集，避免抓取中间页 cookie；
+              // cookie 型厂商登录态已由身份 cookie 确认，无需再强制 onMainSite
+              if (!needsRealLogin && !onMainSite) {
                 done({
                   ok: false,
-                  error: !onMainSite
-                    ? 'not-on-main-site: ' + (currentUrl || 'unknown')
-                    : 'login-state-not-detected',
-                  friendlyMessage: !onMainSite
-                    ? '登录后未跳转回厂商主站，请完成登录流程后重试'
-                    : '未检测到登录状态，请确认已完成登录后重试'
+                  error: 'not-on-main-site: ' + (currentUrl || 'unknown'),
+                  friendlyMessage: '登录后未跳转回厂商主站，请完成登录流程后重试'
                 })
                 return
               }
@@ -855,11 +978,16 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
 
     void win.loadURL(loginUrl).catch((e: unknown) => {
       const rawErr = String(e)
-      const isNetworkErr = /ERR_FAILED|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION/i.test(rawErr)
-      const friendlyMessage = isNetworkErr
-        ? '登录页加载失败，请检查网络或稍后重试'
-        : '登录页加载失败，请稍后重试'
-      done({ ok: false, error: `load-url: ${rawErr}`, friendlyMessage })
+      // 加载被中止（例如登录窗口在页面加载完成前被关闭/跳转打断）：按「已取消」处理，避免误报网络故障
+      const isAborted = /ERR_ABORTED/i.test(rawErr)
+      // 仅真正的网络类错误才提示检查网络；ERR_FAILED 等通用失败不归因于网络
+      const isNetworkErr = /ERR_NAME_NOT_RESOLVED|ERR_CONNECTION|ERR_TIMED_OUT|ERR_INTERNET_DISCONNECTED|ERR_SSL_PROTOCOL_ERROR/i.test(rawErr)
+      const friendlyMessage = isAborted
+        ? '登录窗口已关闭，未获取到登录信息'
+        : isNetworkErr
+          ? '登录页加载失败，请检查网络或稍后重试'
+          : '登录页加载失败，请稍后重试'
+      done({ ok: false, canceled: isAborted, error: `load-url: ${rawErr}`, friendlyMessage })
     })
   })
 }

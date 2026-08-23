@@ -412,7 +412,7 @@ COMMENT ON COLUMN quota_ledger.reserved IS
 CREATE TABLE IF NOT EXISTS quota_operations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  ledger_id UUID NOT NULL REFERENCES quota_ledger(id),
+  ledger_id UUID NOT NULL REFERENCES quota_ledger(id) ON DELETE CASCADE,
   operation_type TEXT NOT NULL CHECK (operation_type IN ('reserve', 'finalize', 'release')),
   amount NUMERIC NOT NULL CHECK (amount > 0),
   created_at TIMESTAMPTZ DEFAULT now(),

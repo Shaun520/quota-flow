@@ -534,8 +534,9 @@ function firstEnabledProvider(providers: ProviderOption[]): ProviderOption | und
   return providers.find((p) => p.enabled !== false)
 }
 
-/** 千问/元宝/Dola 这类 cookie 型厂商，已有账号存在时避免重复绑定，优先自动刷新或保存新指纹明确的账号。 */
-const AUTO_RESOLVE_EXISTING_PROVIDER_IDS = new Set(['qwenwan', 'yuanbao', 'dola'])
+/** 千问/元宝/Dola 这类 cookie 型厂商，已有账号存在时避免重复绑定，优先自动刷新或保存新指纹明确的账号。
+ * 注：千问 webview 登录实际走 qwen（www.qianwen.com），qwenwan 为兼容旧数据保留，两者都需参与去重。 */
+const AUTO_RESOLVE_EXISTING_PROVIDER_IDS = new Set(['qwen', 'qwenwan', 'yuanbao', 'dola', 'chatglm', 'doubao'])
 
 function shouldAutoResolveExistingProvider(providerId: string): boolean {
   return AUTO_RESOLVE_EXISTING_PROVIDER_IDS.has(providerId)
@@ -1218,8 +1219,19 @@ export function AddProviderModal({
         return
       }
 
-      // 指纹为空且已有账号：无法自动识别 → 让用户选择（新增 / 刷新某个已有账号）
-      if (existing.length > 0) {
+      // 指纹为空且已有账号：
+      // - 仅 1 个已有账号 → 直接刷新（无需选择）
+      // - 多个已有账号 → 让用户选择（新增 / 刷新某个已有账号）
+      if (existing.length === 1) {
+        if (await refreshExisting(existing[0], res.accountFingerprint)) {
+          setStatus('login-ok')
+          return
+        }
+        setError('刷新已有账号失败，请重试')
+        setStatus('login-fail')
+        return
+      }
+      if (existing.length > 1) {
         setExistingKeys(existing)
         setRefreshTarget('new')
         setStatus('pick-account')
@@ -1435,9 +1447,11 @@ export function AddProviderModal({
             )}
             {status === 'login-fail' && (
               <div>
-                <p className="auth-msg auth-msg-error" style={{ margin: '0 0 12px' }}>
-                  {error ?? '登录失败，请重试'}
-                </p>
+                {error && (
+                  <p className="auth-msg auth-msg-error" style={{ margin: '0 0 12px' }}>
+                    {error}
+                  </p>
+                )}
                 <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
                   重新登录
                 </button>
