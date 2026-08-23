@@ -32,6 +32,12 @@ Aggregate daily free quotas from 9 providers — Doubao / Qwen / Yuanbao / Dola 
 
 ---
 
+## Demo Video
+
+<video controls muted loop playsinline width="800" src="https://github.com/user-attachments/assets/40601ea8-1ba7-4dc5-beef-f12ec56d978e"></video>
+
+> Can't play inline? Download the original: [desktop promo video](./docs/桌面端宣传视频.mp4)
+
 ## Table of Contents
 
 - [Download](#download)

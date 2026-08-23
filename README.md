@@ -32,6 +32,12 @@
 
 ---
 
+## 宣传视频
+
+<video controls muted loop playsinline width="800" src="https://github.com/user-attachments/assets/40601ea8-1ba7-4dc5-beef-f12ec56d978e"></video>
+
+> 无法直接播放？可下载原视频：[桌面端宣传视频.mp4](./docs/桌面端宣传视频.mp4)
+
 ## 目录
 
 - [下载最新版](#下载最新版)
