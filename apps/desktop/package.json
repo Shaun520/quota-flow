@@ -1,6 +1,6 @@
 {
   "name": "@quota-flow/desktop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Quota-Flow 桌面端（Electron + Vite + React）",
   "author": "Quota-Flow",
   "private": true,
