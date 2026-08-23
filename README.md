@@ -4,7 +4,7 @@
 
 ### 一站式 AI 视频生成免费额度调度平台
 
-把豆包 / 通义 / 元宝 / 智谱 / Dola / 阿里云 / 腾讯云 等多家厂商的免费视频生成额度，聚合成一个可调度、可观测、可共享的池子。
+把豆包 / 千问 / 元宝 / Dola / 智谱清言 / 智谱（bigmodel）/ 火山方舟 / 阿里云百炼 / 腾讯云 9 家厂商的免费视频生成额度，聚合成一个可调度、可观测、可共享的池子。
 
 <p>
   <a href="https://github.com/Shaun520/quota-flow/releases">
@@ -98,7 +98,7 @@ Supabase（数据库 + Auth + Edge Functions）
   React UI（4 Tab：调度台/历史/团队/设置）── 用户只看这个
   本地调度引擎（packages/core + providers）
   WebView 统一执行引擎（后台隐藏，用户不可见）── 见 REQUIREMENTS.md §5.12
-    各家厂商通过 WebView cookie 注入 + 自动提交（mcp_mathmind 真 API 除外）
+    各家厂商通过 WebView cookie 注入 + 自动提交（API Key 型厂商走开放平台真 API）
     每个共享账号独立隔离会话（session.fromPartition），互不污染
     两种提交方式（模拟用户操作 / 调页面内部 JS API）+ 三级结果提取 fallback
     提交/保活共享实例池，凌晨 3 点静默访问厂商首页自动续命 cookie
@@ -155,12 +155,17 @@ apps/
 
 | 厂商 id | 产品 | 额度单位 | 扣减影响因素 | 能力 | 调用方式 |
 |---|---|---|---|---|---|
-| doubao | 豆包 doubao.com | count（次数） | 时长（5s/10s 扣不同） | 文/图 | WebView cookie 注入 + 自动提交（保留 Node.js HTTP adapter 兜底） |
-| qwenwan | 通义万相 tongyi.aliyun.com / qianwen.com | count（次数） | 时长 | 文/图/视频续写 | WebView cookie 注入 + 自动提交（风控签名 bx-ua/clt-acs-sign，CLI 无法直调） |
-| yuanbao | 元宝混元 yuanbao.tencent.com | count（次数） | 固定次数 | 文/图 | WebView cookie 注入 + 自动提交（保留 Node.js HTTP adapter 兜底） |
-| mathmind | mcp_mathmind-video | count（次数） | 固定次数 | img2video/imgs2video/video2video | 真 API（WebView 方案的唯一例外） |
+| doubao | 豆包 doubao.com | 点（次数） | 时长（5s/10s 扣不同） | 文生/图生视频 | WebView cookie 注入 + 自动提交 |
+| qwen / qwenwan | 千问（通义万相）qianwen.com | 额度（次数） | 时长 | 文生/图生/多参考/首尾帧视频 | WebView cookie 注入 + 自动提交（风控签名 bx-ua/clt-acs-sign） |
+| yuanbao | 元宝混元 yuanbao.tencent.com | 个（次数） | 固定次数 | 文生/图生视频 | WebView cookie 注入 + 自动提交 |
+| dola | Dola dola.com | 点（次数） | 时长（5s/10s） | 图生视频（多参考） | WebView cookie 注入 + 自动提交 |
+| chatglm | 智谱清言 chatglm.cn | 次 | — | 暂未接入视频生成（仅账号绑定） | WebView cookie 登录（暂不生成） |
+| zhipu | 智谱（bigmodel）bigmodel.cn | 次 | 按模型计费（flash 免费 / -2 ¥0.5/次 / -3 ¥1/次） | 文生/图生/首尾帧/多参考视频 | 开放平台真 API（API Key） |
+| volcengine | 火山方舟 console.volcengine.com/ark | 次（免费 token 额度） | 免费视频模型按次 | 文生/图生视频 | 开放平台真 API（API Key） |
+| bailian | 阿里云百炼 bailian.console.aliyun.com | 次 | 免费额度 | 文生/图生/多参考/首尾帧视频（wan2.7 支持音频参考） | 开放平台真 API（API Key） |
+| tokenhub | 腾讯云TokenHub console.cloud.tencent.com/tokenhub | 积分（1 积分≈1 元） | 按模型/时长（如 hy-video-1.5 1.5 积分/次） | 文生/图生视频 | 开放平台真 API（API Key） |
 
-国内主流厂商的免费额度绑登录态，不绑 apikey。**mcp_mathmind 是唯一走真 API 的厂商，其余 3 家全部走 WebView 统一执行引擎**（cookie 注入 + 自动提交，参考 REQUIREMENTS.md §5.12）。对于千问这类含风控签名的厂商，WebView 前端 JS 自带签名算法，无需逆向。
+免费额度按厂商分两类绑定：**cookie 型**（豆包/千问/元宝/Dola/智谱清言）走 WebView 统一执行引擎，cookie 注入 + 自动提交（参考 REQUIREMENTS.md §5.12）；千问这类含风控签名的厂商，WebView 前端 JS 自带签名算法，无需逆向。**API Key 型**（智谱/火山方舟/阿里云百炼/腾讯云TokenHub）直接调各开放平台真 API，额度由接入层自动核算。
 
 所有厂商消耗不是固定“1 次”——豆包 5s/10s 的扣减都不一样，由 `provider_cost_tables` 表驱动，最后折算统一的“等效次数”用于 UI 总览 + 成员日额度上限。
 

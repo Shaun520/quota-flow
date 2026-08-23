@@ -4,7 +4,7 @@
 
 ### One-Stop AI Video Generation Free-Quota Scheduler
 
-Aggregate daily free quotas from Doubao / Qwen / Yuanbao and more into a single schedulable, observable, and shareable pool.
+Aggregate daily free quotas from 9 providers — Doubao / Qwen / Yuanbao / Dola / ChatGLM / Zhipu (bigmodel) / Volcano Ark / Alibaba Cloud Bailian / Tencent Cloud — into a single schedulable, observable, and shareable pool.
 
 <p>
   <a href="https://github.com/Shaun520/quota-flow/releases">
@@ -98,7 +98,7 @@ Desktop Electron (the only product entry point)
   React UI (4 tabs: Dispatch / History / Team / Settings) — users only see this
   Local scheduling engine (packages/core + providers)
   Unified WebView execution engine (hidden background, see REQUIREMENTS.md §5.12)
-    All providers via WebView cookie injection + auto-submit (except mcp_mathmind real API)
+    All providers via WebView cookie injection + auto-submit (API-Key-based providers use open-platform real API)
     Each shared account uses an isolated session (session.fromPartition), no cross-contamination
     Two submit modes (simulate user actions / call page internal JS API) + three-tier result-extraction fallback
     Shared instance pool for submit/keep-alive, silent 3 AM homepage visits to renew cookies
@@ -155,12 +155,17 @@ apps/
 
 | Provider ID | Product | Quota Unit | Cost Factors | Capabilities | Invocation Method |
 |---|---|---|---|---|---|
-| doubao | Doubao doubao.com | count | Duration (5s/10s differ) | text/image | WebView cookie injection + auto-submit (Node.js HTTP adapter fallback) |
-| qwenwan | Tongyi Wanxiang tongyi.aliyun.com / qianwen.com | count | Duration | text/image/video-extension | WebView cookie injection + auto-submit (risk-control signatures bx-ua/clt-acs-sign, CLI cannot call directly) |
-| yuanbao | Yuanbao Hunyuan yuanbao.tencent.com | count | Fixed count | text/image | WebView cookie injection + auto-submit (Node.js HTTP adapter fallback) |
-| mathmind | mcp_mathmind-video | count | Fixed count | img2video/imgs2video/video2video | Real API (the only exception to the WebView approach) |
+| doubao | Doubao doubao.com | Points (count) | Duration (5s/10s differ) | Text-to-video / Image-to-video | WebView cookie injection + auto-submit |
+| qwen / qwenwan | Qwen (Tongyi Wanxiang) qianwen.com | Quota (count) | Duration | Text-to-video / Image-to-video / Multi-ref / First-last frames | WebView cookie injection + auto-submit (risk-control signatures bx-ua/clt-acs-sign) |
+| yuanbao | Yuanbao Hunyuan yuanbao.tencent.com | Count | Fixed count | Text-to-video / Image-to-video | WebView cookie injection + auto-submit |
+| dola | Dola dola.com | Points (count) | Duration (5s/10s) | Image-to-video (multi-ref) | WebView cookie injection + auto-submit |
+| chatglm | ChatGLM chatglm.cn | Count | — | Account binding only (video generation not yet integrated) | WebView cookie login (no generation yet) |
+| zhipu | Zhipu (bigmodel) bigmodel.cn | Count | Per-model billing (flash free / -2 ¥0.5/call / -3 ¥1/call) | Text-to-video / Image-to-video / First-last frames / Multi-ref | Open platform real API (API Key) |
+| volcengine | Volcano Ark console.volcengine.com/ark | Count (free token quota) | Free video models per call | Text-to-video / Image-to-video | Open platform real API (API Key) |
+| bailian | Alibaba Cloud Bailian bailian.console.aliyun.com | Count | Free quota | Text-to-video / Image-to-video / Multi-ref / First-last frames (wan2.7 supports audio reference) | Open platform real API (API Key) |
+| tokenhub | Tencent Cloud TokenHub console.cloud.tencent.com/tokenhub | Credits (1 credit ≈ ¥1) | Per model / duration (e.g. hy-video-1.5 1.5 credits/call) | Text-to-video / Image-to-video | Open platform real API (API Key) |
 
-Mainstream Chinese mainland providers tie free quotas to login state, not API keys. **mcp_mathmind is the only provider using a real API; the other 3 use the unified WebView execution engine** (cookie injection + auto-submit, see REQUIREMENTS.md §5.12). For providers like Qwen with risk-control signatures, the WebView front-end JS already contains the signing algorithm, so no reverse engineering is needed.
+Free quotas are bound in two ways: **cookie-based providers** (Doubao / Qwen / Yuanbao / Dola / ChatGLM) go through the unified WebView execution engine with cookie injection + auto-submit (see REQUIREMENTS.md §5.12); for Qwen-like risk-control signatures, the WebView front-end JS already contains the signing algorithm, so no reverse engineering is needed. **API-Key-based providers** (Zhipu / Volcano Ark / Alibaba Cloud Bailian / Tencent Cloud TokenHub) call each open platform's real API directly, with quota computed by the integration layer.
 
 Provider costs are not a fixed “1 per call” — Doubao 5s/10s deducts differently. These are driven by the `provider_cost_tables` table and ultimately normalized into a unified “equivalent count” for UI dashboards and per-member daily caps.
 
