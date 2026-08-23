@@ -1043,14 +1043,18 @@ export function AddProviderModal({
           ? await window.api.providers.captureZhipuSession(bindId ?? undefined)
           : { ok: false, error: '该厂商不支持控制台会话捕获' })
       if (finalRes.ok) {
-        if (finalRes.consoleJwt) setConsoleJwt(finalRes.consoleJwt)
+        if (finalRes.consoleJwt) {
+          setConsoleJwt(finalRes.consoleJwt)
+          // 智谱：控制台会话捕获成功，给出可见成功提示（火山/百炼/腾讯云在下方各有专属提示，智谱需单独一眼反馈）
+          if (providerId === 'zhipu') setNotice('已捕获智谱控制台会话，请在下方粘贴 API Key 后保存账号')
+        }
         if (finalRes.accountId) {
           if (isBailian) setBailianAccountId(finalRes.accountId)
           else setVolcAccountId(finalRes.accountId)
         }
         if (isTokenhub && finalRes.uin) {
           setTkhAccountId(finalRes.uin)
-          setNotice(`已识别主账号（Uin ${finalRes.uin}），将以账号级去重绑定`)
+          setNotice(`已识别主账号（Uin ${finalRes.uin}）`)
         }
         // 「绑定即抓额度」：腾讯云 TokenHub 抓取每模型免费视频额度并随负载持久化，供「查看模型」按模型展示
         if (isTokenhub && Array.isArray(finalRes.models) && finalRes.models.length > 0) {

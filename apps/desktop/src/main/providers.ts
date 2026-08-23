@@ -1025,30 +1025,18 @@ async function injectSiteCredentials(providerId: string, keyId: string, encrypte
   if (!encryptedKey) return
   if (providerId === 'zhipu' || providerId === 'volcengine') return // 共享控制台分区，无需账号级注入
   if (providerId === 'bailian') {
-    let payloadCookies = 0
     try {
-      const plain = safeStorage.decryptString(Buffer.from(encryptedKey, 'base64'))
-      const d = decodeBailianPayload(plain)
-      payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
-      const before = await collectBailianConsoleCookies(keyId)
-      if (payloadCookies > 0) await injectBailianConsoleCookies(keyId, d.cookies!)
-      const after = await collectBailianConsoleCookies(keyId)
-      console.log(
-        `[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} before=${before.length} after=${after.length}`
-      )
-    } catch (e) {
-      console.log(`[qf-bailian] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
+      const d = decodeBailianPayload(safeStorage.decryptString(Buffer.from(encryptedKey, 'base64')))
+      if (Array.isArray(d.cookies) && d.cookies.length > 0) await injectBailianConsoleCookies(keyId, d.cookies)
+    } catch {
+      // 注入失败不影响官网已打开（cookie 为空时依赖分区持久化登录态）
     }
   } else if (providerId === 'tokenhub') {
-    let payloadCookies = 0
     try {
-      const plain = safeStorage.decryptString(Buffer.from(encryptedKey, 'base64'))
-      const d = decodeTokenhubPayload(plain)
-      payloadCookies = Array.isArray(d.cookies) ? d.cookies.length : 0
-      if (payloadCookies > 0) await injectTokenhubConsoleCookies(keyId, d.cookies!)
-      console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies}`)
-    } catch (e) {
-      console.log(`[qf-tokenhub] OPEN-SITE-INJECT keyId=${keyId} payloadCookies=${payloadCookies} err=${e instanceof Error ? e.message : String(e)}`)
+      const d = decodeTokenhubPayload(safeStorage.decryptString(Buffer.from(encryptedKey, 'base64')))
+      if (Array.isArray(d.cookies) && d.cookies.length > 0) await injectTokenhubConsoleCookies(keyId, d.cookies)
+    } catch {
+      // 同上：注入失败不阻塞，走分区持久化登录态
     }
   } else {
     const parsed = parseStoredCredentials(encryptedKey, providerId)
@@ -1098,16 +1086,35 @@ function buildApiKeyHintBar(args: {
         '<button id="${btnId}" style="padding:5px 12px;border:0;border-radius:6px;background:#2ea56f;color:#fff;font:600 12px/1 inherit;cursor:pointer;">${buttonText}</button>' +
         '</div>';
       document.body.appendChild(bar);
-      document.getElementById('${btnId}').addEventListener('click', () => { ${onButtonClick} });
-      let dragging = false, offX = 0, offY = 0;
-      const grip = document.getElementById('${gripId}');
-      const header = document.getElementById('${headerId}');
+      const btn = document.getElementById('${btnId}');
       const barEl = document.getElementById('${barId}');
-      const startDrag = (e) => { dragging = true; offX = e.clientX - barEl.offsetLeft; offY = e.clientY - barEl.offsetTop; barEl.style.cursor = 'grabbing'; e.preventDefault(); };
-      if (grip) grip.addEventListener('mousedown', startDrag);
-      if (header) header.addEventListener('mousedown', startDrag);
-      document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; });
-      document.addEventListener('mouseup', () => { dragging = false; barEl.style.cursor = 'grab'; });
+      const isBtnHit = (t) => t && btn && btn.contains && btn.contains(t);
+      const isBarHit = (t) => t && barEl && barEl.contains && barEl.contains(t);
+      // 捕获阶段监听：部分控制台 SPA 会在冒泡/目标阶段吞掉按钮点击与拖拽事件，导致「点了没反应 / 拖不动」。
+      // document 捕获阶段最早触发，可绕过页面自身的拦截。
+      document.addEventListener(
+        'click',
+        (e) => {
+          if (!isBtnHit(e.target)) return;
+          try { ${onButtonClick} } catch (_) {}
+          try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+        },
+        true
+      );
+      let dragging = false, offX = 0, offY = 0;
+      const startDrag = (e) => {
+        if (!isBarHit(e.target) || isBtnHit(e.target)) return;
+        dragging = true;
+        const rc = barEl.getBoundingClientRect();
+        offX = e.clientX - rc.left; offY = e.clientY - rc.top;
+        barEl.style.cursor = 'grabbing';
+        try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+      };
+      const endDrag = () => { dragging = false; barEl.style.cursor = 'grab'; };
+      document.addEventListener('mousedown', startDrag, true);
+      document.addEventListener('mousemove', (e) => { if (!dragging) return; const x = Math.max(4, Math.min(window.innerWidth - barEl.offsetWidth - 4, e.clientX - offX)); const y = Math.max(4, Math.min(window.innerHeight - barEl.offsetHeight - 4, e.clientY - offY)); barEl.style.left = x + 'px'; barEl.style.top = y + 'px'; }, true);
+      document.addEventListener('mouseup', endDrag, true);
+      document.addEventListener('mouseleave', endDrag, true);
     })()`
 }
 
@@ -1132,19 +1139,6 @@ async function openProviderSite(
     url = BAILIAN_CONSOLE_URL
     partition = bailianConsolePartitionFor(keyId)
     injectableEncrypted = encryptedKey
-    // 诊断：确认登录 cookie 是否真的落在该账号控制台分区（用于排查「进入官网未登录」）
-    try {
-      const diagSes = session.fromPartition(partition)
-      const diagCks = await diagSes.cookies.get({ url: BAILIAN_CONSOLE_URL })
-      console.log(
-        `[qf-bailian] OPEN-SITE keyId=${keyId} partition=${partition} cookies=${diagCks.length} names=[${diagCks
-          .slice(0, 8)
-          .map((c) => c.name)
-          .join(',')}]`
-      )
-    } catch {
-      /* 诊断失败不影响打开官网 */
-    }
   } else if (providerId === 'tokenhub') {
     // 复用绑定时捕获会话所在分区（persist:qf-tokenhub-console[:keyId]），打开即带已登录会话；每账号独立分区不串号
     url = TKH_CONSOLE_APIKEY_URL
@@ -1707,6 +1701,7 @@ export async function captureZhipuConsoleSession(opts?: {
       }
     };
     window.__ZF_SCAN__ = setInterval(scanStorage, 1500);
+    window.__ZF_SCAN_STORAGE__ = scanStorage;
     scanStorage();
   })()`
   const CAPTURE_INJECT = INJECT
@@ -1719,7 +1714,7 @@ export async function captureZhipuConsoleSession(opts?: {
     ],
     buttonText: '已获取key返回',
     onButtonClick:
-      'scanStorage(); window.__ZF_SUBMIT__ = true; window.__ZF_STATE__ = window.__ZF_CAPTURED__ ? "ok" : "none";'
+      '(window.__ZF_SCAN_STORAGE__ || function(){})(); window.__ZF_SUBMIT__ = true; window.__ZF_STATE__ = window.__ZF_CAPTURED__ ? "ok" : "none";'
   })
 
   const inject = (): void => {
@@ -1935,6 +1930,7 @@ export async function captureVolcEngineConsoleSession(opts?: {
     };
     const realUidResolve = () => { const r = extractRealUserid(); if (r) window.__VF_REAL_UID__ = r; return r || null; };
     window.__VF_REAL_UID__ = null;
+    window.__VF_REAL_UID_RESOLVE__ = realUidResolve;
     // 账号标识写入 + 落 localStorage：volc 控制台从「开通管理」切到「API Key 管理」是整页跳转(非 SPA)，
     // 页面全局 __VF_ACCOUNT__ 会被清空；持久化到同源 localStorage(按分区隔离)后，任何一次整页加载都能恢复。
     const persistAccount = (id) => {
@@ -1945,6 +1941,7 @@ export async function captureVolcEngineConsoleSession(opts?: {
       if (!target) return;
       try { window.__VF_ACCOUNT__ = target; window.localStorage.setItem('qf:volc:account', String(target)); } catch (_) {}
     };
+    window.__VF_PERSIST_ACCOUNT__ = persistAccount;
     if (realUidResolve()) {
       persistAccount(window.__VF_REAL_UID__);
     } else {
@@ -2295,12 +2292,12 @@ export async function captureVolcEngineConsoleSession(opts?: {
             let dec = raw; try { dec = dc2(raw); } catch (_) {}
             parts.push(ak + '=' + String(dec).slice(0, 90));
           }
-          const r = realUidResolve();
+          const r = (window.__VF_REAL_UID_RESOLVE__ || function(){})();
           parts.push('REAL=' + (r || 'null'));
           diag = parts.join(' | ');
           try { window.localStorage.setItem('qf:volc:diag', diag); } catch (_) {}
         } catch (_) {}
-        realUidResolve(); if (window.__VF_REAL_UID__) persistAccount(window.__VF_REAL_UID__);
+        (window.__VF_REAL_UID_RESOLVE__ || function(){})(); if (window.__VF_REAL_UID__ && window.__VF_PERSIST_ACCOUNT__) window.__VF_PERSIST_ACCOUNT__(window.__VF_REAL_UID__);
         window.__VF_SUBMIT__ = true; window.__VF_STATE__ = window.__VF_CAPTURED__ ? 'ok' : 'empty';`
 
   const UI_HINT = buildApiKeyHintBar({
@@ -2962,14 +2959,10 @@ export async function captureBailianConsoleSession(opts?: {
               return
             }
             if (!quiet && !uiGo) return // 数据已就绪但用户尚未点返回，继续等待
-            console.log(
-              `[qf-bailian] CAPTURE ok accountId=${accountId ? `YES:${accountId}` : 'NO'} rawLen=${raw.length} quiet=${quiet}`
-            )
             // 捕获成功后读取该账号控制台分区的登录 cookie，随负载持久化，供「进入官网」跨重启重建登录态
             void Promise.resolve()
               .then(() => collectBailianConsoleCookies(optKeyId))
               .then((cookies) => {
-                console.log(`[qf-bailian] CAPTURE cookies=${cookies.length}`)
                 // 最近一次成功捕获的 cookie 按 accountId 缓存，供后续 provider:encrypt 兜底合并进负载
                 if (accountId && cookies.length > 0) bailianCapturedCookies.set(accountId, cookies)
                 done({
@@ -3278,7 +3271,6 @@ export async function captureTokenhubConsoleSession(opts?: {
       }
       const uin = await resolveUin()
       if (uin && !settled && !capturedUin) {
-        console.log(`[qf-tokenhub] CAPTURE uin=${uin}`)
         capturedUin = uin
         uinAt = Date.now()
         // 立即收集一次作为兜底底稿；最终完整登录态以窗口关闭时归档为准
@@ -3286,24 +3278,10 @@ export async function captureTokenhubConsoleSession(opts?: {
       }
       if (!settled) {
         await readQuota()
-        if (capturedQuota && capturedQuota.length) {
-          console.log(`[qf-tokenhub] CAPTURE quota models=${capturedQuota.length}`)
-        }
       }
       // 已拿 uin，且「拿到每模型额度 或 额度宽限已过」→ 结算。
       // 交互式(closeWin=false)结算后保持窗口打开供用户复制 API Key；静默续期(closeWin=true)关窗释放。
       if (capturedUin && !settled && ((capturedQuota && capturedQuota.length > 0) || Date.now() - uinAt > QUOTA_GRACE_MS)) {
-        if (!capturedQuota || capturedQuota.length === 0) {
-          // 结算时仍未抓到每模型额度：把是否真的收到过 VISION 响应、以及 __TKH_OK__ 态打出来，便于定位是「点不出标签」还是「接口未返回额度」
-          try {
-            const dbg = await win.webContents.executeJavaScript(
-              '(function(){let r=[];try{r=JSON.parse(sessionStorage.getItem("__qftkh_resp__")||"[]")}catch(_){}let d=null;try{d=JSON.parse(sessionStorage.getItem("__qftkh_diag__")||"null")}catch(_){d=window.__QUOTA_FLOW_TKH_DIAG__}return JSON.stringify({ok:!!(r.length||window.__TKH_OK__),submit:!!(r.length||window.__TKH_SUBMIT__),resp:r.length||(window.__TKH_RESPONSES__||[]).length,diag:d||window.__TKH_DIAG__||null})})()'
-            )
-            console.log(`[qf-tokenhub] CAPTURE no-quota uin=${uin} ${dbg || ''}`)
-          } catch {
-            console.log(`[qf-tokenhub] CAPTURE no-quota uin=${uin}`)
-          }
-        }
         finish({ ok: true, uin: capturedUin, models: buildModels() }, quiet)
       }
     }
@@ -3338,7 +3316,6 @@ export function initProviders(): void {
                 const obj = JSON.parse(trimmedP)
                 obj.cookies = live
                 payloadPlain = JSON.stringify(obj)
-                console.log(`[qf-bailian] ENC mergeCapturedCookies accountId=${d.accountId} n=${live.length}`)
               } catch {}
             }
           }
@@ -3355,7 +3332,6 @@ export function initProviders(): void {
                 const obj = JSON.parse(trimmedT)
                 obj.cookies = live
                 payloadPlain = JSON.stringify(obj)
-                console.log(`[qf-tokenhub] ENC mergeCapturedCookies uin=${d.uin} n=${live.length}`)
               } catch {}
             }
           }
@@ -3384,12 +3360,7 @@ export function initProviders(): void {
             `ENC_VOLC accountId=${accountId ? `YES:${accountId}` : 'NO'} fp_level=${fingerprint ? (accountId ? 'account' : 'key-hash') : 'none'}`
           )
         }
-        // 阿里云百炼去重诊断：payload 带 accountId（会话捕获）时按「账号级」指纹去重，否则退化为 Key 哈希
-        if (providerId === 'bailian') {
-          console.log(
-            `[qf-bailian] ENC fp_level=${fingerprint ? (decodeBailianPayload(plain || '').accountId ? 'account' : 'key-hash') : 'none'} keyLen=${plain.trim().length}`
-          )
-        }
+        // 阿里云百炼去重：payload 带 accountId（会话捕获）时按「账号级」指纹去重，否则退化为 Key 哈希
       }
       return { encrypted, fingerprint }
     } catch {
@@ -3529,9 +3500,6 @@ export function initProviders(): void {
     if (tiers === null || tiers.length === 0) {
       return { ok: false, error: '未捕获到有效免费额度，请确认已打开「免费额度」视觉模型页' }
     }
-    console.log(
-      `[qf-bailian] CAPTURE parsed accountId=${res.accountId ?? 'NO'} tiers=${tiers.length} remaining=${aggregateBailianFreeQuota(tiers).remaining}`
-    )
     return { ok: true, accountId: res.accountId ?? null, freeTiers: tiers }
   })
 
@@ -3567,7 +3535,6 @@ export function initProviders(): void {
         })
         const newEncrypted = safeStorage.encryptString(newPlain).toString('base64')
         const quota = aggregateBailianFreeQuota(tiers)
-        console.log(`[qf-bailian] REFRESH key=${keyId} tiers=${tiers.length} remaining=${quota.remaining}`)
         return { ok: true, encrypted: newEncrypted, freeTiers: tiers, quota }
       } catch (e) {
         return { ok: false, reason: 'error', error: e instanceof Error ? e.message : '额度刷新失败' }
@@ -3806,10 +3773,22 @@ export function initProviders(): void {
       if (typeof encryptedKey === 'string' && encryptedKey) {
         await injectSiteCredentials(providerId, keyId, encryptedKey)
       }
-      // 注入完成后 reload 已打开的官网窗口，让 cookie 生效
+      // 注入完成后 reload 已打开的官网窗口，让 cookie 生效。
+      // 首次点击时窗口可能仍在加载：若 isLoading() 直接跳过，首屏会停留在冷缓存（未登录）状态，
+      // 需等加载完成后再 reload 一次补齐登录态（否则会出现「第一次未登录、第二次才登录」）。
       const win = siteWindows.get(winKey)
-      if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
-        win.webContents.reload()
+      if (win && !win.isDestroyed()) {
+        const doReload = () => {
+          if (!win.isDestroyed() && !win.webContents.isLoading()) win.webContents.reload()
+        }
+        if (!win.webContents.isLoading()) {
+          doReload()
+        } else {
+          win.webContents.once('did-finish-load', () => {
+            // 等待真实加载结束后再补一发 reload，让注入的登录 cookie 生效（once 不会触发二次 reload 循环）
+            setImmediate(() => doReload())
+          })
+        }
       }
       return { ok: true }
     }

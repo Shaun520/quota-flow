@@ -345,19 +345,12 @@ export async function fetchZhipuQuota(
     const jwt = extractJwt(consoleJwt)
     // 仅当 consoleJwt 内确能提取到标准 JWT 时才用它；否则回退 API Key，避免贴脏值导致 401
     const authHeader = jwt ? `Bearer ${jwt}` : `Bearer ${apiKey}`
-    console.log(
-      "[zhipu-quota] auth=JWT prefix=%s len=%d (true:consoleJwt,false:apiKey)",
-      authHeader.slice(7, 23),
-      authHeader.length - 7,
-      !!jwt
-    )
     const res = await fetch(BIZ_QUOTA_URL, {
       method: "GET",
       headers: { Authorization: authHeader },
       signal: AbortSignal.timeout(15000),
     })
     const text = await res.text()
-    console.log("[zhipu-quota] HTTP %d bodyLen=%d prefix=%s", res.status, text.length, text.slice(0, 240))
     let data: { rows?: unknown } | null = null
     try {
       data = JSON.parse(text) as { rows?: unknown } | null
@@ -368,7 +361,6 @@ export async function fetchZhipuQuota(
       return { ok: false, error: `额度查询失败（HTTP ${res.status}）` }
     }
     const rows = data.rows as Array<Record<string, unknown>>
-    console.log("[zhipu-quota] rows=%d sampleKeys=%j", rows.length, rows[0] ? Object.keys(rows[0]) : [])
     // 账号标识：同一智谱账号（同一 customerId）下可有多个 API Key，用于账号级去重
     const ownerCust = rows[0]?.customerId
     const isExpired = (r: Record<string, unknown>): boolean => r.status === "EXPIRED"
@@ -395,15 +387,6 @@ export async function fetchZhipuQuota(
     }
     const first = candidates[0]
     const verboseRemaining = Number(first.availableBalance ?? first.tokenBalance ?? first.tokensMagnitude ?? 0)
-    console.log(
-      "[zhipu-quota] pkg=%s total=%s remaining(availableBalance=%s tokenBalance=%s tokensMagnitude=%s) expired=%s",
-      String(first.resourcePackageName ?? "?"),
-      String(first.tokensMagnitude ?? first.tokenBalance ?? "?"),
-      String(first.availableBalance ?? "?"),
-      String(first.tokenBalance ?? "?"),
-      String(first.tokensMagnitude ?? "?"),
-      String(first.status ?? "?")
-    )
     return {
       ok: true,
       quota: {
