@@ -15,7 +15,7 @@
     "@quota-flow/providers": "workspace:*",
     "@quota-flow/auth": "workspace:*",
     "@quota-flow/db-supabase": "workspace:*",
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
