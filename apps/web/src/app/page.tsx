@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import {
   Zap,
@@ -138,117 +139,14 @@ export default function HomePage() {
             </div>
 
             <div className="dashboard-mockup dark-app" aria-hidden="true">
-              <div className="mockup-titlebar">
-                <span className="mockup-dots">
-                  <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
-                </span>
-                <span className="mockup-title">Quota-Flow 桌面端</span>
-                <span className="mockup-user">Admin</span>
-              </div>
-              <div className="mockup-topbar">
-                <div className="topbar-logo">
-                  <img src="/logo.svg" alt="Quota-Flow" />
-                </div>
-                <div className="topbar-tabs">
-                  <span className="tab active">调度台</span>
-                  <span className="tab">创作中心</span>
-                  <span className="tab">厂商</span>
-                  <span className="tab">历史</span>
-                  <span className="tab">团队</span>
-                </div>
-              </div>
-              <div className="mockup-content">
-                <div className="mockup-panel generate-panel">
-                  <div className="panel-header">
-                    <h4>生成视频</h4>
-                    <span className="panel-hint">预计消耗 ~3 点</span>
-                  </div>
-                  <div className="mock-prompt" />
-                  <div className="mock-row">
-                    <div className="mock-select"><span className="label">厂商</span><div className="value">豆包</div></div>
-                    <div className="mock-select"><span className="label">模型</span><div className="value">Doubao-V2</div></div>
-                  </div>
-                  <div className="mock-row">
-                    <div className="mock-select"><span className="label">时长</span><div className="value">5 秒</div></div>
-                    <div className="mock-select"><span className="label">分辨率</span><div className="value">720p</div></div>
-                  </div>
-                  <div className="mock-upload">
-                    <span className="upload-icon">+</span>
-                    <span>点击或拖拽上传参考图</span>
-                  </div>
-                  <div className="mock-btn-generate">
-                    <span>开始生成</span>
-                  </div>
-                  <div className="mock-history">
-                    <div className="mock-history-title">
-                      <span>最近历史</span>
-                      <a>查看全部</a>
-                    </div>
-                    <div className="mock-history-list">
-                      <div className="mock-history-item">
-                        <div className="thumb">🎬</div>
-                        <div className="info">
-                          <div className="title">城市夜景航拍镜头</div>
-                          <div className="meta">豆包 · 5秒 · 2分钟前</div>
-                        </div>
-                      </div>
-                      <div className="mock-history-item">
-                        <div className="thumb">🌊</div>
-                        <div className="info">
-                          <div className="title">海浪拍打沙滩慢镜头</div>
-                          <div className="meta">通义万相 · 5秒 · 12分钟前</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="mockup-panel status-panel">
-                  <div className="panel-header">
-                    <h4>厂商实时状态</h4>
-                    <span className="panel-refresh">刷新</span>
-                  </div>
-                  <div className="provider-item dark">
-                    <div className="provider-icon">
-                      <img src={`${LOGO_BASE}doubao.png`} alt="豆包" loading="lazy" />
-                    </div>
-                    <div className="provider-info">
-                      <div className="provider-name">豆包 <span className="provider-quota">7 / 10 点</span></div>
-                      <div className="provider-bar"><span style={{ width: "70%" }} /></div>
-                    </div>
-                    <span className="status-dot online" />
-                  </div>
-                  <div className="provider-item dark">
-                    <div className="provider-icon">
-                      <img src={`${LOGO_BASE}qwenwan.png`} alt="通义万相" loading="lazy" />
-                    </div>
-                    <div className="provider-info">
-                      <div className="provider-name">通义万相 <span className="provider-quota">8 / 10 额度</span></div>
-                      <div className="provider-bar"><span style={{ width: "80%" }} /></div>
-                    </div>
-                    <span className="status-dot online" />
-                  </div>
-                  <div className="provider-item dark">
-                    <div className="provider-icon">
-                      <img src={`${LOGO_BASE}volcengine.png`} alt="火山方舟" loading="lazy" />
-                    </div>
-                    <div className="provider-info">
-                      <div className="provider-name">火山方舟 <span className="provider-quota">免费额度</span></div>
-                      <div className="provider-bar"><span style={{ width: "60%" }} /></div>
-                    </div>
-                    <span className="status-dot degraded" />
-                  </div>
-                  <div className="provider-item dark">
-                    <div className="provider-icon">
-                      <img src={`${LOGO_BASE}yuanbao.png`} alt="元宝混元" loading="lazy" />
-                    </div>
-                    <div className="provider-info">
-                      <div className="provider-name">元宝混元 <span className="provider-quota">4 / 5 个</span></div>
-                      <div className="provider-bar"><span style={{ width: "80%" }} /></div>
-                    </div>
-                    <span className="status-dot online" />
-                  </div>
-                </div>
-              </div>
+              <Image
+                src="/images/hero-screenshot.png"
+                alt="Quota-Flow 桌面端调度台界面"
+                width={1200}
+                height={800}
+                className="mockup-screenshot"
+                priority
+              />
             </div>
           </div>
         </div>

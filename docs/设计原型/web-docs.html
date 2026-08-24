@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>文档 — Quota-Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #1E40AF;
+      --primary-dark: #1E3A8A;
+      --primary-light: #3B82F6;
+      --accent: #D97706;
+      --bg: #F8FAFC;
+      --bg-elevated: #FFFFFF;
+      --text: #0F172A;
+      --text-secondary: #475569;
+      --text-muted: #64748B;
+      --border: #DBEAFE;
+      --muted: #E9EEF6;
+      --code-bg: #F1F5F9;
+      --success: #059669;
+      --warning: #D97706;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --radius-xl: 24px;
+      --shadow-sm: 0 1px 2px rgba(30, 64, 175, 0.05);
+      --shadow-md: 0 4px 12px rgba(30, 64, 175, 0.08);
+      --shadow-lg: 0 12px 40px rgba(30, 64, 175, 0.14);
+      --max-width: 1200px;
+      --header-height: 68px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    .container {
+      width: min(100% - 48px, var(--max-width));
+      margin-inline: auto;
+    }
+
+    /* Header */
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: var(--header-height);
+      background: rgba(248, 250, 252, 0.82);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(219, 234, 254, 0.6);
+      z-index: 100;
+    }
+    .site-header .container {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--primary-dark);
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-md);
+      background: var(--primary);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 14px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      list-style: none;
+    }
+    .nav-links a {
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: var(--radius-md);
+      transition: all .2s ease;
+    }
+    .nav-links a:hover { color: var(--primary); background: var(--muted); }
+    .header-cta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      font-weight: 600;
+      transition: all .2s ease;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+    .btn-secondary {
+      background: #fff;
+      color: var(--primary);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--primary); background: var(--muted); }
+    .btn-ghost { color: var(--text-secondary); background: transparent; }
+    .btn-ghost:hover { color: var(--primary); background: var(--muted); }
+    .mobile-menu-btn { display: none; }
+
+    /* Hero */
+    .page-hero {
+      position: relative;
+      padding: calc(var(--header-height) + 64px) 0 48px;
+      text-align: center;
+      background:
+        radial-gradient(ellipse 70% 50% at 50% -10%, rgba(59, 130, 246, 0.14), transparent),
+        linear-gradient(180deg, #EFF6FF 0%, var(--bg) 70%);
+    }
+    .page-hero h1 {
+      font-size: clamp(34px, 4.4vw, 50px);
+      line-height: 1.1;
+      font-weight: 800;
+      color: var(--primary-dark);
+      letter-spacing: -0.02em;
+    }
+    .page-hero p {
+      margin: 18px auto 0;
+      font-size: 17px;
+      color: var(--text-secondary);
+      max-width: 620px;
+    }
+
+    /* Docs layout */
+    .docs-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 48px;
+      padding: 48px 0 80px;
+    }
+    .docs-sidebar {
+      position: sticky;
+      top: calc(var(--header-height) + 24px);
+      align-self: start;
+      max-height: calc(100vh - var(--header-height) - 48px);
+      overflow-y: auto;
+    }
+    .sidebar-section {
+      margin-bottom: 24px;
+    }
+    .sidebar-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      padding-left: 12px;
+    }
+    .sidebar-links {
+      list-style: none;
+    }
+    .sidebar-links a {
+      display: block;
+      padding: 8px 12px;
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      color: var(--text-secondary);
+      transition: all .15s ease;
+      border-left: 3px solid transparent;
+    }
+    .sidebar-links a:hover { color: var(--primary); background: var(--muted); }
+    .sidebar-links a.active {
+      color: var(--primary);
+      background: rgba(30, 64, 175, 0.06);
+      border-left-color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* Main content */
+    .docs-main {
+      min-width: 0;
+    }
+    .docs-section {
+      margin-bottom: 64px;
+      scroll-margin-top: calc(var(--header-height) + 24px);
+    }
+    .docs-section h2 {
+      font-size: 30px;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 20px;
+      letter-spacing: -0.01em;
+    }
+    .docs-section h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      margin: 32px 0 14px;
+    }
+    .docs-section h4 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      margin: 24px 0 10px;
+    }
+    .docs-section p {
+      font-size: 15px;
+      color: var(--text-secondary);
+      margin-bottom: 14px;
+    }
+    .docs-section ul, .docs-section ol {
+      margin: 14px 0 14px 20px;
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+    .docs-section li { margin-bottom: 8px; }
+    .docs-section strong { color: var(--text); font-weight: 600; }
+    .docs-section a { color: var(--primary); font-weight: 500; }
+    .docs-section a:hover { text-decoration: underline; }
+    .docs-section code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      color: var(--primary-dark);
+    }
+    .docs-section pre {
+      background: #0F172A;
+      color: #E2E8F0;
+      padding: 20px;
+      border-radius: var(--radius-lg);
+      overflow-x: auto;
+      margin: 16px 0 24px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .docs-section pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      font-size: 13px;
+    }
+
+    .callout {
+      display: flex;
+      gap: 14px;
+      padding: 18px 20px;
+      border-radius: var(--radius-md);
+      margin: 20px 0;
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+    }
+    .callout.info { border-left: 4px solid var(--primary-light); }
+    .callout.warning { border-left: 4px solid var(--warning); }
+    .callout.success { border-left: 4px solid var(--success); }
+    .callout-icon { flex-shrink: 0; margin-top: 2px; }
+    .callout p { margin: 0; font-size: 14px; }
+
+    .steps-list {
+      list-style: none;
+      margin-left: 0;
+      counter-reset: step;
+    }
+    .steps-list > li {
+      position: relative;
+      padding-left: 44px;
+      margin-bottom: 20px;
+      counter-increment: step;
+    }
+    .steps-list > li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    /* Tables */
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--bg-elevated);
+      margin: 20px 0;
+    }
+    table {
+      width: 100%;
+      min-width: 680px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      background: var(--bg);
+      font-weight: 600;
+      color: var(--primary-dark);
+    }
+    tr:last-child td { border-bottom: none; }
+    td { color: var(--text-secondary); }
+
+    /* FAQ */
+    .faq-item {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .faq-question {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      background: transparent;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+      text-align: left;
+    }
+    .faq-answer {
+      padding: 0 20px 18px;
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.7;
+      display: none;
+    }
+    .faq-item.open .faq-answer { display: block; }
+    .faq-item.open .faq-icon { transform: rotate(180deg); }
+    .faq-icon { transition: transform .2s ease; color: var(--text-muted); }
+
+    /* Footer */
+    .site-footer {
+      padding: 60px 0 32px;
+      background: #fff;
+      border-top: 1px solid var(--border);
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.6fr repeat(3, 1fr);
+      gap: 48px;
+      margin-bottom: 48px;
+    }
+    .footer-brand p { margin-top: 14px; font-size: 14px; color: var(--text-secondary); max-width: 300px; line-height: 1.7; }
+    .footer-col h4 { font-size: 14px; font-weight: 700; color: var(--primary-dark); margin-bottom: 16px; }
+    .footer-col ul { list-style: none; }
+    .footer-col li { margin-bottom: 10px; }
+    .footer-col a { font-size: 14px; color: var(--text-secondary); }
+    .footer-col a:hover { color: var(--primary); }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .docs-layout { grid-template-columns: 1fr; }
+      .docs-sidebar { display: none; }
+      .footer-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 768px) {
+      .nav-links, .header-cta .btn-secondary { display: none; }
+      .mobile-menu-btn { display: grid; place-items: center; width: 38px; height: 38px; border-radius: var(--radius-md); color: var(--text-secondary); }
+      .page-hero { padding-top: calc(var(--header-height) + 48px); }
+      .footer-grid { grid-template-columns: 1fr; gap: 32px; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container">
+      <a href="web-landing.html" class="brand">
+        <span class="brand-mark">Q</span>
+        Quota-Flow
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="web-landing.html#features">特性</a></li>
+          <li><a href="web-landing.html#vendors">厂商</a></li>
+          <li><a href="web-landing.html#how">原理</a></li>
+          <li><a href="web-pricing.html">开源免费</a></li>
+          <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub</a></li>
+        </ul>
+      </nav>
+      <div class="header-cta">
+        <a href="web-pricing.html" class="btn btn-secondary">开源免费</a>
+        <a href="web-download.html" class="btn btn-primary">免费下载</a>
+      </div>
+      <button class="mobile-menu-btn btn-ghost" aria-label="菜单">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="page-hero">
+    <div class="container">
+      <h1>文档</h1>
+      <p>从下载安装到自部署，从厂商接入到团队共享，这里有你需要的全部指南。</p>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="docs-layout">
+      <aside class="docs-sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-title">指南</div>
+          <ul class="sidebar-links">
+            <li><a href="#quickstart" class="active">快速开始</a></li>
+            <li><a href="#self-host">自部署教程</a></li>
+            <li><a href="#providers">厂商清单</a></li>
+            <li><a href="#faq">常见问题</a></li>
+          </ul>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-title">参考</div>
+          <ul class="sidebar-links">
+            <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub 仓库</a></li>
+            <li><a href="https://github.com/Shaun520/quota-flow/releases" target="_blank">版本发布</a></li>
+            <li><a href="https://github.com/Shaun520/quota-flow/issues" target="_blank">问题反馈</a></li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="docs-main">
+        <section class="docs-section" id="quickstart">
+          <h2>快速开始</h2>
+          <p>Quota-Flow 是一款桌面端工具，所有功能都在桌面端完成。落地页只做介绍，不承载产品功能。</p>
+
+          <h3>1. 下载安装</h3>
+          <p>访问 <a href="web-download.html">下载页</a>，根据系统自动获取对应安装包。目前支持 Windows、macOS 与 Linux。</p>
+          <pre><code># Windows
+Quota-Flow Setup x.y.z.exe
+
+# macOS
+open Quota-Flow-x.y.z.dmg
+
+# Linux (AppImage)
+chmod +x Quota-Flow-x.y.z.AppImage
+./Quota-Flow-x.y.z.AppImage</code></pre>
+
+          <h3>2. 选择使用模式</h3>
+          <p>首次启动会提示选择模式：</p>
+          <ul>
+            <li><strong>官方托管（推荐）</strong>：注册账号即可使用，团队无席位上限，适合绝大多数用户。</li>
+            <li><strong>自部署</strong>：数据完全由自己掌控，无席位限制，适合技术用户或隐私敏感场景。</li>
+          </ul>
+
+          <div class="callout info">
+            <div class="callout-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary-light)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </div>
+            <p>自部署用户需要自备 Supabase 项目，并手动执行 migrations。详见下方「自部署教程」。</p>
+          </div>
+
+          <h3>3. 绑定厂商账号</h3>
+          <p>进入桌面端「设置」Tab，点击「绑定厂商」，按引导登录各家平台。登录完成后，cookie 会自动加密存储，额度会同步到账本。</p>
+          <ul>
+            <li>个人账号：本地内存解密，不上传云端。</li>
+            <li>团队公共账号：加密上传 Supabase，成员通过 Edge Function 代调用，明文不出云端。</li>
+          </ul>
+
+          <h3>4. 生成第一个视频</h3>
+          <p>切换到「调度台」Tab，输入 prompt 并选择时长/分辨率，点击「生成」。系统会自动：</p>
+          <ol>
+            <li>估算本次消耗</li>
+            <li>选择可用额度最多的厂商账号</li>
+            <li>后台提交生成请求</li>
+            <li>返回视频 URL 并写入历史</li>
+          </ol>
+
+          <div class="callout success">
+            <div class="callout-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+            <p>首次生成建议在 prompt 中指定「5 秒、720p」，这是大多数厂商免费额度支持的基础配置。</p>
+          </div>
+        </section>
+
+        <section class="docs-section" id="self-host">
+          <h2>自部署教程</h2>
+          <p>自部署适合希望完全掌控数据的技术用户。你需要自己注册 Supabase 并维护 migrations。</p>
+
+          <h3>前置要求</h3>
+          <ul>
+            <li>Node.js ≥ 20</li>
+            <li>pnpm 9.7.0+</li>
+            <li>一个空的 Supabase 项目（已启用 Auth + Postgres）</li>
+            <li>Git</li>
+          </ul>
+
+          <h3>安装步骤</h3>
+          <ol class="steps-list">
+            <li>
+              <strong>克隆仓库并安装依赖</strong>
+              <pre><code>git clone https://github.com/Shaun520/quota-flow.git
+cd quota-flow
+pnpm install
+pnpm build</code></pre>
+            </li>
+            <li>
+              <strong>配置环境变量</strong>
+              <pre><code>cp .env.example .env
+# 编辑 .env，填入：
+# SUPABASE_URL=https://your-project.supabase.co
+# SUPABASE_ANON_KEY=your-anon-key
+# SELF_HOSTED=true</code></pre>
+            </li>
+            <li>
+              <strong>执行数据库迁移</strong>
+              <p>按序执行 <code>migrations/*.sql</code> 中的脚本。方式 A：在 Supabase Dashboard 的 SQL Editor 中逐个执行；方式 B：等待桌面端首次启动时提示自动执行。</p>
+            </li>
+            <li>
+              <strong>启动桌面端</strong>
+              <pre><code>cd apps/desktop
+pnpm dev</code></pre>
+              <p>首次启动时，在设置中填入 Supabase URL 与 anon key，然后注册或登录即可。</p>
+            </li>
+          </ol>
+
+          <h3>CLI 真跑示例</h3>
+          <p>自部署用户也可通过 CLI 验证调度与额度：</p>
+          <pre><code># 查看额度总览
+pnpm --filter @quota-flow/cli dev check-quota
+
+# 指定厂商生成
+pnpm --filter @quota-flow/cli dev generate --mode text2video \
+  --prompt "生成5秒猫咪视频" --provider yuanbao --json
+
+# 不指定厂商，走智能调度
+pnpm --filter @quota-flow/cli dev generate --mode text2video \
+  --prompt "生成5秒猫咪视频" --json
+
+# 刷新账本
+pnpm --filter @quota-flow/cli dev refresh</code></pre>
+
+          <div class="callout warning">
+            <div class="callout-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <p>自部署用户不享受官方客服支持。遇到问题可在 GitHub Issues 提出，但不承诺 SLA。</p>
+          </div>
+        </section>
+
+        <section class="docs-section" id="providers">
+          <h2>厂商清单</h2>
+          <p>Quota-Flow 目前接入 7 家 AI 视频生成厂商。除 mathmind 走真 API 外，其余 6 家均通过 WebView 统一执行引擎调用。</p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>厂商</th>
+                  <th>产品</th>
+                  <th>额度单位</th>
+                  <th>影响因素</th>
+                  <th>调用方式</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>豆包</strong></td>
+                  <td>doubao.com</td>
+                  <td>次数</td>
+                  <td>时长（5s/10s）</td>
+                  <td>WebView cookie 注入</td>
+                </tr>
+                <tr>
+                  <td><strong>即梦</strong></td>
+                  <td>jimeng.jianying.com</td>
+                  <td>灵感值</td>
+                  <td>时长 + 分辨率 + 模型</td>
+                  <td>WebView cookie 注入</td>
+                </tr>
+                <tr>
+                  <td><strong>通义万相</strong></td>
+                  <td>tongyi.aliyun.com</td>
+                  <td>次数</td>
+                  <td>时长</td>
+                  <td>WebView cookie 注入</td>
+                </tr>
+                <tr>
+                  <td><strong>元宝混元</strong></td>
+                  <td>yuanbao.tencent.com</td>
+                  <td>次数</td>
+                  <td>固定次数</td>
+                  <td>WebView cookie 注入</td>
+                </tr>
+                <tr>
+                  <td><strong>可灵</strong></td>
+                  <td>klingai.kuaishou.com</td>
+                  <td>积分</td>
+                  <td>时长 + 分辨率</td>
+                  <td>WebView cookie 注入</td>
+                </tr>
+                <tr>
+                  <td><strong>海螺</strong></td>
+                  <td>hailuo.com</td>
+                  <td>次数</td>
+                  <td>固定次数</td>
+                  <td>WebView cookie 注入</td>
+                </tr>
+                <tr>
+                  <td><strong>MathMind</strong></td>
+                  <td>mcp_mathmind-video</td>
+                  <td>次数</td>
+                  <td>固定次数</td>
+                  <td>真 API</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>关于扣减单位</h3>
+          <p>不同厂商的免费额度单位不同：豆包/元宝/海螺按「次数」，即梦按「灵感值」，可灵按「积分」。系统通过 <code>provider_cost_tables</code> 维护各家消耗规则，最终折算成统一的「等效次数」用于总览展示。</p>
+          <p>例如：即梦 5 秒 720p 文生视频可能消耗 80 灵感值，若该厂商的等效分母为 80，则在团队总池中计为 1 次等效次数。</p>
+
+          <h3>接入新厂商</h3>
+          <p>得益于 WebView 统一执行引擎，新增一家 cookie 厂商通常只需填写一份 <code>WebProviderConfig</code>：</p>
+          <ul>
+            <li>登录页 URL 与生成页 URL</li>
+            <li>prompt 输入框与发送按钮选择器</li>
+            <li>结果提取方式（拦截响应 / 读取 DOM / 执行页面 JS）</li>
+            <li>cookie 健康检查接口</li>
+          </ul>
+          <p>无需逆向各家风控签名，平均 2 小时即可完成接入。</p>
+        </section>
+
+        <section class="docs-section" id="faq">
+          <h2>常见问题</h2>
+
+          <div class="faq-item open">
+            <button class="faq-question">
+              Quota-Flow 是 SaaS 吗？
+              <svg class="faq-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="faq-answer">
+              <p>不是传统 SaaS。Quota-Flow 是开源桌面端工具，官方提供托管的数据库与团队协作功能。你也可以完全自部署，脱离官方托管。</p>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              我的 cookie 会被上传到云端吗？
+              <svg class="faq-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="faq-answer">
+              <p>个人自绑的 cookie 只在本地内存解密，不会上传。团队公共 cookie 会加密后存到 Supabase，成员通过 Edge Function 代调用，明文不出云端。</p>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              为什么用 WebView 而不是直接调 API？
+              <svg class="faq-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="faq-answer">
+              <p>国内主流厂商的免费额度绑登录态，公开 API 是付费按量的。WebView 方案直接复用厂商官方页面，自带风控签名，无需逆向，接入新厂商只需填选择器。</p>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              团队额度池是怎么计算的？
+              <svg class="faq-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="faq-answer">
+              <p>团队总池 = admin 绑定的公共额度 + 成员自愿贡献的自带额度。不同厂商的原生单位按消耗表折算成「等效次数」用于总览 UI，实际扣减仍按各厂商原生单位执行。</p>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              cookie 多久会过期？
+              <svg class="faq-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="faq-answer">
+              <p>不同厂商寿命不同，一般为 7-30 天。系统每天凌晨 3 点后台静默访问厂商首页自动续命，目标是将重新登录频率降到平均 1-2 个月一次。</p>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question">
+              个人免费版有什么限制？
+              <svg class="faq-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="faq-answer">
+              <p>个人免费版包含全部核心功能与 7 家厂商接入，唯一区别是不能创建团队共享池，仅限 1 人使用。</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="web-landing.html" class="brand">
+            <span class="brand-mark">Q</span>
+            Quota-Flow
+          </a>
+          <p>一站式 AI 视频额度调度平台。将多家厂商的每日免费额度汇聚一处，让个人创作更从容，让团队协作更高效。</p>
+        </div>
+        <div class="footer-col">
+          <h4>产品</h4>
+          <ul>
+            <li><a href="web-download.html">下载</a></li>
+            <li><a href="web-pricing.html">开源免费</a></li>
+            <li><a href="web-landing.html#features">特性</a></li>
+            <li><a href="#">路线图</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>开发者</h4>
+          <ul>
+            <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub</a></li>
+            <li><a href="web-docs.html#quickstart">快速开始</a></li>
+            <li><a href="web-docs.html#self-host">自部署指南</a></li>
+            <li><a href="#">API 文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>支持</h4>
+          <ul>
+            <li><a href="https://github.com/Shaun520/quota-flow/issues" target="_blank">问题反馈</a></li>
+            <li><a href="mailto:support@quota-flow.com">support@quota-flow.com</a></li>
+            <li><a href="#">合规声明</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Quota-Flow. Open source under MIT.</span>
+        <span>完全免费，开源共享。</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // FAQ accordion
+    document.querySelectorAll('.faq-question').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = btn.closest('.faq-item');
+        const isOpen = item.classList.contains('open');
+        document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+        if (!isOpen) item.classList.add('open');
+      });
+    });
+
+    // Scroll spy
+    const sections = document.querySelectorAll('.docs-section');
+    const links = document.querySelectorAll('.sidebar-links a[href^="#"]');
+    function onScroll() {
+      let current = '';
+      sections.forEach(section => {
+        const top = section.getBoundingClientRect().top;
+        if (top <= 120) current = section.getAttribute('id');
+      });
+      links.forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+      });
+    }
+    window.addEventListener('scroll', onScroll);
+    onScroll();
+  </script>
+
+</body>
+</html>

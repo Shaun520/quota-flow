@@ -328,20 +328,33 @@ img { max-width: 100%; display: block; }
 
 .dashboard-mockup {
   position: relative;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: #0c0c0c;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 4px 10px rgba(59, 130, 246, 0.20),
+    0 16px 44px rgba(59, 130, 246, 0.22),
+    0 44px 110px rgba(59, 130, 246, 0.30),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   overflow: hidden;
-  color: #f0f0f0;
-  display: flex;
-  flex-direction: column;
-  min-height: 500px;
   transform: perspective(1000px) rotateY(-3deg) rotateX(1deg);
-  transition: transform .4s ease;
+  transition: transform .4s ease, box-shadow .4s ease;
 }
-.dashboard-mockup:hover { transform: perspective(1000px) rotateY(-1deg) rotateX(0.5deg); }
+.dashboard-mockup:hover {
+  transform: perspective(1000px) rotateY(-1deg) rotateX(0.5deg);
+  box-shadow:
+    0 6px 14px rgba(59, 130, 246, 0.24),
+    0 24px 60px rgba(59, 130, 246, 0.28),
+    0 60px 150px rgba(59, 130, 246, 0.36),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+}
 .dashboard-mockup.dark-app {
   background: #0c0c0c;
+}
+.mockup-screenshot {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 .mockup-titlebar {
   height: 30px;

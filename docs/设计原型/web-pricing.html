@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>开源免费 — Quota-Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #1E40AF;
+      --primary-dark: #1E3A8A;
+      --primary-light: #3B82F6;
+      --accent: #D97706;
+      --bg: #F8FAFC;
+      --bg-elevated: #FFFFFF;
+      --text: #0F172A;
+      --text-secondary: #475569;
+      --text-muted: #64748B;
+      --border: #DBEAFE;
+      --muted: #E9EEF6;
+      --success: #059669;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --radius-xl: 24px;
+      --shadow-sm: 0 1px 2px rgba(30, 64, 175, 0.05);
+      --shadow-md: 0 4px 12px rgba(30, 64, 175, 0.08);
+      --shadow-lg: 0 12px 40px rgba(30, 64, 175, 0.14);
+      --max-width: 1200px;
+      --header-height: 68px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    .container {
+      width: min(100% - 48px, var(--max-width));
+      margin-inline: auto;
+    }
+
+    /* Header */
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: var(--header-height);
+      background: rgba(248, 250, 252, 0.82);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(219, 234, 254, 0.6);
+      z-index: 100;
+    }
+    .site-header .container {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--primary-dark);
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-md);
+      background: var(--primary);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 14px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      list-style: none;
+    }
+    .nav-links a {
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: var(--radius-md);
+      transition: all .2s ease;
+    }
+    .nav-links a:hover { color: var(--primary); background: var(--muted); }
+    .header-cta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      font-weight: 600;
+      transition: all .2s ease;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+    .btn-secondary {
+      background: #fff;
+      color: var(--primary);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--primary); background: var(--muted); }
+    .btn-lg { padding: 14px 28px; font-size: 16px; border-radius: var(--radius-lg); }
+    .btn-ghost { color: var(--text-secondary); background: transparent; }
+    .btn-ghost:hover { color: var(--primary); background: var(--muted); }
+    .btn-outline-white {
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+      border-color: rgba(255,255,255,0.35);
+    }
+    .btn-outline-white:hover { background: rgba(255,255,255,0.22); }
+    .mobile-menu-btn { display: none; }
+
+    /* Hero */
+    .page-hero {
+      position: relative;
+      padding: calc(var(--header-height) + 80px) 0 64px;
+      text-align: center;
+      background:
+        radial-gradient(ellipse 70% 50% at 50% -10%, rgba(59, 130, 246, 0.16), transparent),
+        linear-gradient(180deg, #EFF6FF 0%, var(--bg) 70%);
+    }
+    .page-hero h1 {
+      font-size: clamp(36px, 4.6vw, 52px);
+      line-height: 1.1;
+      font-weight: 800;
+      color: var(--primary-dark);
+      letter-spacing: -0.02em;
+    }
+    .page-hero p {
+      margin: 20px auto 0;
+      font-size: 18px;
+      color: var(--text-secondary);
+      max-width: 640px;
+      line-height: 1.7;
+    }
+    .hero-badges {
+      display: inline-flex;
+      gap: 12px;
+      margin-top: 28px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--success);
+      background: rgba(5, 150, 105, 0.08);
+      padding: 6px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(5, 150, 105, 0.18);
+    }
+
+    /* Pricing cards */
+    .pricing-section { padding: 0 0 80px; }
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+    .pricing-card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      box-shadow: var(--shadow-sm);
+      transition: all .2s ease;
+      position: relative;
+      text-align: center;
+    }
+    .pricing-card:hover { box-shadow: var(--shadow-md); transform: translateY(-4px); }
+    .pricing-card.featured {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(30, 64, 175, 0.08), var(--shadow-md);
+      transform: translateY(-8px);
+    }
+    .pricing-card.featured:hover { transform: translateY(-12px); }
+    .pricing-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: var(--radius-md);
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 20px;
+    }
+    .pricing-card h3 { font-size: 20px; font-weight: 700; color: var(--primary-dark); margin-bottom: 8px; }
+    .pricing-card .price { font-size: 42px; font-weight: 800; color: var(--text); margin: 16px 0 4px; }
+    .pricing-card .price span { font-size: 15px; font-weight: 500; color: var(--text-muted); }
+    .pricing-card .desc { font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; }
+    .pricing-card ul { list-style: none; margin-bottom: 28px; text-align: left; }
+    .pricing-card li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 14px;
+      color: var(--text-secondary);
+      padding: 7px 0;
+    }
+    .pricing-card li svg { flex-shrink: 0; color: var(--success); margin-top: 2px; }
+    .pricing-card .btn { width: 100%; }
+
+    /* Open source banner */
+    .opensource-section { padding: 80px 0; background: #fff; border-top: 1px solid var(--border); }
+    .opensource-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 64px;
+      align-items: center;
+    }
+    .opensource-content h2 {
+      font-size: clamp(28px, 3.2vw, 38px);
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 16px;
+    }
+    .opensource-content p {
+      font-size: 16px;
+      color: var(--text-secondary);
+      line-height: 1.8;
+      margin-bottom: 20px;
+    }
+    .opensource-list {
+      list-style: none;
+      display: grid;
+      gap: 14px;
+      margin-top: 24px;
+    }
+    .opensource-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      font-size: 15px;
+      color: var(--text-secondary);
+    }
+    .opensource-list li svg { flex-shrink: 0; color: var(--primary); margin-top: 2px; }
+    .opensource-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 32px;
+    }
+    .opensource-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 8px;
+    }
+    .opensource-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 20px; }
+    .license-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--primary);
+      background: rgba(30, 64, 175, 0.08);
+      padding: 6px 12px;
+      border-radius: 999px;
+      margin-bottom: 20px;
+    }
+    .github-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .github-stat {
+      text-align: center;
+      padding: 16px;
+      background: #fff;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+    }
+    .github-stat .num { font-size: 24px; font-weight: 800; color: var(--primary-dark); }
+    .github-stat .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Sponsor */
+    .sponsor-section { padding: 80px 0; }
+    .section-title {
+      text-align: center;
+      max-width: 720px;
+      margin: 0 auto 48px;
+    }
+    .section-title h2 {
+      font-size: clamp(30px, 3.6vw, 42px);
+      font-weight: 700;
+      color: var(--primary-dark);
+      letter-spacing: -0.01em;
+    }
+    .section-title p {
+      margin-top: 16px;
+      font-size: 17px;
+      color: var(--text-secondary);
+      line-height: 1.7;
+    }
+    .sponsor-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .sponsor-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      text-align: center;
+    }
+    .sponsor-card h3 { font-size: 17px; font-weight: 700; color: var(--primary-dark); margin-bottom: 8px; }
+    .sponsor-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px; }
+    .sponsor-card .amount { font-size: 32px; font-weight: 800; color: var(--text); margin-bottom: 16px; }
+    .sponsor-card .amount span { font-size: 14px; font-weight: 500; color: var(--text-muted); }
+
+    /* FAQ */
+    .faq-section { padding: 80px 0; background: #fff; border-top: 1px solid var(--border); }
+    .faq-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+    .faq-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+    }
+    .faq-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 10px;
+    }
+    .faq-card p {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.7;
+    }
+
+    /* CTA banner */
+    .cta-banner {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+      border-radius: var(--radius-xl);
+      padding: 72px 40px;
+      text-align: center;
+      color: #fff;
+    }
+    .cta-banner h2 { font-size: clamp(28px, 3.6vw, 40px); font-weight: 700; margin-bottom: 16px; }
+    .cta-banner p { font-size: 17px; opacity: .9; max-width: 560px; margin: 0 auto 32px; }
+
+    /* Footer */
+    .site-footer {
+      padding: 60px 0 32px;
+      background: #fff;
+      border-top: 1px solid var(--border);
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.6fr repeat(3, 1fr);
+      gap: 48px;
+      margin-bottom: 48px;
+    }
+    .footer-brand p { margin-top: 14px; font-size: 14px; color: var(--text-secondary); max-width: 300px; line-height: 1.7; }
+    .footer-col h4 { font-size: 14px; font-weight: 700; color: var(--primary-dark); margin-bottom: 16px; }
+    .footer-col ul { list-style: none; }
+    .footer-col li { margin-bottom: 10px; }
+    .footer-col a { font-size: 14px; color: var(--text-secondary); }
+    .footer-col a:hover { color: var(--primary); }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .pricing-grid { grid-template-columns: 1fr; max-width: 480px; margin: 0 auto; }
+      .pricing-card.featured { transform: translateY(-4px); }
+      .opensource-grid { grid-template-columns: 1fr; }
+      .sponsor-grid { grid-template-columns: 1fr; max-width: 480px; margin: 0 auto; }
+      .faq-grid { grid-template-columns: 1fr; }
+      .footer-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 768px) {
+      .nav-links, .header-cta .btn-secondary { display: none; }
+      .mobile-menu-btn { display: grid; place-items: center; width: 38px; height: 38px; border-radius: var(--radius-md); color: var(--text-secondary); }
+      .page-hero { padding-top: calc(var(--header-height) + 56px); padding-bottom: 48px; }
+      .github-stats { grid-template-columns: 1fr; }
+      .footer-grid { grid-template-columns: 1fr; gap: 32px; }
+      .cta-banner { padding: 48px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container">
+      <a href="web-landing.html" class="brand">
+        <span class="brand-mark">Q</span>
+        Quota-Flow
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="web-landing.html#features">特性</a></li>
+          <li><a href="web-landing.html#vendors">厂商</a></li>
+          <li><a href="web-landing.html#how">原理</a></li>
+          <li><a href="web-pricing.html">开源免费</a></li>
+          <li><a href="web-docs.html">文档</a></li>
+          <li><a href="web-register.html">注册</a></li>
+          <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub</a></li>
+        </ul>
+      </nav>
+      <div class="header-cta">
+        <a href="https://github.com/Shaun520/quota-flow" class="btn btn-secondary" target="_blank">Star on GitHub</a>
+        <a href="web-download.html" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          免费下载
+        </a>
+      </div>
+      <button class="mobile-menu-btn btn-ghost" aria-label="菜单">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="page-hero">
+    <div class="container">
+      <h1>完全免费，开源共享</h1>
+      <p>Quota-Flow 是一个公益性质的开源项目。所有功能对个人和团队永久免费，自部署用户更可无限制使用。</p>
+      <div class="hero-badges">
+        <span class="hero-badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          MIT 协议开源
+        </span>
+        <span class="hero-badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          无功能限制
+        </span>
+        <span class="hero-badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          无席位上限
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <section class="pricing-section">
+    <div class="container">
+      <div class="pricing-grid">
+        <div class="pricing-card">
+          <div class="pricing-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </div>
+          <h3>个人用户</h3>
+          <div class="price">免费</div>
+          <div class="desc">本地使用，数据不离本机</div>
+          <ul>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>完整核心功能</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>7 家厂商接入</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>无限账号池化</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>社区支持</li>
+          </ul>
+          <a href="web-download.html" class="btn btn-secondary">免费下载</a>
+        </div>
+
+        <div class="pricing-card featured">
+          <div class="pricing-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>团队用户</h3>
+          <div class="price">免费</div>
+          <div class="desc">共享额度池，多人协作</div>
+          <ul>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>完整核心功能</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>团队共享额度池</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>成员与权限管理</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>无席位上限</li>
+          </ul>
+          <a href="web-register.html" class="btn btn-primary">免费注册团队</a>
+        </div>
+
+        <div class="pricing-card">
+          <div class="pricing-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+          </div>
+          <h3>自部署</h3>
+          <div class="price">免费</div>
+          <div class="desc">数据自主，完全掌控</div>
+          <ul>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>全部功能开放</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>无用户数限制</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>运营方不可见数据</li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>完整源码可修改</li>
+          </ul>
+          <a href="web-docs.html#self-host" class="btn btn-secondary">查看自部署指南</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="opensource-section">
+    <div class="container">
+      <div class="opensource-grid">
+        <div class="opensource-content">
+          <h2>为什么免费？</h2>
+          <p>Quota-Flow 起源于一个朴素的观察：AI 视频厂商每天都在赠送免费额度，但用户却被困在反复登录和额度分散的麻烦里。</p>
+          <p>我们相信，把「薅免费额度」这件事做得更优雅，应该是每个人都能享有的工具，而不是付费墙后的特权。因此项目选择完全开源，由社区共同维护。</p>
+          <ul class="opensource-list">
+            <li>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              不收集用户 Cookie 或额度数据（自部署模式下运营方完全不可见）
+            </li>
+            <li>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              MIT 协议，可自由使用、修改、二次分发
+            </li>
+            <li>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              欢迎贡献代码、文档、厂商适配或问题反馈
+            </li>
+          </ul>
+        </div>
+        <div class="opensource-card">
+          <span class="license-tag">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M14.83 14.83A4 4 0 0 1 9 17.94"/><path d="M9.17 9.17A4 4 0 0 1 15 6.06"/></svg>
+            MIT License
+          </span>
+          <h3>代码完全开放</h3>
+          <p>前端、桌面端、服务端逻辑全部托管在 GitHub。你可以审计每一行代码，也可以 fork 后按自己的需求定制。</p>
+          <a href="https://github.com/Shaun520/quota-flow" class="btn btn-primary btn-lg" target="_blank">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            访问 GitHub 仓库
+          </a>
+          <div class="github-stats">
+            <div class="github-stat">
+              <div class="num">—</div>
+              <div class="label">Stars</div>
+            </div>
+            <div class="github-stat">
+              <div class="num">—</div>
+              <div class="label">Forks</div>
+            </div>
+            <div class="github-stat">
+              <div class="num">—</div>
+              <div class="label">Contributors</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sponsor-section">
+    <div class="container">
+      <div class="section-title">
+        <h2>支持项目持续运行</h2>
+        <p>如果你认可这个项目，可以通过赞助帮助维护者投入更多时间。所有赞助完全自愿，不影响任何功能使用。</p>
+      </div>
+      <div class="sponsor-grid">
+        <div class="sponsor-card">
+          <h3>GitHub Sponsors</h3>
+          <div class="amount">$0+<span>/月</span></div>
+          <p>通过 GitHub 官方渠道进行一次性或周期性赞助，资金透明可查。</p>
+          <a href="https://github.com/sponsors/Shaun520" class="btn btn-secondary" target="_blank">前往赞助</a>
+        </div>
+        <div class="sponsor-card">
+          <h3>贡献代码</h3>
+          <div class="amount">免费</div>
+          <p>提交 PR、修复 bug、撰写文档、适配新厂商，都是最有价值的支持。</p>
+          <a href="https://github.com/Shaun520/quota-flow/blob/main/CONTRIBUTING.md" class="btn btn-secondary" target="_blank">查看贡献指南</a>
+        </div>
+        <div class="sponsor-card">
+          <h3>分享给朋友</h3>
+          <div class="amount">免费</div>
+          <p>把 Quota-Flow 推荐给需要的朋友，让更多人用得更顺手。</p>
+          <a href="https://github.com/Shaun520/quota-flow" class="btn btn-secondary" target="_blank">复制项目链接</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq-section">
+    <div class="container">
+      <div class="section-title">
+        <h2>常见问题</h2>
+        <p>关于免费策略、开源协议与支持的说明。</p>
+      </div>
+      <div class="faq-grid">
+        <div class="faq-card">
+          <h3>使用 Quota-Flow 真的完全免费吗？</h3>
+          <p>是的。无论是个人使用、团队协作还是自部署，所有核心功能均永久免费，没有隐藏收费，也没有额度抽成。</p>
+        </div>
+        <div class="faq-card">
+          <h3>自部署需要服务器费用吗？</h3>
+          <p>自部署需要你自己准备 Supabase 或兼容后端，但 Quota-Flow 本身不收取任何费用。你也可以完全离线使用个人模式。</p>
+        </div>
+        <div class="faq-card">
+          <h3>团队人数有上限吗？</h3>
+          <p>没有。免费团队版同样支持 unlimited 成员，功能与自部署完全一致。若团队规模很大，建议自部署以获得更好的数据掌控。</p>
+        </div>
+        <div class="faq-card">
+          <h3>以后会收费吗？</h3>
+          <p>核心功能将始终保持免费。未来若提供官方托管等增值服务，也会保留完整的免费自部署路径，不会把已有功能变为付费。</p>
+        </div>
+        <div class="faq-card">
+          <h3>商业化使用是否允许？</h3>
+          <p>允许。MIT 协议允许你在商业环境中自由使用、修改和分发，只需保留原始版权声明。</p>
+        </div>
+        <div class="faq-card">
+          <h3>如何获得支持？</h3>
+          <p>优先通过 GitHub Issues 提交问题，社区会共同响应。你也可以发送邮件至 support@quota-flow.com。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top: 0; padding-bottom: 80px;">
+    <div class="container">
+      <div class="cta-banner">
+        <h2>开始使用，无需付费</h2>
+        <p>下载桌面端，几分钟内即可绑定第一家厂商，把散落的免费额度聚成一个池子。</p>
+        <div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
+          <a href="web-download.html" class="btn btn-lg btn-secondary">免费下载</a>
+          <a href="https://github.com/Shaun520/quota-flow" class="btn btn-lg btn-outline-white" target="_blank">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+            Star on GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="web-landing.html" class="brand">
+            <span class="brand-mark">Q</span>
+            Quota-Flow
+          </a>
+          <p>一站式 AI 视频额度调度平台。将多家厂商的每日免费额度汇聚一处，让个人创作更从容，让团队协作更高效。</p>
+        </div>
+        <div class="footer-col">
+          <h4>产品</h4>
+          <ul>
+            <li><a href="web-download.html">下载</a></li>
+            <li><a href="web-pricing.html">开源免费</a></li>
+            <li><a href="web-landing.html#features">特性</a></li>
+            <li><a href="#">路线图</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>开发者</h4>
+          <ul>
+            <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub</a></li>
+            <li><a href="web-docs.html#quickstart">快速开始</a></li>
+            <li><a href="web-docs.html#self-host">自部署指南</a></li>
+            <li><a href="#">API 文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>支持</h4>
+          <ul>
+            <li><a href="https://github.com/Shaun520/quota-flow/issues" target="_blank">问题反馈</a></li>
+            <li><a href="mailto:support@quota-flow.com">support@quota-flow.com</a></li>
+            <li><a href="#">合规声明</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Quota-Flow. Open source under MIT.</span>
+        <span>完全免费，开源共享。</span>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

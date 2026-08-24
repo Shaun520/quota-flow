@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>注册 — Quota-Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #1E40AF;
+      --primary-dark: #1E3A8A;
+      --primary-light: #3B82F6;
+      --accent: #D97706;
+      --bg: #F8FAFC;
+      --bg-elevated: #FFFFFF;
+      --text: #0F172A;
+      --text-secondary: #475569;
+      --text-muted: #64748B;
+      --border: #DBEAFE;
+      --muted: #E9EEF6;
+      --success: #059669;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --radius-xl: 24px;
+      --shadow-sm: 0 1px 2px rgba(30, 64, 175, 0.05);
+      --shadow-md: 0 4px 12px rgba(30, 64, 175, 0.08);
+      --shadow-lg: 0 12px 40px rgba(30, 64, 175, 0.14);
+      --max-width: 1200px;
+      --header-height: 68px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    .container {
+      width: min(100% - 48px, var(--max-width));
+      margin-inline: auto;
+    }
+
+    /* Header */
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto 0;
+      height: var(--header-height);
+      background: rgba(248, 250, 252, 0.82);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(219, 234, 254, 0.6);
+      z-index: 100;
+    }
+    .site-header .container {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--primary-dark);
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-md);
+      background: var(--primary);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 14px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      list-style: none;
+    }
+    .nav-links a {
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: var(--radius-md);
+      transition: all .2s ease;
+    }
+    .nav-links a:hover { color: var(--primary); background: var(--muted); }
+    .header-cta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      font-weight: 600;
+      transition: all .2s ease;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+    .btn-secondary {
+      background: #fff;
+      color: var(--primary);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--primary); background: var(--muted); }
+    .btn-lg { padding: 14px 24px; font-size: 15px; }
+    .btn-ghost { color: var(--text-secondary); background: transparent; }
+    .btn-ghost:hover { color: var(--primary); background: var(--muted); }
+    .btn-full { width: 100%; }
+    .mobile-menu-btn { display: none; }
+
+    /* Main */
+    .register-main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 420px 1fr;
+      align-items: center;
+      padding: calc(var(--header-height) + 48px) 24px 64px;
+      background:
+        radial-gradient(ellipse 60% 40% at 80% 20%, rgba(59, 130, 246, 0.1), transparent),
+        radial-gradient(ellipse 50% 30% at 10% 90%, rgba(30, 64, 175, 0.06), transparent);
+    }
+    .register-card {
+      grid-column: 2;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 40px;
+      box-shadow: var(--shadow-lg);
+    }
+    .register-card h1 {
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .register-subtitle {
+      text-align: center;
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 28px;
+    }
+
+    .github-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 14px 20px;
+      background: #0F172A;
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-md);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .2s ease;
+    }
+    .github-btn:hover { background: #1E293B; transform: translateY(-1px); }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 24px 0;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .form-group { margin-bottom: 18px; }
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      font-size: 15px;
+      font-family: inherit;
+      color: var(--text);
+      background: #fff;
+      transition: all .2s ease;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--primary-light);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+    }
+    .form-group input::placeholder { color: var(--text-muted); }
+
+    .checkbox-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 20px;
+    }
+    .checkbox-row input {
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      accent-color: var(--primary);
+    }
+    .checkbox-row a { color: var(--primary); }
+
+    .register-footer {
+      text-align: center;
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-top: 20px;
+    }
+    .register-footer a { color: var(--primary); font-weight: 600; }
+
+    .mvp-note {
+      margin-top: 24px;
+      padding: 14px;
+      background: rgba(5, 150, 105, 0.06);
+      border: 1px solid rgba(5, 150, 105, 0.18);
+      border-radius: var(--radius-md);
+      font-size: 13px;
+      color: var(--success);
+      text-align: center;
+    }
+
+    /* Footer */
+    .site-footer {
+      padding: 48px 0 28px;
+      background: #fff;
+      border-top: 1px solid var(--border);
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.6fr repeat(3, 1fr);
+      gap: 48px;
+      margin-bottom: 40px;
+    }
+    .footer-brand p { margin-top: 14px; font-size: 14px; color: var(--text-secondary); max-width: 300px; line-height: 1.7; }
+    .footer-col h4 { font-size: 14px; font-weight: 700; color: var(--primary-dark); margin-bottom: 16px; }
+    .footer-col ul { list-style: none; }
+    .footer-col li { margin-bottom: 10px; }
+    .footer-col a { font-size: 14px; color: var(--text-secondary); }
+    .footer-col a:hover { color: var(--primary); }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .register-main { grid-template-columns: 1fr minmax(auto, 420px) 1fr; }
+      .footer-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 768px) {
+      .nav-links, .header-cta .btn-secondary { display: none; }
+      .mobile-menu-btn { display: grid; place-items: center; width: 38px; height: 38px; border-radius: var(--radius-md); color: var(--text-secondary); }
+      .register-main { display: block; padding: calc(var(--header-height) + 32px) 20px 40px; }
+      .register-card { padding: 28px; }
+      .footer-grid { grid-template-columns: 1fr; gap: 32px; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container">
+      <a href="web-landing.html" class="brand">
+        <span class="brand-mark">Q</span>
+        Quota-Flow
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="web-landing.html#features">特性</a></li>
+          <li><a href="web-landing.html#vendors">厂商</a></li>
+          <li><a href="web-landing.html#how">原理</a></li>
+          <li><a href="web-pricing.html">开源免费</a></li>
+          <li><a href="web-docs.html">文档</a></li>
+          <li><a href="web-register.html">注册</a></li>
+          <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub</a></li>
+        </ul>
+      </nav>
+      <div class="header-cta">
+        <a href="web-download.html" class="btn btn-primary">免费下载</a>
+      </div>
+      <button class="mobile-menu-btn btn-ghost" aria-label="菜单">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="register-main">
+    <div class="register-card">
+      <h1>创建账号</h1>
+      <p class="register-subtitle">注册后即可在桌面端登录，开始调度你的免费额度。</p>
+
+      <a href="https://github.com/Shaun520/quota-flow" class="github-btn" target="_blank">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+        通过 GitHub 注册
+      </a>
+
+      <div class="divider">或</div>
+
+      <form onsubmit="event.preventDefault(); alert('MVP 阶段仅开放 GitHub 注册');">
+        <div class="form-group">
+          <label for="email">邮箱</label>
+          <input type="email" id="email" placeholder="you@example.com" required>
+        </div>
+        <div class="form-group">
+          <label for="password">密码</label>
+          <input type="password" id="password" placeholder="至少 8 位字符" required>
+        </div>
+        <div class="form-group">
+          <label for="confirm">确认密码</label>
+          <input type="password" id="confirm" placeholder="再次输入密码" required>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="terms" required>
+          <label for="terms">我已阅读并同意 <a href="#">服务条款</a> 与 <a href="#">隐私政策</a></label>
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg btn-full">创建账号</button>
+      </form>
+
+      <p class="register-footer">已有账号？<a href="#">直接登录</a></p>
+
+      <div class="mvp-note">
+        MVP 阶段优先通过 GitHub 入口注册，邮箱注册将在后续版本接入 Supabase Auth 后开放。
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="web-landing.html" class="brand">
+            <span class="brand-mark">Q</span>
+            Quota-Flow
+          </a>
+          <p>一站式 AI 视频额度调度平台。将多家厂商的每日免费额度汇聚一处，让个人创作更从容，让团队协作更高效。</p>
+        </div>
+        <div class="footer-col">
+          <h4>产品</h4>
+          <ul>
+            <li><a href="web-download.html">下载</a></li>
+            <li><a href="web-pricing.html">开源免费</a></li>
+            <li><a href="web-landing.html#features">特性</a></li>
+            <li><a href="#">路线图</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>开发者</h4>
+          <ul>
+            <li><a href="https://github.com/Shaun520/quota-flow" target="_blank">GitHub</a></li>
+            <li><a href="web-docs.html#quickstart">快速开始</a></li>
+            <li><a href="web-docs.html#self-host">自部署指南</a></li>
+            <li><a href="#">API 文档</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>支持</h4>
+          <ul>
+            <li><a href="https://github.com/Shaun520/quota-flow/issues" target="_blank">问题反馈</a></li>
+            <li><a href="mailto:support@quota-flow.com">support@quota-flow.com</a></li>
+            <li><a href="#">合规声明</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Quota-Flow. Open source under MIT.</span>
+        <span>完全免费，开源共享。</span>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
