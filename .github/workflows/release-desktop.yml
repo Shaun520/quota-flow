@@ -9,31 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  # 先建空 Release，避免三个平台 job 并行发布时重复创建 Release（此前本地发布遇到过该问题）
-  create-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create release (idempotent)
-        run: |
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Release $GITHUB_REF_NAME" || echo "release already exists, skip"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build:
-    name: Build & publish (${{ matrix.platform.name }})
-    needs: create-release
+    name: Build (${{ matrix.platform.name }})
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
         platform:
-          - { name: Windows, os: windows-latest, script: release:win }
-          - { name: macOS, os: macos-latest, script: release:mac }
-          - { name: Linux, os: ubuntu-latest, script: release:linux }
+          - { name: Windows, os: windows-latest, args: --win }
+          - { name: macOS, os: macos-latest, args: --mac }
+          - { name: Linux, os: ubuntu-latest, args: --linux }
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # 无签名发布：禁止 electron-builder 自动探测签名身份，避免 macOS 构建报错
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -55,5 +41,32 @@ jobs:
       # CI 全新 clone 下 packages/* 无 dist 产物，需先构建 workspace 包，桌面端构建才能解析 @quota-flow/*
       - name: Build workspace packages
         run: pnpm --filter './packages/*' run build
-      - name: Build & publish
-        run: pnpm --filter @quota-flow/desktop run ${{ matrix.platform.script }}
+      # 只打包不上传（--publish never），产物作为 artifact 交给后续 deploy job 统一发布，
+      # 避免多 job 并行 electron-builder 各自创建 Release 造成重复
+      - name: Build installers
+        run: pnpm -C apps/desktop run build && pnpm -C apps/desktop exec electron-builder ${{ matrix.platform.args }} --publish never
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform.name }}
+          path: apps/desktop/release/*
+          if-no-files-found: error
+
+  deploy:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+      # 汇总所有平台安装包到一个 Release（幂等：已存在则跳过创建）
+      - name: Create & upload release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$GITHUB_REF_NAME"
+          gh release create "$VERSION" installers/*/* \
+            --repo "${{ github.repository }}" \
+            --title "$VERSION" \
+            --notes "Release $VERSION" || echo "release already exists, upload upgraded"
