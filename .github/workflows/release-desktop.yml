@@ -45,11 +45,18 @@ jobs:
       # 避免多 job 并行 electron-builder 各自创建 Release 造成重复
       - name: Build installers
         run: pnpm -C apps/desktop run build && pnpm -C apps/desktop exec electron-builder ${{ matrix.platform.args }} --publish never
+      # 收集根目录下的安装包文件（把 *-unpacked/mac 等构建目录过滤掉，只保留安装包与 latest*.yml）
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p installers
+          find apps/desktop/release -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.zip' -o -name '*.blockmap' -o -name 'latest*.yml' \) -exec cp {} installers/ \;
+          ls -la installers/
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.platform.name }}
-          path: apps/desktop/release/*
+          path: installers/
           if-no-files-found: error
 
   deploy:
@@ -60,13 +67,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: installers
-      # 汇总所有平台安装包到一个 Release（幂等：已存在则跳过创建）
+      # 汇总所有平台安装包到一个 Release（幂等：先清理同名旧 release，再创建全新 release）
       - name: Create & upload release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="$GITHUB_REF_NAME"
+          # 若该 tag 已存在 release，先删除（含资产），确保只产出一个干净 release（保留 tag）
+          gh release delete "$VERSION" --yes || true
           gh release create "$VERSION" installers/*/* \
             --repo "${{ github.repository }}" \
             --title "$VERSION" \
-            --notes "Release $VERSION" || echo "release already exists, upload upgraded"
+            --notes "Release $VERSION"
