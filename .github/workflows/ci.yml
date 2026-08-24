@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # CI 全新 clone 下 packages/* 无 dist 产物，需先构建 workspace 包，typecheck/build 才能解析 @quota-flow/*
+      - name: Build workspace packages
+        run: pnpm --filter './packages/*' run build
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Lint
+        run: pnpm run lint
+      - name: Unit tests
+        run: pnpm test
+      - name: Build all
+        run: pnpm run build
+
+  security-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    # 用 npm 官方 registry 执行 audit（项目 registry npmmirror 无 audit 端点）。
+    # continue-on-error：真实执行但不阻塞合并 —— 当前 next/postcss 存在已在管的高危，独立升级任务处理。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: pnpm audit (prod)
+        run: pnpm audit --prod --audit-level high --registry=https://registry.npmjs.org/
