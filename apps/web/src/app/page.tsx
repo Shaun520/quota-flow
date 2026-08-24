@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import {
   Zap,
@@ -134,52 +135,14 @@ export default function HomePage() {
             </div>
 
             <div className="dashboard-mockup" aria-hidden="true">
-              <div className="mockup-header">
-                <span className="mockup-dot" />
-                <span className="mockup-dot" />
-                <span className="mockup-dot" />
-                <span className="mockup-title">Quota-Flow 桌面端 · 调度台</span>
-              </div>
-              <div className="mockup-body">
-                <div className="mock-card">
-                  <h4>生成视频</h4>
-                  <div className="mock-input" />
-                  <div className="mock-row"><div className="mock-select" /><div className="mock-select" /></div>
-                  <div className="mock-row"><div className="mock-select" /><div className="mock-select" /></div>
-                  <div className="mock-btn" />
-                </div>
-                <div className="mock-card">
-                  <h4>厂商实时状态</h4>
-                  <div className="provider-item">
-                    <div className="provider-icon">豆</div>
-                    <div className="provider-info">
-                      <div className="provider-name">豆包 <span className="provider-quota">7 / 10 次</span></div>
-                      <div className="provider-bar"><span style={{ width: "70%" }} /></div>
-                    </div>
-                  </div>
-                  <div className="provider-item">
-                    <div className="provider-icon">梦</div>
-                    <div className="provider-info">
-                      <div className="provider-name">即梦 <span className="provider-quota">640 / 800 灵感值</span></div>
-                      <div className="provider-bar"><span style={{ width: "80%" }} /></div>
-                    </div>
-                  </div>
-                  <div className="provider-item">
-                    <div className="provider-icon">问</div>
-                    <div className="provider-info">
-                      <div className="provider-name">通义万相 <span className="provider-quota">8 / 10 次</span></div>
-                      <div className="provider-bar"><span style={{ width: "80%" }} /></div>
-                    </div>
-                  </div>
-                  <div className="provider-item">
-                    <div className="provider-icon">元</div>
-                    <div className="provider-info">
-                      <div className="provider-name">元宝混元 <span className="provider-quota">4 / 5 次</span></div>
-                      <div className="provider-bar"><span style={{ width: "80%" }} /></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <Image
+                src="/images/hero-screenshot.png"
+                alt="Quota-Flow 桌面端调度台界面"
+                width={1200}
+                height={800}
+                className="mockup-screenshot"
+                priority
+              />
             </div>
           </div>
         </div>
