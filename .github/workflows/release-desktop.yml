@@ -48,6 +48,21 @@ jobs:
         run: |
           echo "VITE_SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> apps/desktop/.env
           echo "VITE_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> apps/desktop/.env
+      # electron-builder 用 package.json 的 version 生成安装包名，必须与 tag 对齐，
+      # 否则 Release 标题 (v0.2.x) 与实际包名 (0.2.5) 脱节
+      - name: Align desktop version with tag
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          export VER
+          node -e '
+            const fs = require("fs");
+            const f = "apps/desktop/package.json";
+            const j = JSON.parse(fs.readFileSync(f, "utf8"));
+            j.version = process.env.VER;
+            fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+            console.log("desktop version -> " + j.version);
+          '
       # 只打包不上传（--publish never），产物作为 artifact 交给后续 deploy job 统一发布，
       # 避免多 job 并行 electron-builder 各自创建 Release 造成重复
       - name: Build installers
