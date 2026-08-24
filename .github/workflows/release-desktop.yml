@@ -1,0 +1,56 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # 先建空 Release，避免三个平台 job 并行发布时重复创建 Release（此前本地发布遇到过该问题）
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release (idempotent)
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Release $GITHUB_REF_NAME" || echo "release already exists, skip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build & publish (${{ matrix.platform.name }})
+    needs: create-release
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: Windows, os: windows-latest, script: release:win }
+          - { name: macOS, os: macos-latest, script: release:mac }
+          - { name: Linux, os: ubuntu-latest, script: release:linux }
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 无签名发布：禁止 electron-builder 自动探测签名身份，避免 macOS 构建报错
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install AppImage deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfuse2
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build & publish
+        run: pnpm --filter @quota-flow/desktop run ${{ matrix.platform.script }}
