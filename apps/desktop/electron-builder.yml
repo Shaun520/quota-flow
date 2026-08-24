@@ -1,6 +1,5 @@
 appId: com.quotaflow.desktop
 productName: Quota-Flow
-electronDist: node_modules/electron/dist
 directories:
   output: release
 extraResources:
