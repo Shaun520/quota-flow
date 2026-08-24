@@ -52,5 +52,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libfuse2
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # CI 全新 clone 下 packages/* 无 dist 产物，需先构建 workspace 包，桌面端构建才能解析 @quota-flow/*
+      - name: Build workspace packages
+        run: pnpm --filter './packages/*' run build
       - name: Build & publish
         run: pnpm --filter @quota-flow/desktop run ${{ matrix.platform.script }}
