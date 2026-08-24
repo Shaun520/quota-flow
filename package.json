@@ -23,7 +23,7 @@
     "release:publish": "git fetch --tags origin && pnpm --filter @quota-flow/desktop run release:publish"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^26.2.0",
     "eslint": "^10.9.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
