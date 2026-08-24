@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createCreationVideo,
   deleteCreationVideo,
+  deleteCreationVideos,
   formatDuration,
   listCreationVideos,
   statusLabel,
@@ -33,6 +34,9 @@ export default function CreationVideosPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ mode: "create" } | { mode: "edit"; item: AdminCreationVideo } | null>(null);
   const [deleting, setDeleting] = useState<AdminCreationVideo | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const categoryOptions = useMemo(
     () => Array.from(new Set([...CATEGORY_OPTIONS, ...items.map((item) => item.category).filter(Boolean)])),
@@ -63,6 +67,7 @@ export default function CreationVideosPage() {
       });
       setItems(res.items);
       setTotal(res.total);
+      setSelectedIds([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -118,6 +123,30 @@ export default function CreationVideosPage() {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]));
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => (prev.length === items.length ? [] : items.map((item) => item.id)));
+  }
+
+  async function handleBatchDelete() {
+    if (selectedIds.length === 0 || batchDeleting) return;
+    setBatchDeleting(true);
+    try {
+      await deleteCreationVideos(selectedIds);
+      setToast(`已删除 ${selectedIds.length} 个视频`);
+      setBatchDeleting(false);
+      setBatchModalOpen(false);
+      setSelectedIds([]);
+      void load();
+    } catch (e) {
+      setBatchDeleting(false);
+      setToast(e instanceof Error ? e.message : "批量删除失败");
+    }
+  }
+
   if (!isSupabaseConfigured()) {
     return (
       <div>
@@ -139,6 +168,11 @@ export default function CreationVideosPage() {
           <p className="page-subtitle">管理桌面端创作中心“视频灵感库”展示的优秀视频、分类与参考 Prompt。</p>
         </div>
         <div className="page-actions">
+          {selectedIds.length > 0 ? (
+            <button className="btn btn-danger btn-sm" onClick={() => setBatchModalOpen(true)}>
+              批量删除（{selectedIds.length}）
+            </button>
+          ) : null}
           <button className="btn btn-primary btn-sm" onClick={() => setEditor({ mode: "create" })}>
             <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -218,6 +252,14 @@ export default function CreationVideosPage() {
               <table className="table">
                 <thead>
                   <tr>
+                    <th style={{ width: 32 }}>
+                      <input
+                        type="checkbox"
+                        checked={items.length > 0 && selectedIds.length === items.length}
+                        onChange={toggleSelectAll}
+                        aria-label="选择当前页全部"
+                      />
+                    </th>
                     <th>封面/标题</th>
                     <th>分类</th>
                     <th>时长</th>
@@ -231,6 +273,14 @@ export default function CreationVideosPage() {
                 <tbody>
                   {items.map((item) => (
                     <tr key={item.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(item.id)}
+                          onChange={() => toggleSelect(item.id)}
+                          aria-label={`选择 ${item.title}`}
+                        />
+                      </td>
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 220 }}>
                           <img
@@ -298,6 +348,15 @@ export default function CreationVideosPage() {
 
       {deleting ? (
         <DeleteCreationVideoModal item={deleting} onCancel={() => setDeleting(null)} onConfirm={() => void handleDelete(deleting)} />
+      ) : null}
+
+      {batchModalOpen ? (
+        <BatchDeleteCreationVideosModal
+          count={selectedIds.length}
+          onCancel={() => setBatchModalOpen(false)}
+          onConfirm={() => void handleBatchDelete()}
+          busy={batchDeleting}
+        />
       ) : null}
 
       {toast ? (
@@ -479,6 +538,45 @@ function DeleteCreationVideoModal({
           </button>
           <button className="btn btn-danger" type="button" onClick={onConfirm}>
             确认删除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BatchDeleteCreationVideosModal({
+  count,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  count: number;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-overlay show" role="dialog" aria-modal="true">
+      <div className="modal">
+        <div className="modal-header">
+          <div className="modal-title">批量删除视频作品</div>
+          <button className="modal-close" type="button" onClick={onCancel} disabled={busy} aria-label="关闭">
+            <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div className="modal-body">
+          <p style={{ margin: 0 }}>确认删除选中的 {count} 个视频作品吗？删除后桌面端将不再展示这些视频灵感。</p>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" type="button" onClick={onCancel} disabled={busy}>
+            取消
+          </button>
+          <button className="btn btn-danger" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? "删除中..." : "确认删除"}
           </button>
         </div>
       </div>
