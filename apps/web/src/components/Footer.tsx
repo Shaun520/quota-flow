@@ -7,7 +7,7 @@ export default function Footer() {
         <div className="footer-grid">
           <div className="footer-brand">
             <Link href="/" className="brand">
-              <span className="brand-mark">Q</span>
+              <img src="/logo.svg" alt="Quota-Flow" className="brand-logo" />
               Quota-Flow
             </Link>
             <p>一站式 AI 视频额度调度平台。将多家厂商的每日免费额度汇聚一处，让个人创作更从容，让团队协作更高效。</p>

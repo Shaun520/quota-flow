@@ -22,7 +22,7 @@ const plans = [
     title: "个人用户",
     price: "免费",
     desc: "本地使用，数据不离本机",
-    features: ["完整核心功能", "7 家厂商接入", "无限账号池化", "社区支持"],
+    features: ["完整核心功能", "9 家厂商接入", "无限账号池化", "社区支持"],
     cta: { text: "免费下载", href: "/download", primary: false }
   },
   {
@@ -31,7 +31,7 @@ const plans = [
     price: "免费",
     desc: "共享额度池，多人协作",
     features: ["完整核心功能", "团队共享额度池", "成员与权限管理", "无席位上限"],
-    cta: { text: "免费注册团队", href: "/register", primary: true },
+    cta: { text: "免费下载", href: "/download", primary: true },
     featured: true
   },
   {

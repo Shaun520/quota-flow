@@ -15,7 +15,7 @@ export default function Header({ variant = "default" }: HeaderProps) {
     <header className="site-header">
       <div className="container">
         <Link href="/" className="brand">
-          <span className="brand-mark">Q</span>
+          <img src="/logo.svg" alt="Quota-Flow" className="brand-logo" />
           Quota-Flow
         </Link>
 
@@ -25,7 +25,6 @@ export default function Header({ variant = "default" }: HeaderProps) {
           <Link href="/#how">原理</Link>
           <Link href="/pricing">开源免费</Link>
           <Link href="/docs">文档</Link>
-          <Link href="/register">注册</Link>
           <a href="https://github.com/Shaun520/quota-flow" target="_blank" rel="noreferrer">
             GitHub
           </a>
@@ -67,9 +66,6 @@ export default function Header({ variant = "default" }: HeaderProps) {
             </Link>
             <Link href="/docs" className="btn btn-ghost" onClick={() => setMobileOpen(false)}>
               文档
-            </Link>
-            <Link href="/register" className="btn btn-ghost" onClick={() => setMobileOpen(false)}>
-              注册
             </Link>
             <a
               href="https://github.com/Shaun520/quota-flow"

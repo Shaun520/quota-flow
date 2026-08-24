@@ -19,18 +19,22 @@ import {
 } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Quota-Flow — 让 7 家 AI 视频厂商的免费额度，为你所用",
+  title: "Quota-Flow — 让 9 家 AI 视频厂商的免费额度，为你所用",
   description: "Quota-Flow 是一站式 AI 视频免费额度调度平台。自动归集、智能路由、团队共享，告别反复登录与额度沉睡。"
 };
 
+const LOGO_BASE = "https://raw.githubusercontent.com/shixian2316/qf-images-host/main/provider-logos/";
+
 const vendors = [
-  { name: "豆包", unit: "次数", color: "#3B82F6", letter: "豆" },
-  { name: "即梦", unit: "灵感值", color: "#F59E0B", letter: "梦" },
-  { name: "通义万相", unit: "次数", color: "#8B5CF6", letter: "问" },
-  { name: "元宝混元", unit: "次数", color: "#10B981", letter: "元" },
-  { name: "可灵", unit: "积分", color: "#EF4444", letter: "灵" },
-  { name: "海螺", unit: "次数", color: "#06B6D4", letter: "螺" },
-  { name: "MathMind", unit: "次数 · API", color: "#6366F1", letter: "M" }
+  { name: "豆包", unit: "点", logo: `${LOGO_BASE}doubao.png` },
+  { name: "通义万相", unit: "额度", logo: `${LOGO_BASE}qwenwan.png` },
+  { name: "千问（通义万相）", unit: "额度", logo: `${LOGO_BASE}qwenwan.png` },
+  { name: "元宝混元", unit: "个", logo: `${LOGO_BASE}yuanbao.png` },
+  { name: "Dola", unit: "点", logo: `${LOGO_BASE}dola.png` },
+  { name: "智谱", unit: "次 / 免费", logo: `${LOGO_BASE}zhipu.png` },
+  { name: "火山方舟", unit: "免费额度", logo: `${LOGO_BASE}volcengine.png` },
+  { name: "阿里云百炼", unit: "Key 额度", logo: `${LOGO_BASE}bailian.png` },
+  { name: "腾讯云TokenHub", unit: "积分", logo: `${LOGO_BASE}tokenhub.png` }
 ];
 
 const painPoints = [
@@ -96,11 +100,11 @@ export default function HomePage() {
                 AI 视频免费额度调度平台
               </div>
               <h1>
-                让 7 家 AI 视频厂商的<br />
+                让 9 家 AI 视频厂商的<br />
                 <span className="accent-text">免费额度，为你所用</span>
               </h1>
               <p className="hero-desc">
-                豆包、即梦、通义万相、元宝混元、可灵、海螺、MathMind —— 多家账号额度自动归集、智能路由、团队共享。告别反复登录与额度沉睡，把每一份免费创作力用到极致。
+                豆包、通义万相、千问（通义万相）、元宝混元、Dola、智谱、火山方舟、阿里云百炼、腾讯云TokenHub —— 多家账号额度自动归集、智能路由、团队共享。告别反复登录与额度沉睡，把每一份免费创作力用到极致。
               </p>
               <div className="hero-actions">
                 <Link href="/download" className="btn btn-primary btn-lg">
@@ -119,7 +123,7 @@ export default function HomePage() {
               </div>
               <div className="hero-stats">
                 <div>
-                  <div className="stat-value">7</div>
+                  <div className="stat-value">9</div>
                   <div className="stat-label">接入厂商</div>
                 </div>
                 <div>
@@ -133,50 +137,115 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div className="dashboard-mockup" aria-hidden="true">
-              <div className="mockup-header">
-                <span className="mockup-dot" />
-                <span className="mockup-dot" />
-                <span className="mockup-dot" />
-                <span className="mockup-title">Quota-Flow 桌面端 · 调度台</span>
+            <div className="dashboard-mockup dark-app" aria-hidden="true">
+              <div className="mockup-titlebar">
+                <span className="mockup-dots">
+                  <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
+                </span>
+                <span className="mockup-title">Quota-Flow 桌面端</span>
+                <span className="mockup-user">Admin</span>
               </div>
-              <div className="mockup-body">
-                <div className="mock-card">
-                  <h4>生成视频</h4>
-                  <div className="mock-input" />
-                  <div className="mock-row"><div className="mock-select" /><div className="mock-select" /></div>
-                  <div className="mock-row"><div className="mock-select" /><div className="mock-select" /></div>
-                  <div className="mock-btn" />
+              <div className="mockup-topbar">
+                <div className="topbar-logo">
+                  <img src="/logo.svg" alt="Quota-Flow" />
                 </div>
-                <div className="mock-card">
-                  <h4>厂商实时状态</h4>
-                  <div className="provider-item">
-                    <div className="provider-icon">豆</div>
+                <div className="topbar-tabs">
+                  <span className="tab active">调度台</span>
+                  <span className="tab">创作中心</span>
+                  <span className="tab">厂商</span>
+                  <span className="tab">历史</span>
+                  <span className="tab">团队</span>
+                </div>
+              </div>
+              <div className="mockup-content">
+                <div className="mockup-panel generate-panel">
+                  <div className="panel-header">
+                    <h4>生成视频</h4>
+                    <span className="panel-hint">预计消耗 ~3 点</span>
+                  </div>
+                  <div className="mock-prompt" />
+                  <div className="mock-row">
+                    <div className="mock-select"><span className="label">厂商</span><div className="value">豆包</div></div>
+                    <div className="mock-select"><span className="label">模型</span><div className="value">Doubao-V2</div></div>
+                  </div>
+                  <div className="mock-row">
+                    <div className="mock-select"><span className="label">时长</span><div className="value">5 秒</div></div>
+                    <div className="mock-select"><span className="label">分辨率</span><div className="value">720p</div></div>
+                  </div>
+                  <div className="mock-upload">
+                    <span className="upload-icon">+</span>
+                    <span>点击或拖拽上传参考图</span>
+                  </div>
+                  <div className="mock-btn-generate">
+                    <span>开始生成</span>
+                  </div>
+                  <div className="mock-history">
+                    <div className="mock-history-title">
+                      <span>最近历史</span>
+                      <a>查看全部</a>
+                    </div>
+                    <div className="mock-history-list">
+                      <div className="mock-history-item">
+                        <div className="thumb">🎬</div>
+                        <div className="info">
+                          <div className="title">城市夜景航拍镜头</div>
+                          <div className="meta">豆包 · 5秒 · 2分钟前</div>
+                        </div>
+                      </div>
+                      <div className="mock-history-item">
+                        <div className="thumb">🌊</div>
+                        <div className="info">
+                          <div className="title">海浪拍打沙滩慢镜头</div>
+                          <div className="meta">通义万相 · 5秒 · 12分钟前</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mockup-panel status-panel">
+                  <div className="panel-header">
+                    <h4>厂商实时状态</h4>
+                    <span className="panel-refresh">刷新</span>
+                  </div>
+                  <div className="provider-item dark">
+                    <div className="provider-icon">
+                      <img src={`${LOGO_BASE}doubao.png`} alt="豆包" loading="lazy" />
+                    </div>
                     <div className="provider-info">
-                      <div className="provider-name">豆包 <span className="provider-quota">7 / 10 次</span></div>
+                      <div className="provider-name">豆包 <span className="provider-quota">7 / 10 点</span></div>
                       <div className="provider-bar"><span style={{ width: "70%" }} /></div>
                     </div>
+                    <span className="status-dot online" />
                   </div>
-                  <div className="provider-item">
-                    <div className="provider-icon">梦</div>
+                  <div className="provider-item dark">
+                    <div className="provider-icon">
+                      <img src={`${LOGO_BASE}qwenwan.png`} alt="通义万相" loading="lazy" />
+                    </div>
                     <div className="provider-info">
-                      <div className="provider-name">即梦 <span className="provider-quota">640 / 800 灵感值</span></div>
+                      <div className="provider-name">通义万相 <span className="provider-quota">8 / 10 额度</span></div>
                       <div className="provider-bar"><span style={{ width: "80%" }} /></div>
                     </div>
+                    <span className="status-dot online" />
                   </div>
-                  <div className="provider-item">
-                    <div className="provider-icon">问</div>
+                  <div className="provider-item dark">
+                    <div className="provider-icon">
+                      <img src={`${LOGO_BASE}volcengine.png`} alt="火山方舟" loading="lazy" />
+                    </div>
                     <div className="provider-info">
-                      <div className="provider-name">通义万相 <span className="provider-quota">8 / 10 次</span></div>
+                      <div className="provider-name">火山方舟 <span className="provider-quota">免费额度</span></div>
+                      <div className="provider-bar"><span style={{ width: "60%" }} /></div>
+                    </div>
+                    <span className="status-dot degraded" />
+                  </div>
+                  <div className="provider-item dark">
+                    <div className="provider-icon">
+                      <img src={`${LOGO_BASE}yuanbao.png`} alt="元宝混元" loading="lazy" />
+                    </div>
+                    <div className="provider-info">
+                      <div className="provider-name">元宝混元 <span className="provider-quota">4 / 5 个</span></div>
                       <div className="provider-bar"><span style={{ width: "80%" }} /></div>
                     </div>
-                  </div>
-                  <div className="provider-item">
-                    <div className="provider-icon">元</div>
-                    <div className="provider-info">
-                      <div className="provider-name">元宝混元 <span className="provider-quota">4 / 5 次</span></div>
-                      <div className="provider-bar"><span style={{ width: "80%" }} /></div>
-                    </div>
+                    <span className="status-dot online" />
                   </div>
                 </div>
               </div>
@@ -188,7 +257,7 @@ export default function HomePage() {
       <section className="section" id="pain">
         <div className="container">
           <div className="section-title">
-            <h2>别让免费额度，散落在七个账号里</h2>
+            <h2>别让免费额度，散落在九个账号里</h2>
             <p>每家厂商独立登录、独立刷新、独立额度单位。个人难以记清，团队无法复用。Quota-Flow 把零散额度汇成一本清晰的账。</p>
           </div>
           <div className="pain-grid">
@@ -208,13 +277,15 @@ export default function HomePage() {
       <section className="section vendors-section" id="vendors">
         <div className="container">
           <div className="section-title">
-            <h2>7 家主流厂商，一站接入</h2>
+            <h2>9 家主流厂商，一站接入</h2>
             <p>按各平台原生单位自动记账，实时同步额度与状态。WebView 统一引擎接入，无需破解风控签名。</p>
           </div>
           <div className="vendor-grid">
             {vendors.map((v) => (
               <div className="vendor-cell" key={v.name}>
-                <div className="vendor-logo" style={{ background: v.color }}>{v.letter}</div>
+                <div className="vendor-logo">
+                  <img src={v.logo} alt={v.name} loading="lazy" />
+                </div>
                 <h4>{v.name}</h4>
                 <span>{v.unit}</span>
               </div>
@@ -313,7 +384,7 @@ export default function HomePage() {
               <div className="seat">本地使用，数据不离本机</div>
               <ul>
                 <li><Check size={16} strokeWidth={3} />完整核心功能</li>
-                <li><Check size={16} strokeWidth={3} />7 家厂商接入</li>
+                <li><Check size={16} strokeWidth={3} />9 家厂商接入</li>
                 <li><Check size={16} strokeWidth={3} />无限账号池化</li>
               </ul>
               <Link href="/download" className="btn btn-secondary">免费下载</Link>
@@ -328,7 +399,7 @@ export default function HomePage() {
                 <li><Check size={16} strokeWidth={3} />团队共享额度池</li>
                 <li><Check size={16} strokeWidth={3} />成员与权限管理</li>
               </ul>
-              <Link href="/register" className="btn btn-primary">免费注册团队</Link>
+              <Link href="/download" className="btn btn-primary">免费下载</Link>
             </div>
             <div className="pricing-card">
               <h3>自部署</h3>

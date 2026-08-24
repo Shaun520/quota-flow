@@ -3,6 +3,7 @@
   "version": "0.2.5",
   "description": "Quota-Flow 桌面端（Electron + Vite + React）",
   "author": "Quota-Flow",
+  "homepage": "https://github.com/Shaun520/quota-flow",
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {

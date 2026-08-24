@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Download, ShieldCheck, Monitor, Apple, Server } from "lucide-react";
+import type { ReleaseInfo } from "./page";
 
 type OS = "Windows" | "macOS" | "Linux";
 
@@ -25,20 +26,49 @@ function osLabel(os: OS) {
   }
 }
 
-const releaseNotes = [
-  "支持 mathmind、qwenwan、yuanbao 三家厂商调度生成",
-  "动态额度账本与等效次数换算",
-  "账号池化与智能 failover",
-  "桌面端基础 UI：调度台、历史、团队、设置",
-  "自动更新与代码签名（后续版本完善）"
-];
+const fallbackRelease: ReleaseInfo = {
+  tag: "v0.1.0",
+  name: "0.1.0",
+  publishedAt: "2026-08-21T00:00:00Z",
+  notes: "- 支持 mathmind、qwenwan、yuanbao 三家厂商调度生成\n- 动态额度账本与等效次数换算\n- 账号池化与智能 failover\n- 桌面端基础 UI：调度台、历史、团队、设置\n- 自动更新与代码签名（后续版本完善）"
+};
 
-export default function DownloadClient() {
+function releaseNotes(notes: string): string[] {
+  return notes
+    .split("\n")
+    .map((l) => l.replace(/^[-*…\s]+/, "").trim())
+    .filter(Boolean);
+}
+
+function formatPublishDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+
+export default function DownloadClient({ release }: { release: ReleaseInfo | null }) {
+  const current = release || fallbackRelease;
+  const notes = releaseNotes(current.notes);
+  const published = formatPublishDate(current.publishedAt);
+
   const [os, setOs] = useState<OS>("Windows");
 
   useEffect(() => {
     setOs(detectOS());
   }, []);
+
+  /** 当前系统对应的直接下载地址；无对应安装包时回退到 GitHub release 列表页 */
+  function osDownloadUrl(osName: OS): string {
+    if (osName === "macOS" && current.mac) return current.mac;
+    if (osName === "Linux" && current.linux) return current.linux;
+    if (osName === "Windows" && current.windows) return current.windows;
+    return "https://github.com/Shaun520/quota-flow/releases/latest";
+  }
 
   return (
     <>
@@ -58,13 +88,13 @@ export default function DownloadClient() {
             </div>
             <h2>{os}</h2>
             <p className="version">
-              当前版本 <strong>v0.1.0</strong> · 发布于 2026-08-21
+              当前版本 <strong>{current.tag}</strong>{" "}
+              {published ? `· 发布于 ${published}` : ""}
             </p>
             <div className="download-actions">
               <a
-                href="https://github.com/Shaun520/quota-flow/releases/latest"
+                href={osDownloadUrl(os)}
                 className="btn btn-primary btn-lg"
-                target="_blank"
                 rel="noreferrer"
               >
                 <Download size={18} />
@@ -101,9 +131,8 @@ export default function DownloadClient() {
               <h3>Windows</h3>
               <p>Windows 10 / 11 64 位<br />安装包约 80 MB</p>
               <a
-                href="https://github.com/Shaun520/quota-flow/releases/latest"
+                href={current.windows || "https://github.com/Shaun520/quota-flow/releases/latest"}
                 className="btn btn-primary"
-                target="_blank"
                 rel="noreferrer"
               >
                 下载安装包
@@ -116,9 +145,8 @@ export default function DownloadClient() {
               <h3>macOS</h3>
               <p>macOS 12 及以上<br />Intel / Apple Silicon 通用</p>
               <a
-                href="https://github.com/Shaun520/quota-flow/releases/latest"
+                href={current.mac || "https://github.com/Shaun520/quota-flow/releases/latest"}
                 className="btn btn-secondary"
-                target="_blank"
                 rel="noreferrer"
               >
                 下载 .dmg
@@ -131,9 +159,8 @@ export default function DownloadClient() {
               <h3>Linux</h3>
               <p>Ubuntu / Debian / Fedora<br />AppImage 与 deb 包</p>
               <a
-                href="https://github.com/Shaun520/quota-flow/releases/latest"
+                href={current.linux || "https://github.com/Shaun520/quota-flow/releases/latest"}
                 className="btn btn-secondary"
-                target="_blank"
                 rel="noreferrer"
               >
                 下载 Linux 版
@@ -174,12 +201,12 @@ export default function DownloadClient() {
         <div className="container">
           <div className="section-title">
             <h2>最新发布</h2>
-            <p>v0.1.0 是 MVP 版本，包含核心调度与多家厂商接入。</p>
+            <p>{current.tag} 是当前最新版本，包含核心调度与多家厂商接入。</p>
           </div>
           <div className="release-card">
-            <h3>v0.1.0</h3>
+            <h3>{current.tag}</h3>
             <ul>
-              {releaseNotes.map((note) => (
+              {notes.map((note) => (
                 <li key={note}>
                   <span className="dot" />
                   {note}
@@ -208,9 +235,8 @@ export default function DownloadClient() {
             <p>下载桌面端，几分钟即可绑定第一家厂商，开始你的第一次智能调度。</p>
             <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
               <a
-                href="https://github.com/Shaun520/quota-flow/releases/latest"
+                href={osDownloadUrl(os)}
                 className="btn btn-lg btn-secondary"
-                target="_blank"
                 rel="noreferrer"
               >
                 立即下载
