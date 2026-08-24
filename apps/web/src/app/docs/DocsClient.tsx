@@ -61,13 +61,15 @@ pnpm --filter @quota-flow/cli dev generate --mode text2video \\
 pnpm --filter @quota-flow/cli dev refresh`;
 
 const providerRows = [
-  ["豆包", "doubao.com", "次数", "时长（5s/10s）", "WebView cookie 注入"],
-  ["即梦", "jimeng.jianying.com", "灵感值", "时长 + 分辨率 + 模型", "WebView cookie 注入"],
-  ["通义万相", "tongyi.aliyun.com", "次数", "时长", "WebView cookie 注入"],
-  ["元宝混元", "yuanbao.tencent.com", "次数", "固定次数", "WebView cookie 注入"],
-  ["可灵", "klingai.kuaishou.com", "积分", "时长 + 分辨率", "WebView cookie 注入"],
-  ["海螺", "hailuo.com", "次数", "固定次数", "WebView cookie 注入"],
-  ["MathMind", "mcp_mathmind-video", "次数", "固定次数", "真 API"]
+  ["豆包", "doubao.com", "点", "时长（5s/10s）", "WebView cookie 注入"],
+  ["通义万相", "tongyi.aliyun.com", "额度", "时长", "WebView cookie 注入"],
+  ["千问（通义万相）", "tongyi.aliyun.com", "额度", "时长", "WebView cookie 注入"],
+  ["元宝混元", "yuanbao.tencent.com", "个", "固定次数", "WebView cookie 注入"],
+  ["Dola", "www.dola.com", "点", "固定次数", "WebView cookie 注入"],
+  ["智谱", "open.bigmodel.cn", "次 / 免费", "时长 + 分辨率 + 模型", "API Key 注入"],
+  ["火山方舟", "volcengine.com", "免费额度", "时长 + 模型", "API Key 注入"],
+  ["阿里云百炼", "bailian.aliyun.com", "Key 额度", "时长 + 模型", "API Key 注入"],
+  ["腾讯云TokenHub", "cloud.tencent.com", "积分", "时长 + 分辨率 + 模型", "API Key 注入"]
 ];
 
 const docsFaqs = [
@@ -93,7 +95,7 @@ const docsFaqs = [
   },
   {
     q: "个人免费版有什么限制？",
-    a: "个人免费版包含全部核心功能与 7 家厂商接入，唯一区别是不能创建团队共享池，仅限 1 人使用。"
+    a: "个人免费版包含全部核心功能与 9 家厂商接入，唯一区别是不能创建团队共享池，仅限 1 人使用。"
   }
 ];
 
@@ -242,7 +244,7 @@ export default function DocsClient() {
 
             <section className="docs-section" id="providers">
               <h2>厂商清单</h2>
-              <p>Quota-Flow 目前接入 7 家 AI 视频生成厂商。除 mathmind 走真 API 外，其余 6 家均通过 WebView 统一执行引擎调用。</p>
+              <p>Quota-Flow 目前接入 9 家 AI 视频生成厂商。豆包/通义万相/千问/元宝/Dola 等走 WebView cookie，智谱/火山方舟/阿里云百炼/腾讯云TokenHub 走 API Key，统一由执行引擎调用。</p>
 
               <div className="table-wrap">
                 <table>
@@ -270,8 +272,8 @@ export default function DocsClient() {
               </div>
 
               <h3>关于扣减单位</h3>
-              <p>不同厂商的免费额度单位不同：豆包/元宝/海螺按「次数」，即梦按「灵感值」，可灵按「积分」。系统通过 <code>provider_cost_tables</code> 维护各家消耗规则，最终折算成统一的「等效次数」用于总览展示。</p>
-              <p>例如：即梦 5 秒 720p 文生视频可能消耗 80 灵感值，若该厂商的等效分母为 80，则在团队总池中计为 1 次等效次数。</p>
+              <p>不同厂商的免费额度单位不同：豆包/Dola 按「点」，元宝按「个」，TokenHub 按「积分」，通义万相按「额度」。系统通过 <code>provider_cost_tables</code> 维护各家消耗规则，最终折算成统一的「等效次数」用于总览展示。</p>
+              <p>例如：只有完整账号额度归集后，不同厂商的原生单位折算成统一展示口径，用户无需记忆各家差异。</p>
 
               <h3>接入新厂商</h3>
               <p>得益于 WebView 统一执行引擎，新增一家 cookie 厂商通常只需填写一份 <code>WebProviderConfig</code>：</p>

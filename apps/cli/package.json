@@ -15,12 +15,12 @@
     "@quota-flow/providers": "workspace:*",
     "@quota-flow/auth": "workspace:*",
     "@quota-flow/db-supabase": "workspace:*",
-    "commander": "^12.1.0",
-    "dotenv": "^16.4.5"
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "tsup": "^8.3.0",
-    "tsx": "^4.16.0",
+    "tsx": "^4.23.12",
     "typescript": "^5.5.0",
     "@types/node": "^20.14.0"
   }

@@ -1,0 +1,19 @@
+# CodeRabbit 代码审查机器人配置
+# 使用前提：需先在 GitHub Marketplace 安装 CodeRabbit 并授权本仓库。
+language: "zh-CN"
+tone_instructions: "用简体中文回复，语气专业、简洁。"
+reviews:
+  requests_feedback: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base: main
+  high_level_summary: true
+  summary_include_changed_files_hunks: false
+  path_instructions:
+    - path: "apps/**/*.{ts,tsx}"
+      instructions: "注意 PostgREST 查询字段收敛、分页与服务端筛选；桌面端(desktop)改动注意无签名构建约束。"
+    - path: "packages/**/*.ts"
+      instructions: "共享库保持 tsup 双格式(CJS+ESM+DTS)导出，exports 显式声明。"
+chat:
+  auto_reply: true

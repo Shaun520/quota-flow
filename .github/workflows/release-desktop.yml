@@ -1,0 +1,106 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: Windows, os: windows-latest, args: --win }
+          - { name: macOS, os: macos-latest, args: --mac }
+          - { name: Linux, os: ubuntu-latest, args: --linux }
+    env:
+      # 无签名发布：禁止 electron-builder 自动探测签名身份，避免 macOS 构建报错
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install AppImage deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfuse2
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # CI 全新 clone 下 packages/* 无 dist 产物，需先构建 workspace 包，桌面端构建才能解析 @quota-flow/*
+      - name: Build workspace packages
+        run: pnpm --filter './packages/*' run build
+      # 注入 Supabase 凭据到 renderer 构建 env（renderer 用 vite 编译 import.meta.env.VITE_*，
+      # 打包前必须写入 .env，否则产物运行时 isAuthConfigured() 为 false 导致“未配置 Supabase”）
+      - name: Inject Supabase env
+        shell: bash
+        run: |
+          echo "VITE_SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> apps/desktop/.env
+          echo "VITE_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> apps/desktop/.env
+      # electron-builder 用 package.json 的 version 生成安装包名，必须与 tag 对齐，
+      # 否则 Release 标题 (v0.2.x) 与实际包名 (0.2.5) 脱节
+      - name: Align desktop version with tag
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          export VER
+          node -e '
+            const fs = require("fs");
+            const f = "apps/desktop/package.json";
+            const j = JSON.parse(fs.readFileSync(f, "utf8"));
+            j.version = process.env.VER;
+            fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+            console.log("desktop version -> " + j.version);
+          '
+      # 只打包不上传（--publish never），产物作为 artifact 交给后续 deploy job 统一发布，
+      # 避免多 job 并行 electron-builder 各自创建 Release 造成重复
+      - name: Build installers
+        run: pnpm -C apps/desktop run build && pnpm -C apps/desktop exec electron-builder ${{ matrix.platform.args }} --publish never
+      # 收集根目录下的安装包文件（把 *-unpacked/mac 等构建目录过滤掉，只保留安装包与 latest*.yml）
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p installers
+          find apps/desktop/release -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.zip' -o -name '*.blockmap' -o -name 'latest*.yml' \) -exec cp {} installers/ \;
+          ls -la installers/
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform.name }}
+          path: installers/
+          if-no-files-found: error
+
+  deploy:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # gh 的 release delete/create 需要在 git 仓库上下文中解析 repo，
+      # 否则 gh 报 "not a git repository"，同名 release 无法被前置清理导致 create 撞车
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+      # 汇总所有平台安装包到一个 Release（幂等：先清理同名旧 release，再创建全新 release）
+      - name: Create & upload release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$GITHUB_REF_NAME"
+          # 若该 tag 已存在 release，先删除（含资产），确保只产出一个干净 release（保留 tag）
+          gh release delete "$VERSION" --yes || true
+          gh release create "$VERSION" installers/*/* \
+            --repo "${{ github.repository }}" \
+            --title "$VERSION" \
+            --notes "Release $VERSION"

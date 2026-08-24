@@ -8,3 +8,4 @@ onlyBuiltDependencies:
   - vite
   - esbuild
   - sharp
+  - ffmpeg-static

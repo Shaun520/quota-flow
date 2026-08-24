@@ -36,7 +36,9 @@ _probe*.mjs
 apps/desktop/out/
 apps/desktop/release/
 apps/desktop/release-new/
-apps/desktop/build/
+apps/desktop/build/*
+!apps/desktop/build/icon.ico
+!apps/desktop/build/icon.png
 
 # 原型图
 docs/prototype/

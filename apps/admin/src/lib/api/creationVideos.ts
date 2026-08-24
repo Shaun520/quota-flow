@@ -160,6 +160,12 @@ export async function deleteCreationVideo(id: string): Promise<void> {
   if (error) throw error;
 }
 
+export async function deleteCreationVideos(ids: string[]): Promise<void> {
+  const supabase = createAdminBrowserClient();
+  const { error } = await supabase.from("creation_videos").delete().in("id", ids);
+  if (error) throw error;
+}
+
 export function formatDuration(seconds: number): string {
   return `${seconds}s`;
 }

@@ -15,14 +15,29 @@
     "dev": "turbo run dev",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint \"packages/*/src/**/*.ts\" \"apps/*/src/**/*.ts\"",
+    "format": "prettier --write .",
     "release": "pnpm --filter @quota-flow/desktop run release",
     "release:publish": "git fetch --tags origin && pnpm --filter @quota-flow/desktop run release:publish"
   },
   "devDependencies": {
-    "turbo": "^2.1.0",
-    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0",
+    "eslint": "^10.9.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
     "tsup": "^8.3.0",
-    "@types/node": "^20.14.0"
+    "turbo": "^2.10.11",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss": "^8.5.23",
+      "sharp": "^0.35.0"
+    }
   },
   "// DEV_DEPS_NOTE": {
     "electron": "Electron 28+ LTS（安装在 apps/desktop/package.json，不在根 devDependencies），配合 pnpm-workspace.yaml 的 onlyBuiltDependencies 预拉取二进制；升级时同步改 apps/desktop 的 electron 版本",

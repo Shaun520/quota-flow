@@ -8,7 +8,7 @@ Aggregate daily free quotas from 9 providers — Doubao / Qwen / Yuanbao / Dola 
 
 <p>
   <a href="https://github.com/Shaun520/quota-flow/releases">
-    <img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="version"/>
+    <img src="https://img.shields.io/github/v/release/Shaun520/quota-flow?style=flat-square&sort=semver&color=blue" alt="version"/>
   </a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="platform"/>
   <img src="https://img.shields.io/badge/node-%3E%3D%2020.0.0-green?style=flat-square" alt="node"/>

@@ -1,13 +1,13 @@
 appId: com.quotaflow.desktop
 productName: Quota-Flow
-electronDist: node_modules/electron/dist
 directories:
   output: release
 extraResources:
   - from: node_modules/ffmpeg-static
     to: ffmpeg
     filter:
-      - ffmpeg.exe
+      # ffmpeg.exe(win) / ffmpeg(mac,linux) 均需要随包分发
+      - ffmpeg*
       - LICENSE
 files:
   - out/**
@@ -32,6 +32,34 @@ win:
     - target: portable
       arch:
         - x64
+mac:
+  icon: build/icon.png
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    # zip 是 electron-updater 在 macOS 上自动更新所必需的产物
+    - target: zip
+      arch:
+        - x64
+        - arm64
+linux:
+  icon: build/icon.png
+  executableName: quota-flow
+  category: Utility
+  maintainer: Quota-Flow
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+deb:
+  packageName: quota-flow
+  artifactName: ${productName}-${version}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
