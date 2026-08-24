@@ -47,6 +47,7 @@ mac:
         - arm64
 linux:
   icon: build/icon.png
+  executableName: quota-flow
   category: Utility
   maintainer: Quota-Flow
   target:
