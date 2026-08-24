@@ -42,6 +42,7 @@ Aggregate daily free quotas from 9 providers — Doubao / Qwen / Yuanbao / Dola 
 
 - [Download](#download)
 - [Core Features](#core-features)
+- [Usage Notes](#usage-notes)
 - [Team Shared Quota](#team-shared-quota)
 - [Architecture](#architecture)
 - [Monorepo Structure](#monorepo-structure)
@@ -75,6 +76,15 @@ Aggregate daily free quotas from 9 providers — Doubao / Qwen / Yuanbao / Dola 
 - **Automatic cookie maintenance**: Unified WebView execution engine (shared instance pool for submit and keep-alive) + isolated cookie sessions + 3 AM silent renewal, so users re-login only every 1-2 months.
 - **Desktop-first**: Electron local tool, no timeout or CORS issues; personal accounts decrypted locally, team shared accounts called via Edge Functions (keys never leave the cloud).
 - **Official hosting + self-hosting**: 95% of users use official hosting; technical users can fully self-host.
+
+## Usage Notes
+
+- **Accounts & cookies**: For cookie-based providers (Doubao / Qwen / Yuanbao / Dola / ChatGLM), you must log in and authorize in the desktop app yourself. Cookies expire over time; the app auto-renews them at 3 AM by default, but **hard-TTL sessions must be re-authenticated manually** (typical re-login every 1-2 months). Only bind accounts you own, and never share your important account cookies with others.
+- **Quotas & costs**: Different providers use different quota units (count / inspiration points / credits), and consumption is driven by the `provider_cost_tables` rules (e.g., Doubao deducts differently for 5s vs 10s). The "equivalent count" shown in the UI is only for overviews and daily member caps, not real usable quota. Free quotas roll over at midnight; if today's quota runs out, wait until the next day.
+- **Per-account enable switch**: Each bound account can be enabled/disabled individually; disabled accounts are automatically skipped by the scheduler. Duplicate binding of the same account triggers a de-duplication notice.
+- **Team shared quota**: Shared team accounts' cookies are encrypted and stored in the cloud (keys never leave the cloud); member usage is limited by daily caps and seat limits. Only share with trusted members.
+- **Self-hosting**: Requires your own Supabase project (enable Auth + Postgres), run `migrations/*.sql` in order, and configure `SUPABASE_URL / SUPABASE_ANON_KEY / SELF_HOSTED=true` in `.env`.
+- **Upgrades**: Windows installers are available on [GitHub Releases](https://github.com/Shaun520/quota-flow/releases/latest); existing users can upgrade via "Settings -> Check for Updates".
 
 ## Team Shared Quota
 
@@ -248,10 +258,15 @@ pnpm release                            # Build and package desktop installer
 | apps/skill | Yes |
 | apps/admin | Yes (includes cost-rule editor) |
 
+## License and Contributing
+
+- **License**: The final license for this repository is **not yet decided** (planned to be MIT or AGPL-3.0). Until the official license is settled, the code is available for personal / small-team self-use only. For commercial use, redistribution, or large-scale deployment, please contact us via [GitHub Issues](https://github.com/Shaun520/quota-flow/issues) or 2316520653@qq.com first.
+- **Contributing**: Issues (bug reports, feature requests) and Pull Requests are welcome. Before submitting a PR, please read `AGENTS.md` and `docs/开发规范/PostgREST数据与AI开发规范.md` in the repo, and follow the existing code style and database access conventions.
+
 ## Support
 
 - GitHub Issues: bug reports and feature requests
-- Email: support@quota-flow.com
+- Email: 2316520653@qq.com
 - Self-hosting users: GitHub Issues accepted, no SLA guaranteed
 
 ## Compliance Boundaries
