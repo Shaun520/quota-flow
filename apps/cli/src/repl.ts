@@ -231,6 +231,7 @@ export async function startRepl(): Promise<void> {
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  let closed = false;
   rl.setPrompt(PROMPT);
   const history: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
 
@@ -238,14 +239,14 @@ export async function startRepl(): Promise<void> {
 
   rl.on("line", (line) => {
     const text = line.trim();
-    if (!text) { if (!rl.closed) rl.prompt(); return; }
+    if (!text) { if (!closed) rl.prompt(); return; }
     void (async () => {
       if (text.startsWith("/")) {
         const [cmd, ...rest] = text.slice(1).split(/\s+/);
         const handled = await runCommand(rl, cmd, rest);
         if (!handled) {
           process.stdout.write(`未知命令：/${cmd}。输入 /help 查看。\n`);
-          if (!rl.closed) rl.prompt();
+          if (!closed) rl.prompt();
         }
       } else {
         await assistantChat(rl, history, text);
@@ -254,6 +255,7 @@ export async function startRepl(): Promise<void> {
   });
 
   rl.on("close", () => {
+    closed = true;
     process.stdout.write("\nbye.\n");
     process.exit(0);
   });

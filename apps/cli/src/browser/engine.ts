@@ -135,8 +135,8 @@ async function runYuanbaoGenerate(opts: GenerateOptions): Promise<GenerateResult
 
     // 轮询 detail 拿视频 URL
     const video = await pollYuanbaoVideo(chat, 360 * 1000);
-    if (!video) {
-      if (video === null) return failYuanbao("等待超时未取到元宝视频 URL", startedAt);
+    if (!video) return failYuanbao("等待超时未取到元宝视频 URL", startedAt);
+    if ("error" in video) {
       return { ok: false, providerId: "yuanbao", quotaUsed: 0, errorMessage: video.error, durationMs: Date.now() - startedAt };
     }
     return {
