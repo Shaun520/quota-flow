@@ -1,7 +1,7 @@
 // 元宝混元真调适配器
 // 通过 POST /api/chat/:cid（SSE流式）提交 prompt，再轮询 /api/user/agent/conversation/v1/detail
 // 提取 hunyuan COS 上的视频 URL。
-// 配置：在项目 data/yuanbao-auth.json 放置以下字段（通过浏览器 DevTools 抓取）：
+// 配置：在 ~/.quota-flow/yuanbao-auth.json 放置以下字段（通过浏览器 DevTools 抓取）：
 // {
 //   "cookie": "从 DevTools > Application > Cookies 复制全部 cookie（或 Network 面板复制请求头里的 Cookie）",
 //   "agentId": "URL 中 /chat/:agentId/:conversationId 的第一段，例如 naQivTmsDa",
@@ -14,11 +14,10 @@
 
 import * as https from "node:https";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import type { GenerateOptions, GenerateResult, ProviderCapabilities } from "@quota-flow/core";
-import { BaseProvider } from "@quota-flow/core";
+import { BaseProvider, dataFile } from "@quota-flow/core";
 
-const AUTH_PATH = path.resolve(__dirname, "..", "..", "data", "yuanbao-auth.json");
+const AUTH_PATH = dataFile("yuanbao-auth.json");
 const BASE_HOST = "yuanbao.tencent.com";
 
 export interface YuanbaoAuthConfig {
@@ -314,7 +313,7 @@ export class YuanbaoProvider extends BaseProvider {
     // 没有配置则降级到 dry-run
     if (!auth) {
       return this.dryRunOk(options.mode, {
-        warning: "data/yuanbao-auth.json 未配置，已降级为 dry-run。",
+        warning: "~/.quota-flow/yuanbao-auth.json 未配置，已降级为 dry-run。",
         prompt: options.prompt,
         imageUrl: options.imageUrl,
       }, startedAt, quotaUsed);

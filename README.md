@@ -211,23 +211,88 @@ cp .env.example .env
 cd apps/desktop && pnpm dev  # 设置里的 Supabase 连接信息按需配置
 ```
 
-### CLI 真跑示例
+### 全局安装 CLI（命令行工具）
+
+把 `quota-flow` 装成全局命令，任意目录直接用：
 
 ```bash
-# 查额度（当前已接入 mathmind / qwenwan / yuanbao 三家）
-pnpm --filter @quota-flow/cli dev check-quota
+npm install -g @quota-flow/cli      # 或 pnpm add -g @quota-flow/cli
 
-# 指定厂商跑一次生成（需要在 data/yuanbao-auth.json 配置 cookie + conversationId）
-pnpm --filter @quota-flow/cli dev generate --mode text2video \
-  --prompt "生成5秒猫咪视频" --provider yuanbao --json
+# 验证是否装好
+quota-flow --help
+quota-flow --version
 
-# 不指定厂商走调度（按策略自动选家）
-pnpm --filter @quota-flow/cli dev generate --mode text2video \
-  --prompt "生成5秒猫咪视频" --json
-
-# 刷新账本（重新读本地账本 + 重新估算等效次数）
-pnpm --filter @quota-flow/cli dev refresh
+# 升级到最新版
+npm update -g @quota-flow/cli
 ```
+
+#### 命令一览
+
+三个子命令，对应「看额度 → 生成 → 刷新账本」的完整流程：
+
+| 命令 | 作用 |
+|------|------|
+| `quota-flow check-quota [--json]` | 查看每家厂商今日剩余额度和状态（表格 / JSON） |
+| `quota-flow generate <参数>` | 生成视频，可选指定厂商或走智能调度 |
+| `quota-flow refresh` | 强制把今日额度重设为默认值（凌晨或换了登录态后使用） |
+
+```bash
+# 看额度（普通表格）
+quota-flow check-quota
+
+# 看额度（JSON，方便脚本解析）
+quota-flow check-quota --json
+
+# 刷新今日额度到默认值
+quota-flow refresh
+```
+
+#### generate 参数详解
+
+```bash
+quota-flow generate --mode <text2video|img2video|video2video|imgs2video>
+  # 必填：生成模式。
+
+  --prompt "<提示词>"             # 文生视频的提示词；其他模式可省略
+  --imageUrl <url>               # 单图生视频（img2video）
+  --imageUrls <u1,u2>            # 多图生视频（imgs2video）
+  --videoUrls <v1,v2>            # 多视频合成 / 图生视频（video2video）
+
+  --provider <id>                # 强制指定厂商（qwenwan / yuanbao / seedance 等）
+  --strategy <s>                 # 不指定厂商时的调度策略：
+                                 #   quality_first | cost_first | round_robin | available_first
+                                 #   （默认 quality_first）
+  --engine <fetch|browser>       # 执行引擎：fetch=静态凭据；browser=真实 Edge 自动抓 cookie（默认 fetch）
+  --fallback-rounds <n>          # 失败后最多重试几家厂商（默认 2）
+  --coolDown <n>                 # 失败冷却分钟数（默认 10）
+  --json                         # 输出 JSON 代替表格文本
+```
+
+常用示例：
+
+```bash
+# 文生视频，自动选厂商
+quota-flow generate --mode text2video --prompt "一只猫在草地上打滚" --json
+
+# 文生视频，强制走某家厂商
+quota-flow generate --mode text2video --prompt "一只猫在草地上打滚" --provider yuanbao
+
+# 图生视频
+quota-flow generate --mode img2video --imageUrl https://example.com/cat.jpg --prompt "缓缓转头"
+
+# 指定调度策略
+quota-flow generate --mode text2video --prompt "海边日落" --strategy cost_first
+```
+
+#### 使用前提：需要「登录态」
+
+CLI 本身只是调度前端，真正出片依赖各家厂商的登录凭据（cookie 或 API Key）。`check-quota` 里显示 `offline` 的厂商说明当前缺少可用登录态，直接 `generate` 会因为找不到可用额度来源而失败。
+
+运行时数据默认落在用户主目录 `~/.quota-flow/`（账本 `ledger.json`、任务日志 `jobs.jsonl`），可用环境变量 `QUOTA_FLOW_DATA_DIR=/path` 覆盖：
+
+- **fetch 引擎（默认）**：cookie 型厂商（千问/元宝）把抓取的凭据放 `~/.quota-flow/qwen-auth.json` / `~/.quota-flow/yuanbao-auth.json`（结构见 `packages/providers/src/qwen.ts`、`yuanbao.ts` 顶部注释）；
+- **browser 引擎**：传 `--engine browser`，让 CLI 用本机真实 Edge 打开厂商页面自动抓取 cookie，无需手动抠凭据；
+- **写库凭据（可选）**：放 `~/.quota-flow/.env`：`SUPABASE_URL` / `SUPABASE_ANON_KEY` / `QUOTA_FLOW_EMAIL` / `QUOTA_FLOW_PASSWORD`，配置后才把任务写入 Supabase jobs 表，否则只落本地 JSONL。
 
 ## 开发命令
 
