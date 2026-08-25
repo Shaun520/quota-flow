@@ -1,27 +1,37 @@
 {
   "name": "@quota-flow/cli",
   "version": "0.1.0",
-  "private": true,
+  "type": "module",
   "bin": {
-    "quota-flow": "./dist/cli.mjs"
+    "quota-flow": "./dist/cli.cjs"
+  },
+  "main": "./dist/cli.cjs",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@quota-flow/core": "workspace:*",
-    "@quota-flow/providers": "workspace:*",
-    "@quota-flow/auth": "workspace:*",
-    "@quota-flow/db-supabase": "workspace:*",
     "commander": "^15.0.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "playwright-core": "^1.62.1"
   },
   "devDependencies": {
+    "@quota-flow/auth": "workspace:*",
+    "@quota-flow/core": "workspace:*",
+    "@quota-flow/db-supabase": "workspace:*",
+    "@quota-flow/providers": "workspace:*",
+    "@types/node": "^26.2.0",
     "tsup": "^8.3.0",
     "tsx": "^4.23.12",
-    "typescript": "^5.5.0",
-    "@types/node": "^26.2.0"
+    "typescript": "^5.5.0"
   }
 }

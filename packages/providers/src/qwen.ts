@@ -8,7 +8,7 @@
 // mime_type == "multi_load/iframe" 的项的 meta_data.multi_load[0].html.sc_html 里，
 // 通过正则提取 <video src="...mp4?auth_key=...">
 //
-// 配置：在项目 data/qwen-auth.json 放置以下字段（通过浏览器 DevTools 抓取）：
+// 配置：在 ~/.quota-flow/qwen-auth.json 放置以下字段（通过浏览器 DevTools 抓取）：
 // {
 //   "cookie": "从 DevTools Network 面板复制完整 Cookie（含 tongyi_sso_ticket）",
 //   "deviceId": "x-deviceid 头的值",
@@ -21,12 +21,11 @@
 
 import * as https from "node:https";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type { GenerateOptions, GenerateResult, ProviderCapabilities } from "@quota-flow/core";
-import { BaseProvider } from "@quota-flow/core";
+import { BaseProvider, dataFile } from "@quota-flow/core";
 
-const AUTH_PATH = path.resolve(__dirname, "..", "..", "data", "qwen-auth.json");
+const AUTH_PATH = dataFile("qwen-auth.json");
 const CHAT_HOST = "chat2.qianwen.com";
 const DETAIL_HOST = "chat2-api.qianwen.com";
 
@@ -353,7 +352,7 @@ export class QwenWanProvider extends BaseProvider {
 
     if (!auth) {
       return this.dryRunOk(options.mode, {
-        warning: "data/qwen-auth.json 未配置，已降级为 dry-run。",
+        warning: "~/.quota-flow/qwen-auth.json 未配置，已降级为 dry-run。",
         prompt: options.prompt,
         imageUrl: options.imageUrl,
       }, startedAt, quotaUsed);
@@ -393,7 +392,7 @@ export class QwenWanProvider extends BaseProvider {
             ok: false,
             providerId: this.id,
             quotaUsed: 0,
-            errorMessage: "千问风控签名已过期（403 签名错误）。请在浏览器中提交视频生成，然后从 Network 面板抓取 req_id 填入 data/qwen-auth.json 的 reqId 字段。",
+            errorMessage: "千问风控签名已过期（403 签名错误）。请在浏览器中提交视频生成，然后从 Network 面板抓取 req_id 填入 ~/.quota-flow/qwen-auth.json 的 reqId 字段。",
             durationMs: Date.now() - startedAt,
             raw: { hint: "配置 reqId 后 CLI 可直接轮询 detail 拿视频 URL" },
           };
@@ -405,7 +404,7 @@ export class QwenWanProvider extends BaseProvider {
           ok: false,
           providerId: this.id,
           quotaUsed: 0,
-          errorMessage: "未配置 reqId 且无法提交 chat（无风控头或已过期）。请在浏览器提交视频生成后，从 chat 请求中复制 req_id 填入 data/qwen-auth.json。",
+          errorMessage: "未配置 reqId 且无法提交 chat（无风控头或已过期）。请在浏览器提交视频生成后，从 chat 请求中复制 req_id 填入 ~/.quota-flow/qwen-auth.json。",
           durationMs: Date.now() - startedAt,
         };
       }

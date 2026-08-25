@@ -213,21 +213,50 @@ cd apps/desktop && pnpm dev  # Configure Supabase connection in Settings as need
 
 ### CLI Examples
 
+Install `quota-flow` as a global command and use it from any directory:
+
 ```bash
-# Check quotas (currently mathmind / qwenwan / yuanbao are connected)
-pnpm --filter @quota-flow/cli dev check-quota
+npm install -g @quota-flow/cli        # or pnpm add -g @quota-flow/cli
 
-# Generate once with a specific provider (needs cookie + conversationId in data/yuanbao-auth.json)
-pnpm --filter @quota-flow/cli dev generate --mode text2video \
-  --prompt "Generate a 5-second cat video" --provider yuanbao --json
+# Verify the install
+quota-flow --help
+quota-flow --version
 
-# Generate without specifying a provider (scheduler picks automatically)
-pnpm --filter @quota-flow/cli dev generate --mode text2video \
-  --prompt "Generate a 5-second cat video" --json
-
-# Refresh ledger (re-read local ledger + re-estimate equivalent counts)
-pnpm --filter @quota-flow/cli dev refresh
+# Upgrade to the latest
+npm update -g @quota-flow/cli
 ```
+
+Three sub-commands cover "view quotas → generate → refresh ledger":
+
+```bash
+# Check remaining quota per provider (table / JSON)
+quota-flow check-quota
+quota-flow check-quota --json
+
+# Refresh today's quota back to defaults (after midnight or after changing credentials)
+quota-flow refresh
+
+# Generate a video (auto-routed)
+quota-flow generate --mode text2video --prompt "a cat rolling on the grass" --json
+
+# Generate with a specific provider
+quota-flow generate --mode text2video --prompt "a cat rolling on the grass" --provider yuanbao
+
+# Image-to-video
+quota-flow generate --mode img2video --imageUrl https://example.com/cat.jpg --prompt "slowly turning head"
+
+# Choose a routing strategy
+quota-flow generate --mode text2video --prompt "sunset by the sea" --strategy cost_first
+```
+
+Key `generate` options: `--mode <text2video|img2video|video2video|imgs2video>` (required), `--prompt`, `--imageUrl(s)`, `--videoUrls`, `--provider <id>`, `--strategy <quality_first|cost_first|round_robin|available_first>`, `--engine <fetch|browser>`, `--fallback-rounds <n>`, `--coolDown <n>`, `--json`.
+
+> **Note:** The CLI is only a scheduling front-end; actual generation requires per-provider login credentials (cookie or API Key). A provider shown as `offline` in `check-quota` has no usable credentials, so `generate` may fail for lack of an available quota source.
+
+Runtime data defaults to `~/.quota-flow/` (ledger `ledger.json`, task log `jobs.jsonl`); override with `QUOTA_FLOW_DATA_DIR=/path`:
+- **fetch engine (default)**: put cookie-based provider credentials (qwen/yuanbao) in `~/.quota-flow/qwen-auth.json` / `~/.quota-flow/yuanbao-auth.json`;
+- **browser engine**: pass `--engine browser` to let the CLI open the provider page in your real Edge and auto-capture cookies;
+- **optional DB credentials**: put `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `QUOTA_FLOW_EMAIL` / `QUOTA_FLOW_PASSWORD` in `~/.quota-flow/.env` to write jobs into Supabase; otherwise only local JSONL is written.
 
 ## Development Commands
 

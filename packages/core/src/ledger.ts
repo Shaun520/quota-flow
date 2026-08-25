@@ -3,8 +3,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { QuotaLedger, QuotaLedgerProviderEntry, ProviderStatus } from "./types";
+import { dataFile } from "./dataDir";
 
-export const LEDGER_PATH = path.resolve(__dirname, "..", "..", "..", "data", "ledger.json");
+export const LEDGER_PATH = dataFile("ledger.json");
 
 /** 每个 provider 的默认每日额度（估算，可后续按实际调整） */
 export const DEFAULT_DAILY_QUOTA: Record<string, number> = {
