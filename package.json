@@ -2,6 +2,7 @@
   "name": "quota-flow",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Unified daily free-quota scheduler for multi-provider video generation.",
   "packageManager": "pnpm@9.7.0",
   "engines": {
