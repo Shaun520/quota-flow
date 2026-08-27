@@ -44,6 +44,7 @@ import type {
 } from '@quota-flow/providers'
 import { createSupabaseClient, ProviderService } from '@quota-flow/db-supabase'
 import { resolveProviderKeyEncrypted } from './query-cache'
+import { collectDolaSystemBrowserLogin } from './system-browser-login'
 
 /** 对「解密后的明文」仅做透明的 models 不可用标记写入，返回新明文（不触发网络；consoleJwt/accountId 原样保留）。 */
 export function markVolcModelUnavailable(
@@ -388,6 +389,15 @@ function hasSessionCookie(providerId: string, cookies: ProviderCookie[]): boolea
   const tencent =
     providerId === 'yuanbao' ? /^hy_|^(uin|skey|pt4_token|pt2gguin)$/i : null
   return cookies.some((c) => generic.test(c.name) || (tencent ? tencent.test(c.name) : false))
+}
+
+// Dola 的访客态也会带 sessionid/sid_tt，只有账号级 flow_cur_user_sec_id（非空且非 0/null/undefined）才能做登录判定。
+function hasDolaAuthenticatedCookies(cookies: ProviderCookie[]): boolean {
+  return cookies.some((cookie) => {
+    if (cookie.name.trim().toLowerCase() !== 'flow_cur_user_sec_id') return false
+    const value = cookie.value.trim()
+    return value.length > 0 && value !== '0' && value !== 'null' && value.toLowerCase() !== 'undefined'
+  })
 }
 
 // 已登录的「硬」判定：仅有真正的登录态才会种下账号身份证 cookie。
@@ -1008,6 +1018,38 @@ function openLoginWindow(providerId: string, keyId?: string): Promise<ProviderLo
       done({ ok: false, canceled: isAborted, error: `load-url: ${rawErr}`, friendlyMessage })
     })
   })
+}
+
+/** 仅用于 Dola：启动系统 Chrome/Edge 完成登录，登录后自动抓取 Cookie 与站点 Storage。 */
+async function loginDolaWithSystemBrowser(keyId?: string): Promise<ProviderLoginResult> {
+  try {
+    const data = await collectDolaSystemBrowserLogin(
+      (cookies, authState) => hasDolaAuthenticatedCookies(cookies) && authState.userId > 0
+    )
+    if (keyId) {
+      try {
+        const ses = session.fromPartition(partitionFor('dola', keyId))
+        await ses.clearStorageData({ storages: ['cookies'] })
+        await injectCookies('dola', data.cookies, keyId)
+      } catch (e) {
+        return { ok: false, error: `Cookie 注入失败：${e instanceof Error ? e.message : String(e)}` }
+      }
+    }
+
+    const maxExp = data.cookies.reduce((max, cookie) => Math.max(max, cookie.expires), 0)
+    // Dola 指纹只取账号级稳定 cookie flow_cur_user_sec_id（会话级 sid_tt/sessionid 会变，不能做去重指纹）
+    const flow = data.cookies.find((c) => c.name.toLowerCase() === 'flow_cur_user_sec_id')
+    const accountFingerprint = flow && flow.value.trim() ? fingerprintFor('dola', flow.value.trim()) : null
+    return {
+      ok: true,
+      encrypted: encryptCookies(data.cookies, data.storages, 'dola'),
+      cookieCount: data.cookies.length,
+      expiresAt: maxExp > 0 ? maxExp : null,
+      accountFingerprint
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 /**
@@ -3298,6 +3340,18 @@ export function initProviders(): void {
   ipcMain.handle('provider:login', async (_e, providerId: string, keyId?: string) => {
     return openLoginWindow(providerId, typeof keyId === 'string' ? keyId : undefined)
   })
+
+  ipcMain.handle(
+    'provider:login-with-system-browser',
+    async (_e, providerId: string, keyId?: string) => {
+      if (providerId !== 'dola') {
+        return { ok: false, error: '系统浏览器登录当前仅支持 Dola' }
+      }
+      return loginDolaWithSystemBrowser(
+        typeof keyId === 'string' && keyId ? keyId : undefined
+      )
+    }
+  )
 
   ipcMain.handle('provider:encrypt', async (_e, providerId: string, plain: string) => {
     if (typeof plain !== 'string') return { encrypted: '' }

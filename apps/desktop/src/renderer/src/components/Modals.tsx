@@ -663,6 +663,8 @@ export function AddProviderModal({
     defaultScope === 'team' && !!team ? 'team' : 'personal'
   )
   const [status, setStatus] = useState<'idle' | 'logging' | 'pick-account' | 'login-ok' | 'login-fail' | 'apikey-ok'>('idle')
+  // Dola 支持两种登录方式：内置 webview 窗口（window）或本机 Chrome/Edge（system）
+  const [loginMode, setLoginMode] = useState<'window' | 'system'>('window')
   // 智谱控制台会话令牌：用户经「获取 API Key」捕获后暂存，保存时并入加密 payload 作为账号级去重依据
   const [consoleJwt, setConsoleJwt] = useState<string | null>(null)
   // 火山方舟账号标识：从控制台接口捕获，保存时并入 payload 作为账号级去重依据
@@ -734,6 +736,7 @@ export function AddProviderModal({
     setExistingKeys((prev) => (prev.length === 0 ? prev : []))
     setRefreshTarget((prev) => (prev === 'new' ? prev : 'new'))
     setLoginTempId((prev) => (prev === null ? prev : null))
+    setLoginMode((prev) => (prev === 'window' ? prev : 'window'))
   }, [providers, providerId])
 
   const selected = providers.find((p) => p.providerId === providerId)
@@ -749,6 +752,7 @@ export function AddProviderModal({
     setExistingKeys([])
     setRefreshTarget('new')
     setLoginTempId(null)
+    setLoginMode('window')
     setDupCandidate(null)
     setPendingSave(null)
     // 清空上一账号残留的控制台捕获上下文（accountId/consoleJwt/models），防止重开/切换厂商时
@@ -1100,18 +1104,22 @@ export function AddProviderModal({
     }
   }
 
-  const handleLoginClick = async () => {
+  const handleLoginClick = async (mode: 'window' | 'system' = 'window') => {
     if (!selected) return
     if (isApiKey) {
       await saveApiKey()
       return
     }
+    setLoginMode(mode)
     setStatus('logging')
     // 生成临时 keyId：让登录窗口在 persist:qf-p:<provider>:<tempId> 分区进行
     // 新建账号时 tempId 会作为 DB 记录 id，使「登录分区 = 生成分区」（候选 C）
     const tempId = crypto.randomUUID()
     setLoginTempId(tempId)
-    const res = await window.api.providers.login(selected.providerId, tempId)
+    const res =
+      mode === 'system' && selected.providerId === 'dola'
+        ? await window.api.providers.loginWithSystemBrowser(selected.providerId, tempId)
+        : await window.api.providers.login(selected.providerId, tempId)
     if (res.ok && res.encrypted) {
       const encrypted = res.encrypted
       const expiresAt = res.expiresAt ?? null
@@ -1436,17 +1444,37 @@ export function AddProviderModal({
             {status === 'idle' && (
               <>
                 <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--fg-secondary)' }}>
-                  点击按钮将打开 {selected?.name ?? '厂商'} 登录窗口。请在窗口中完成登录，登录成功后点击「已完成登录」。
+                  {selected?.providerId === 'dola'
+                    ? '先在浏览器中打开 dola.com 并完成登录（真实浏览器登录不会被 Google 拦截），登录后回这里点「抓取浏览器登录态」。首次需在浏览器 chrome://inspect/#remote-debugging 开启一次「Enable remote debugging」开关。'
+                    : `点击按钮将打开 ${selected?.name ?? '厂商'} 登录窗口。请在窗口中完成登录，登录成功后点击「已完成登录」。`}
                 </p>
-                <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
-                  前往 {selected?.name ?? '厂商'} 登录 →
-                </button>
+                {selected?.providerId === 'dola' && (
+                  <>
+                    <button className="btn-sm primary" onClick={() => void handleLoginClick('system')}>
+                      抓取浏览器登录态 →
+                    </button>
+                    <button
+                      className="btn-sm"
+                      onClick={() => void handleLoginClick('window')}
+                      style={{ marginLeft: 8 }}
+                    >
+                      内置窗口登录
+                    </button>
+                  </>
+                )}
+                {selected?.providerId !== 'dola' && (
+                  <button className="btn-sm primary" onClick={() => void handleLoginClick('window')}>
+                    前往 {selected?.name ?? '厂商'} 登录 →
+                  </button>
+                )}
               </>
             )}
             {status === 'logging' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--fg-muted)' }}>
                 <span className="spinner" style={{ width: 14, height: 14, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                正在获取登录状态，请在登录窗口完成登录…
+                {selected?.providerId === 'dola' && loginMode === 'system'
+                  ? '正在抓取浏览器中的 dola 登录态…（若弹出「允许调试」提示，请点击允许）'
+                  : '正在获取登录状态，请在登录窗口完成登录…'}
               </div>
             )}
             {status === 'login-fail' && (
@@ -1456,7 +1484,14 @@ export function AddProviderModal({
                     {error}
                   </p>
                 )}
-                <button className="btn-sm primary" onClick={() => void handleLoginClick()}>
+                <button
+                  className="btn-sm primary"
+                  onClick={() =>
+                    void handleLoginClick(
+                      selected?.providerId === 'dola' && loginMode === 'system' ? 'system' : 'window'
+                    )
+                  }
+                >
                   重新登录
                 </button>
               </div>
