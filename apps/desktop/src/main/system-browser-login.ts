@@ -1,33 +1,20 @@
-import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app } from 'electron'
 import WebSocket from 'ws'
 import type { OriginStorage, ProviderCookie } from './providers'
 
 const DOLA_URL = 'https://www.dola.com/'
-const DOLA_PROFILE_DIR_NAME = 'system-browser-dola'
-const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
-const POLL_INTERVAL_MS = 1500
-const READY_TIMEOUT_MS = 20 * 1000
 const CDP_REQUEST_TIMEOUT_MS = 10 * 1000
+// 官方权限流首次连接会弹「允许调试？」提示，等待用户点击的窗口
+const ALLOW_DEBUG_TIMEOUT_MS = 45 * 1000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
-let activeChild: ChildProcess | null = null
-let activePort = 0
-let activeBrowserName: 'Chrome' | 'Edge' | null = null
 
 interface BrowserCandidate {
   name: 'Edge' | 'Chrome'
   exe: string
-}
-
-interface CdpTarget {
-  id: string
-  type: string
-  url: string
-  webSocketDebuggerUrl?: string
+  /** 本机该浏览器真实的用户数据目录（User Data），登录复用此目录让 Google 识别为「受信任的已知设备」 */
+  profileDir: string
 }
 
 interface CdpCookie {
@@ -108,20 +95,12 @@ export interface SystemBrowserLoginData {
   storages: OriginStorage[]
 }
 
-function dolaProfileDir(): string {
-  return join(app.getPath('userData'), DOLA_PROFILE_DIR_NAME)
-}
-
-function devToolsPortFile(): string {
-  return join(dolaProfileDir(), 'DevToolsActivePort')
-}
-
-async function requestJson<T>(url: string, method = 'GET'): Promise<T> {
-  const res = await fetch(url, { method })
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText}`)
-  }
-  return (await res.json()) as T
+/** 本机 Chrome/Edge 的真实 User Data 目录：官方权限调试的 DevToolsActivePort 就写在这里 */
+function realProfileDirFor(name: 'Edge' | 'Chrome'): string {
+  const localAppData = process.env['LOCALAPPDATA'] || process.env['LocalAppData'] || ''
+  return name === 'Chrome'
+    ? join(localAppData, 'Google', 'Chrome', 'User Data')
+    : join(localAppData, 'Microsoft', 'Edge', 'User Data')
 }
 
 function findSystemBrowser(): BrowserCandidate {
@@ -139,159 +118,82 @@ function findSystemBrowser(): BrowserCandidate {
     ['Edge', join(localAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe')]
   ]
   for (const [name, exe] of candidates) {
-    if (exe && existsSync(exe)) return { name, exe }
+    if (exe && existsSync(exe)) return { name, exe, profileDir: realProfileDirFor(name) }
   }
   throw new Error('未找到 Chrome 或 Edge，请先安装浏览器后重试')
 }
 
-async function waitForDevToolsPort(
-  timeoutMs: number,
-  child: ChildProcess | null
-): Promise<number> {
-  const file = devToolsPortFile()
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (existsSync(file)) {
-      try {
-        const raw = readFileSync(file, 'utf8')
-        const port = Number(raw.split(/\r?\n/)[0])
-        if (port > 0) {
-          await requestJson(`http://127.0.0.1:${port}/json/version`)
-          activePort = port
-          return port
-        }
-      } catch {
-        // 浏览器刚启动，端口文件可能已写但调试端点尚未就绪。
-      }
-    }
-    if (child && child.exitCode !== null) {
-      throw new Error('浏览器启动失败或已退出')
-    }
-    await sleep(250)
-  }
-  throw new Error('等待浏览器调试端口超时，请重试')
-}
-
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null) return
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline && child.exitCode === null) {
-    await sleep(100)
-  }
-}
-
-async function sendBrowserCommandClose(port: number): Promise<void> {
-  try {
-    const version = await requestJson<{ webSocketDebuggerUrl?: string }>(
-      `http://127.0.0.1:${port}/json/version`
-    )
-    if (!version.webSocketDebuggerUrl) return
-    const client = await CdpClient.connect(version.webSocketDebuggerUrl)
-    try {
-      await client.send('Browser.close')
-    } catch {
-      // 浏览器关闭后连接会立刻断开，忽略该结果。
-    }
-    client.close()
-  } catch {
-    // 已关闭或无法连接时无需处理。
-  }
-}
-
-async function closeSystemBrowser(port: number): Promise<void> {
-  const child = activeChild
-  activeChild = null
-  activePort = 0
-  activeBrowserName = null
-  if (port > 0) {
-    await sendBrowserCommandClose(port)
-  }
-  if (child && child.exitCode === null) {
-    try {
-      child.kill()
-      await waitForChildExit(child, 3000)
-    } catch {
-      // 进程可能已退出。
-    }
-  }
-}
-
-async function ensureDolaBrowser(): Promise<{ port: number; browserName: string }> {
+/** 读取官方 chrome://inspect 权限调试端口（Chrome 146+ 官方支持对「真实 profile」调试，不拷贝、不报不安全）。
+ *  前置要求：用户在真实 Chrome/Edge 中打开 chrome://inspect/#remote-debugging 并开启「Enable remote debugging」。
+ *  注意：权限流不提供 /json/list 这类 HTTP 接口，需用 DevToolsActivePort 第二行给出的浏览器级 ws token。 */
+async function ensureOfficialBrowser(): Promise<{ browserName: string; browserWsUrl: string }> {
   const browser = findSystemBrowser()
-  const profileDir = dolaProfileDir()
-  mkdirSync(profileDir, { recursive: true })
-
-  // 优先使用当前选中的浏览器；若旧实例不是 Chrome/Edge 首选，先关闭再启动。
+  const activePortFile = join(browser.profileDir, 'DevToolsActivePort')
+  if (!existsSync(activePortFile)) {
+    throw new Error(
+      `未检测到调试端口。请先打开本机 ${browser.name}，在地址栏输入 chrome://inspect/#remote-debugging，打开「Enable remote debugging」开关（只需开启一次），然后重新点击登录`
+    )
+  }
+  let raw = ''
   try {
-    const port = await waitForDevToolsPort(1500, null)
-    if (activeBrowserName === browser.name) {
-      return { port, browserName: browser.name }
-    }
-    await closeSystemBrowser(port)
+    raw = readFileSync(activePortFile, 'utf8')
   } catch {
-    // 继续启动新实例。
+    throw new Error('读取调试端口信息失败，请确认浏览器运行中，并在 chrome://inspect/#remote-debugging 重新开启开关')
   }
-
-  if (activeChild && activeChild.exitCode === null) {
-    activeChild.kill()
-    await waitForChildExit(activeChild, 3000)
+  const lines = raw.split(/\r?\n/)
+  const port = Number((lines[0] || '').trim())
+  const token = (lines[1] || '').trim()
+  if (!Number.isFinite(port) || port <= 0 || !token.startsWith('/')) {
+    throw new Error('调试端口信息无效，请在 chrome://inspect/#remote-debugging 重新开启开关后重试')
   }
-  try {
-    rmSync(devToolsPortFile(), { force: true })
-  } catch {
-    // 文件不存在或占用时忽略。
-  }
-
-  const child = spawn(
-    browser.exe,
-    [
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--disable-session-crashed-bubble',
-      '--no-service-autorun',
-      DOLA_URL
-    ],
-    { stdio: 'ignore', windowsHide: false }
-  )
-  activeChild = child
-  activeBrowserName = browser.name
-  child.once('exit', () => {
-    if (activeChild === child) {
-      activeChild = null
-      activeBrowserName = null
-    }
-  })
-
-  const port = await waitForDevToolsPort(READY_TIMEOUT_MS, child)
-  return { port, browserName: browser.name }
+  return { browserName: browser.name, browserWsUrl: `ws://127.0.0.1:${port}${token}` }
 }
 
-async function ensureDolaPage(port: number): Promise<CdpTarget> {
-  const openPage = async (): Promise<void> => {
+/** 连接浏览器级调试端点（带 token），端口未就绪时重试。 */
+async function connectBrowser(browserWsUrl: string): Promise<CdpClient> {
+  const deadline = Date.now() + ALLOW_DEBUG_TIMEOUT_MS
+  while (Date.now() < deadline) {
     try {
-      await requestJson(
-        `http://127.0.0.1:${port}/json/new?${encodeURIComponent(DOLA_URL)}`,
-        'PUT'
-      )
+      return await CdpClient.connect(browserWsUrl)
     } catch {
-      // 页面可能已存在，下一步会重新读取目标列表。
+      await sleep(1500)
     }
   }
+  throw new Error('无法连接浏览器调试端口，请确认已在 chrome://inspect/#remote-debugging 开启「Enable remote debugging」后重试')
+}
 
-  for (let i = 0; i < 8; i += 1) {
-    const targets = await requestJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`)
-    const page = targets.find(
-      (t) => t.type === 'page' && /dola\.com/i.test(t.url) && !!t.webSocketDebuggerUrl
-    )
-    if (page) return page
-    if (i === 0) await openPage()
-    await sleep(500)
+interface CdpTargetInfo {
+  targetId: string
+  type: string
+  url: string
+}
+
+/** 找到（或新建）dola 页面并附加会话；官方权限流首次附加会弹「允许调试？」提示，重试等待用户点击。 */
+async function attachDolaPage(client: CdpClient): Promise<string> {
+  const deadline = Date.now() + ALLOW_DEBUG_TIMEOUT_MS
+  let lastError: Error | null = null
+  while (Date.now() < deadline) {
+    try {
+      const { targetInfos } = await client.send<{ targetInfos: CdpTargetInfo[] }>('Target.getTargets')
+      let page = targetInfos.find((t) => t.type === 'page' && /dola\.com/i.test(t.url))
+      if (!page) {
+        const created = await client.send<{ targetId: string }>('Target.createTarget', { url: DOLA_URL })
+        page = { targetId: created.targetId, type: 'page', url: DOLA_URL }
+      }
+      const { sessionId } = await client.send<{ sessionId: string }>(
+        'Target.attachToTarget',
+        { targetId: page.targetId, flatten: true }
+      )
+      if (sessionId) return sessionId
+      throw new Error('附加到 Dola 页面失败')
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e))
+      await sleep(1500)
+    }
   }
-  throw new Error('无法打开 Dola 登录页面')
+  throw new Error(
+    `附加到 Dola 页面失败，请在浏览器弹出的「允许调试」提示中点击「允许」后重试（${lastError?.message ?? ''}）`
+  )
 }
 
 function isDolaCookieDomain(domain: string): boolean {
@@ -351,25 +253,37 @@ class CdpClient {
     })
   }
 
-  static connect(url: string): Promise<CdpClient> {
+  static connect(url: string, timeoutMs = 8000): Promise<CdpClient> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url, { perMessageDeflate: false })
-      const onError = (error: Error): void => {
-        reject(error)
+      let timer: NodeJS.Timeout | undefined
+      let settled = false
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        if (error) reject(error)
+        else resolve(new CdpClient(ws))
       }
-      ws.once('error', onError)
-      ws.once('open', () => {
-        ws.removeListener('error', onError)
-        resolve(new CdpClient(ws))
-      })
+      // 必须一直挂着 error 监听：连接建立前被关闭（如超时 terminate）会异步抛
+      // 「WebSocket was closed before the connection was established」，无监听会变成未捕获异常导致主进程崩溃。
+      ws.on('error', (e) => finish(e instanceof Error ? e : new Error(String(e))))
+      timer = setTimeout(() => {
+        try {
+          ws.terminate()
+        } catch {}
+        finish(new Error('连接调试页面超时'))
+      }, timeoutMs)
+      ws.once('open', () => finish())
     })
   }
 
   async send<T = Record<string, unknown>>(
     method: string,
-    params: Record<string, unknown> = {}
+    params: Record<string, unknown> = {},
+    sessionId?: string
   ): Promise<T> {
-    const message = await this.rawSend(method, params)
+    const message = await this.rawSend(method, params, sessionId)
     return (message.result ?? {}) as T
   }
 
@@ -381,7 +295,11 @@ class CdpClient {
     }
   }
 
-  private rawSend(method: string, params: Record<string, unknown>): Promise<CdpResponse> {
+  private rawSend(
+    method: string,
+    params: Record<string, unknown>,
+    sessionId?: string
+  ): Promise<CdpResponse> {
     return new Promise((resolve, reject) => {
       if (this.closed) {
         reject(new Error('调试连接已关闭'))
@@ -403,7 +321,9 @@ class CdpClient {
           reject(error)
         }
       })
-      this.ws.send(JSON.stringify({ id, method, params }))
+      const payload: Record<string, unknown> = { id, method, params }
+      if (sessionId) payload.sessionId = sessionId
+      this.ws.send(JSON.stringify(payload))
     })
   }
 
@@ -438,48 +358,41 @@ const STORAGE_READ_EXPRESSION = `(() => {
   }
 })()`
 
-async function collectDolaStorages(port: number): Promise<OriginStorage[]> {
-  const targets = await requestJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`)
-  const storages: OriginStorage[] = []
-  const seen = new Set<string>()
-  for (const target of targets) {
-    if (target.type !== 'page' || !/dola\.com/i.test(target.url) || !target.webSocketDebuggerUrl) {
-      continue
-    }
-    try {
-      const client = await CdpClient.connect(target.webSocketDebuggerUrl)
-      try {
-        await client.send('Runtime.enable')
-        const result = await client.send<RuntimeEvaluateResult<DolaStorageValue>>('Runtime.evaluate', {
-          expression: STORAGE_READ_EXPRESSION,
-          returnByValue: true
-        })
-        const payload = result.result?.value
-        if (payload?.origin && !seen.has(payload.origin)) {
-          seen.add(payload.origin)
-          storages.push({
-            origin: payload.origin,
-            localStorage: payload.localStorage ?? [],
-            sessionStorage: payload.sessionStorage ?? []
-          })
+/** 从已附加的 dola 页面会话读取站点存储（与内置 webview 一致：cookie 走全局，storage 只取当前页 origin）。 */
+async function collectDolaStorage(client: CdpClient, sessionId: string): Promise<OriginStorage[]> {
+  try {
+    const result = await client.send<RuntimeEvaluateResult<DolaStorageValue>>(
+      'Runtime.evaluate',
+      { expression: STORAGE_READ_EXPRESSION, returnByValue: true },
+      sessionId
+    )
+    const payload = result.result?.value
+    if (payload?.origin) {
+      return [
+        {
+          origin: payload.origin,
+          localStorage: payload.localStorage ?? [],
+          sessionStorage: payload.sessionStorage ?? []
         }
-      } finally {
-        client.close()
-      }
-    } catch {
-      // 单个页面读不到 storage 时继续其他页面。
+      ]
     }
+  } catch {
+    // 读不到 storage 时返回空，不影响登录。
   }
-  return storages
+  return []
 }
 
-async function readDolaAuthState(client: CdpClient): Promise<DolaAuthState> {
+async function readDolaAuthState(client: CdpClient, sessionId: string): Promise<DolaAuthState> {
   try {
-    const result = await client.send<RuntimeEvaluateResult<unknown>>('Runtime.evaluate', {
-      expression: DOLA_AUTH_STATE_EXPRESSION,
-      returnByValue: true,
-      awaitPromise: true
-    })
+    const result = await client.send<RuntimeEvaluateResult<unknown>>(
+      'Runtime.evaluate',
+      {
+        expression: DOLA_AUTH_STATE_EXPRESSION,
+        returnByValue: true,
+        awaitPromise: true
+      },
+      sessionId
+    )
     return toDolaAuthState(result.result?.value)
   } catch {
     return { httpStatus: 0, userId: 0, hasAvatar: false, url: '' }
@@ -489,51 +402,33 @@ async function readDolaAuthState(client: CdpClient): Promise<DolaAuthState> {
 export async function collectDolaSystemBrowserLogin(
   isSessionReady: (cookies: ProviderCookie[], authState: DolaAuthState) => boolean
 ): Promise<SystemBrowserLoginData> {
-  let port = 0
   let client: CdpClient | null = null
   try {
-    const browser = await ensureDolaBrowser()
-    port = browser.port
-    const target = await ensureDolaPage(port)
-    if (!target.webSocketDebuggerUrl) {
-      throw new Error('无法连接到 Dola 登录页面')
-    }
-    client = await CdpClient.connect(target.webSocketDebuggerUrl)
-    await client.send('Runtime.enable')
-    await client.send('Network.enable')
+    const browser = await ensureOfficialBrowser()
+    // 浏览器级连接（官方权限流不提供 /json/list，必须用 DevToolsActivePort 的 ws token）
+    client = await connectBrowser(browser.browserWsUrl)
+    // 附加到 dola 页面会话（首次会弹「允许调试」，自动重试等待用户点击）
+    const sessionId = await attachDolaPage(client)
+    await client.send('Runtime.enable', {}, sessionId)
+    await client.send('Network.enable', {}, sessionId)
 
-    const deadline = Date.now() + LOGIN_TIMEOUT_MS
-    while (Date.now() < deadline) {
-      try {
-        const network = await client.send<{ cookies: CdpCookie[] }>('Network.getAllCookies')
-        const cookies = network.cookies
-          .map(mapCdpCookie)
-          .filter((cookie) => isDolaCookieDomain(cookie.domain))
-        const authState = await readDolaAuthState(client)
-        if (isSessionReady(cookies, authState)) {
-          await sleep(1200)
-          const finalNetwork = await client.send<{ cookies: CdpCookie[] }>('Network.getAllCookies')
-          const finalCookies = finalNetwork.cookies
-            .map(mapCdpCookie)
-            .filter((cookie) => isDolaCookieDomain(cookie.domain))
-          const finalAuthState = await readDolaAuthState(client)
-          if (!isSessionReady(finalCookies, finalAuthState)) continue
-          const storages = await collectDolaStorages(port)
-          return { cookies: finalCookies, storages }
-        }
-      } catch (error) {
-        if (activeChild && activeChild.exitCode !== null) {
-          throw new Error('登录浏览器已关闭，请重新登录')
-        }
-        throw new Error(
-          `读取登录状态失败：${error instanceof Error ? error.message : String(error)}`
-        )
-      }
-      await sleep(POLL_INTERVAL_MS)
+    // 重要：Google 登录期间只要附加了 DevTools 就会被识别为「浏览器不安全」。
+    // 因此这里不主动清会话、不等新登录——用户在「未附加调试」的真实浏览器里完成登录后，
+    // 本函数只负责把已登录的会话（cookie + storage）抓下来。
+    const network = await client.send<{ cookies: CdpCookie[] }>('Network.getAllCookies', {}, sessionId)
+    const cookies = network.cookies
+      .map(mapCdpCookie)
+      .filter((cookie) => isDolaCookieDomain(cookie.domain))
+    const authState = await readDolaAuthState(client, sessionId)
+    if (!isSessionReady(cookies, authState)) {
+      throw new Error(
+        '未检测到已登录的 dola 会话。请先在浏览器中完成 dola 登录（需在未附加调试的浏览器里登录，否则会被 Google 拦截），然后重新点击「抓取浏览器登录态」'
+      )
     }
-    throw new Error('等待 Dola 登录超时，请重新登录后重试')
+    const storages = await collectDolaStorage(client, sessionId)
+    return { cookies, storages }
   } finally {
     if (client) client.close()
-    await closeSystemBrowser(port)
+    // 官方权限流不接管浏览器生命周期：只断开调试连接，不关闭用户自己的 Chrome
   }
 }
