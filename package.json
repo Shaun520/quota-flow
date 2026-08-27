@@ -20,6 +20,7 @@
     "test:watch": "vitest",
     "lint": "eslint \"packages/*/src/**/*.ts\" \"apps/*/src/**/*.ts\"",
     "format": "prettier --write .",
+    "postinstall": "node scripts/install-electron.cjs",
     "release": "pnpm --filter @quota-flow/desktop run release",
     "release:publish": "git fetch --tags origin && pnpm --filter @quota-flow/desktop run release:publish"
   },

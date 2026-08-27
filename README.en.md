@@ -276,6 +276,8 @@ pnpm --filter @quota-flow/desktop dev   # Dev mode
 pnpm release                            # Build and package desktop installer
 ```
 
+> Note: Electron 43+ no longer downloads its binary with the npm package (lazy download). The root `postinstall` (`scripts/install-electron.cjs`) re-fetches it after every `pnpm install`, defaulting to the npmmirror mirror (override via the `ELECTRON_MIRROR` env var). If `dev` still reports `Electron uninstall`, run `node scripts/install-electron.cjs` manually.
+
 ## Open Source Policy
 
 | Repository | Open Source |

@@ -312,6 +312,8 @@ pnpm --filter @quota-flow/desktop dev   # 开发模式
 pnpm release                            # 构建并打包桌面端安装包
 ```
 
+> 说明：Electron 43+ 不再随 npm 包自动下载二进制（lazy download）。根目录 `postinstall`（`scripts/install-electron.cjs`）会在每次 `pnpm install` 后自动补下载，国内网络默认走 npmmirror 镜像（可用环境变量 `ELECTRON_MIRROR` 覆盖）。若 `dev` 仍报 `Electron uninstall`，手动执行 `node scripts/install-electron.cjs` 即可。
+
 ## 开源策略
 
 | 仓库 | 开源 |
