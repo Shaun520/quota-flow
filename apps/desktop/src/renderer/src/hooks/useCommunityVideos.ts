@@ -109,13 +109,5 @@ export function useCommunityVideos(userId?: string): CommunityVideosResult {
     }
   }, [userId, load])
 
-  useEffect(() => {
-    const onFocus = (): void => {
-      void load()
-    }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [load])
-
   return { loading, error, items, reload }
 }

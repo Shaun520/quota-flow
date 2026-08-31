@@ -146,7 +146,7 @@ export default function History({
   features?: Partial<DesktopFeatureFlags>
   onRegenerate?: (item: JobItem) => void
 }) {
-  const { loading, error, items, total, page, setPage, setFilters, reload, remove, removeMany } = jobs
+  const { loading, error, items, total, page, setPage, setFilters, reload, remove, removeMany, getDetail } = jobs
   const { user } = useAuth()
   const canDetail = features['history.detail'] !== false
   const canRegenerate = features['history.regenerate'] !== false && !!onRegenerate
@@ -241,6 +241,16 @@ export default function History({
     else if (p?.audio === 'off') items.push(['配音', '关闭'])
     if (p?.resolution) items.push(['分辨率', `${p.resolution}p`])
     return items
+  }
+
+  // 打开详情：列表只回 summary，点开时按 id 懒加载完整字段（model/params/images/error/audio）
+  const openDetail = async (item: JobItem): Promise<void> => {
+    try {
+      const full = await getDetail(item.id)
+      if (full) setDetail(full)
+    } catch {
+      // 详情拉取失败不阻断；保持弹窗关闭，用户可重试
+    }
   }
 
   const removeJob = async (item: JobItem): Promise<void> => {
@@ -755,7 +765,7 @@ export default function History({
                               className="action-btn"
                               title="查看详情（提示词/参数/图片）"
                               aria-label="查看详情"
-                              onClick={() => setDetail(item)}
+                              onClick={() => void openDetail(item)}
                             >
                               <IconInfo size={12} />
                             </button>

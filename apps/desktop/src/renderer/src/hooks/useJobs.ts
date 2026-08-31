@@ -152,6 +152,8 @@ export interface JobsResult {
   setPage: (page: number) => void
   setFilters: (filters: Partial<JobFilters>) => void
   reload: () => void
+  /** 懒加载单条任务完整详情（model/params/images/error/audio），供详情弹窗与重新生成使用 */
+  getDetail: (jobId: string) => Promise<JobItem | null>
   remove: (jobId: string) => Promise<boolean>
   removeMany: (ids: string[]) => Promise<number>
 }
@@ -176,6 +178,20 @@ export function useJobs(): JobsResult {
   const loadedRef = useRef(false)
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+
+  const getDetail = useCallback(
+    async (jobId: string): Promise<JobItem | null> => {
+      const svc = getJobService()
+      if (!svc || !user) return null
+      try {
+        const row = await svc.getJobDetail(user.id, jobId)
+        return row ? toJobItem(row) : null
+      } catch {
+        return null
+      }
+    },
+    [user]
+  )
   const setFilters = useCallback((next: Partial<JobFilters>) => {
     setFiltersState((prev) => ({ ...prev, ...next }))
     setPage(1)
@@ -285,5 +301,5 @@ export function useJobs(): JobsResult {
     [reload, user]
   )
 
-  return { loading, error, items, total, page, hasAnySuccess, setPage, setFilters, reload, remove, removeMany }
+  return { loading, error, items, total, page, hasAnySuccess, setPage, setFilters, reload, getDetail, remove, removeMany }
 }
