@@ -2,7 +2,7 @@
 
 import type { AdminUser } from "@/lib/api/users";
 import { roleLabel, statusLabel } from "@/lib/api/users";
-import { avatarColor, formatCount, formatDate, initials } from "@/lib/utils/format";
+import { avatarColor, formatCount, formatDate, formatDateTime, initials } from "@/lib/utils/format";
 
 function statusTone(status: AdminUser["status"]): "success" | "danger" | "warning" {
   if (status === "banned") return "danger";
@@ -37,6 +37,7 @@ export function UserTable({
               <th>所属团队</th>
               <th>角色</th>
               <th>注册时间</th>
+              <th>最近登录</th>
               <th>本月消费</th>
               <th>累计消费</th>
               <th>状态</th>
@@ -46,19 +47,19 @@ export function UserTable({
           <tbody>
             {loading && users.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty-state" style={{ textAlign: "center" }}>
+                <td colSpan={9} className="empty-state" style={{ textAlign: "center" }}>
                   加载中...
                 </td>
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={8} className="empty-state" style={{ textAlign: "center", color: "var(--color-destructive)" }}>
+                <td colSpan={9} className="empty-state" style={{ textAlign: "center", color: "var(--color-destructive)" }}>
                   {error}
                 </td>
               </tr>
             ) : users.length === 0 ? (
               <tr>
-                <td colSpan={8} className="empty-state" style={{ textAlign: "center" }}>
+                <td colSpan={9} className="empty-state" style={{ textAlign: "center" }}>
                   暂无匹配的用户
                 </td>
               </tr>
@@ -91,6 +92,7 @@ export function UserTable({
                     <span className={`badge badge-${roleTone(user.team_role)}`}>{roleLabel(user.team_role)}</span>
                   </td>
                   <td>{formatDate(user.created_at)}</td>
+                  <td>{formatDateTime(user.last_login_at)}</td>
                   <td className="cell-mono">{formatCount(user.month_usage)}</td>
                   <td className="cell-mono">{formatCount(user.total_usage)}</td>
                   <td>

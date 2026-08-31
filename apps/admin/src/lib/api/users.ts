@@ -1,6 +1,6 @@
 import { createAdminBrowserClient } from "@/lib/supabase/client";
 import { insertAuditLog } from "@/lib/utils/audit";
-import { formatDate } from "@/lib/utils/format";
+import { formatDate, formatDateTime } from "@/lib/utils/format";
 
 export type UserStatus = "active" | "banned" | "exhausted";
 export type TeamRole = "admin" | "member";
@@ -15,6 +15,7 @@ export interface AdminUser {
   is_admin: boolean;
   status: UserStatus;
   created_at: string;
+  last_login_at: string | null;
   team_name: string | null;
   team_role: TeamRole | null;
   month_usage: number;
@@ -110,13 +111,14 @@ export function roleLabel(role: TeamRole | null): string {
 }
 
 export function toCsv(users: AdminUser[]): string {
-  const header = ["邮箱", "姓名", "所属团队", "角色", "注册时间", "本月消费", "累计消费", "状态"];
+  const header = ["邮箱", "姓名", "所属团队", "角色", "注册时间", "最近登录", "本月消费", "累计消费", "状态"];
   const rows = users.map((u) => [
     u.email ?? "",
     u.display_name ?? "",
     u.team_name ?? "个人",
     u.team_role === "admin" ? "Admin" : u.team_role === "member" ? "Member" : "—",
     formatDate(u.created_at),
+    formatDateTime(u.last_login_at),
     String(u.month_usage),
     String(u.total_usage),
     statusLabel(u.status)
@@ -146,6 +148,7 @@ function normalizeUser(it: Record<string, unknown>): AdminUser {
     is_admin: Boolean(it.is_admin),
     status: (it.status as UserStatus) ?? "active",
     created_at: String(it.created_at ?? ""),
+    last_login_at: (it.last_login_at as string) ?? null,
     team_name: (it.team_name as string) ?? null,
     team_role: (it.team_role as TeamRole) ?? null,
     month_usage: Number(it.month_usage ?? 0),

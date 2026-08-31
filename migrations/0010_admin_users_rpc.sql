@@ -51,6 +51,7 @@ BEGIN
       p.is_admin,
       p.status,
       p.created_at,
+      au.last_sign_in_at AS last_login_at,
       t.name AS team_name,
       tm.role AS team_role,
       COALESCE((
@@ -67,6 +68,7 @@ BEGIN
     FROM profiles p
     LEFT JOIN team_members tm ON tm.user_id = p.id
     LEFT JOIN teams t ON t.id = tm.team_id
+    LEFT JOIN auth.users au ON au.id = p.id
     WHERE
       (p_search IS NULL OR p_search = '' OR p.email ILIKE '%' || p_search || '%' OR p.display_name ILIKE '%' || p_search || '%')
       AND (p_status IS NULL OR p_status = '' OR p.status = p_status)
@@ -89,4 +91,4 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_list_users(text, text, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.admin_list_users(text, text, text, integer, integer)
-  IS '后台用户管理列表：聚合 profiles/团队/消费统计，支持搜索、角色、状态过滤与分页（仅 admin 可调用）';
+  IS '后台用户管理列表：聚合 profiles/团队/消费统计，含最近登录时间（auth.users.last_sign_in_at），支持搜索、角色、状态过滤与分页（仅 admin 可调用）';
