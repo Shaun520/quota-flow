@@ -103,6 +103,11 @@ export function UserDetailModal({
             </div>
           </div>
 
+          <div className="form-group" style={{ marginBottom: 20 }}>
+            <label className="form-label">最近登录</label>
+            <div style={{ fontSize: 14 }}>{formatDateTime(user.last_login_at)}</div>
+          </div>
+
           <div className="form-row" style={{ marginBottom: 20 }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">本月消费</label>
