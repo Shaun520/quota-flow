@@ -1098,7 +1098,7 @@ export class JobService {
     const to = from + pageSize - 1
     let builder = this.client
       .from('jobs')
-      .select('id, team_id, provider_id, mode, prompt, model:options->model, accountName:options->accountName, localPath:options->localPath, cleanLocalPath:options->cleanLocalPath, watermarkStatus:options->watermarkStatus, watermarkMethod:options->watermarkMethod, watermarkError:options->watermarkError, watermarkBBox:options->watermarkBBox, watermarkBBoxes:options->watermarkBBoxes, durationSec:options->durationSec, ratio:options->ratio, audio:options->audio, resolution:options->resolution, audioLocalPath:options->audioLocalPath, audioUrl:options->audioUrl, images:options->images, videos:options->videos, status, trace_id, result_url, error, cost_unit, cost_amount, created_at', { count: 'exact' })
+      .select('id, team_id, provider_id, mode, prompt, accountName:options->accountName, localPath:options->localPath, cleanLocalPath:options->cleanLocalPath, watermarkStatus:options->watermarkStatus, watermarkMethod:options->watermarkMethod, watermarkError:options->watermarkError, watermarkBBox:options->watermarkBBox, watermarkBBoxes:options->watermarkBBoxes, status, trace_id, result_url, cost_unit, cost_amount, created_at', { count: 'estimated' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
     const search = query.search?.trim()
@@ -1113,6 +1113,22 @@ export class JobService {
       page,
       pageSize
     }
+  }
+
+  /**
+   * 列表被裁剪为 summary 后，详情/重新生成等需要完整字段（model、params、images、error、audio）的路径
+   * 通过此方法按 task 懒加载完整数据。字段以 options-> 别名展开成与 JobListItem 相同的扁平结构，
+   * 复用渲染层的 toJobItem 映射。仅下载一次，避免列表页随整行带回大字段。
+   */
+  async getJobDetail(userId: string, jobId: string): Promise<JobListItem | null> {
+    const { data, error } = await this.client
+      .from('jobs')
+      .select('id, team_id, provider_id, mode, prompt, model:options->model, accountName:options->accountName, localPath:options->localPath, cleanLocalPath:options->cleanLocalPath, watermarkStatus:options->watermarkStatus, watermarkMethod:options->watermarkMethod, watermarkError:options->watermarkError, watermarkBBox:options->watermarkBBox, watermarkBBoxes:options->watermarkBBoxes, durationSec:options->durationSec, ratio:options->ratio, audio:options->audio, resolution:options->resolution, audioLocalPath:options->audioLocalPath, audioUrl:options->audioUrl, images:options->images, status, trace_id, result_url, error, cost_unit, cost_amount, created_at')
+      .eq('id', jobId)
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error) throw error
+    return (data ?? null) as unknown as JobListItem | null
   }
 
   /** 详情/去水印/重试等需要完整 options、attempts、cost_breakdown 的路径使用。 */
