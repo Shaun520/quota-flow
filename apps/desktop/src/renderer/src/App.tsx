@@ -339,6 +339,27 @@ function MainApp({
     }
   }, [resolvedTab, tab])
 
+  // GPU 合成下快速切 tab 偶发「显示旧缓冲」闪屏：切完后强制一次重绘，
+  // 促使合成器立即输出新帧（styles.css 已用 translateZ(0) 让各 pane 独立合成层）。
+  useEffect(() => {
+    if (!resolvedTab) return
+    let cancelled = false
+    requestAnimationFrame(() => {
+      if (cancelled) return
+      const el = document.querySelector<HTMLElement>('.content-inner')
+      if (!el) return
+      // 读取布局强制一次 reflow；短暂提升 will-change 促使该层立即重合成
+      void el.offsetHeight
+      el.style.willChange = 'transform'
+      requestAnimationFrame(() => {
+        if (!cancelled) el.style.willChange = ''
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [resolvedTab])
+
   return (
     <div className="app-shell">
       <TitleBar />

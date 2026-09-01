@@ -704,6 +704,8 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* 独立 GPU 合成层：切 tab（display 切换）时各 pane 各自合成，避免共用层在 Windows GPU 下显示旧缓冲闪屏 */
+  transform: translateZ(0);
 }
 
 .dashboard-wrap,
