@@ -165,157 +165,124 @@ async function injectStorages(win: BrowserWindow, storages: OriginStorage[]): Pr
   }
 }
 
-function buildPrepareDolaScript(options: DolaGenerateOptions): string {
-  const targetModel = options.model || ALLOWED_MODELS[0]
-  const targetDuration = options.durationSec === 10 ? '10s' : '5s'
-  const targetRatio = options.ratio || '9:16'
-  return `(async () => {
-  try {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
-  const targetModel = ${JSON.stringify(targetModel)};
-  const targetDuration = ${JSON.stringify(targetDuration)};
-  const targetRatio = ${JSON.stringify(targetRatio)};
-  const visible = (el) => {
-    const r = el.getBoundingClientRect();
-    const cs = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0';
-  };
+/** 参数分步脚本共用的页面内 DOM 辅助。脚本只「定位返回坐标」，真实点击由主进程 sendInputEvent 完成，
+ *  以兼容 Dola 的 Radix 受控菜单（合成事件无法展开下拉）。 */
+const DOLA_PARAM_HELPERS = `
+  const norm = (s) => (s || '').replace(/[\\s\\n\\u{3000}]/gu, ' ').trim();
+  const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0'; };
   const canClick = (el) => el.disabled !== true && el.getAttribute('aria-disabled') !== 'true';
   const labelOf = (el) => norm((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + (el.textContent || ''));
   const keyOf = (s) => (s || '').replace(/[\\s·•]/g, '').toLowerCase();
-  const clickEl = (el) => {
-    el.style.pointerEvents = 'auto';
-    el.style.zIndex = '999';
-    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
-    const r = el.getBoundingClientRect();
-    const x = r.left + r.width / 2;
-    const y = r.top + r.height / 2;
-    const events = [];
-    if (typeof PointerEvent !== 'undefined') {
-      events.push(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', view: window }));
-      events.push(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', view: window }));
-    }
-    events.push(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }));
-    events.push(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }));
-    events.push(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }));
-    for (const ev of events) el.dispatchEvent(ev);
-  };
-  const findButton = (matcher) => [...document.querySelectorAll('button, [role="button"], a, [class*="button" i], [class*="btn" i]')]
-    .filter((el) => visible(el) && canClick(el))
-    .find(matcher);
-  const findMenuItem = (matcher) => [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]')]
-    .filter(visible)
-    .find(matcher);
-  const findMenuItemInOpenMenu = (matcher) => {
+  const findButton = (m) => [...document.querySelectorAll('button, [role="button"], a, [class*="button" i], [class*="btn" i]')].filter((el) => visible(el) && canClick(el)).find(m);
+  const findAny = (m) => [...document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], a, div, span')].filter(visible).find(m);
+  const findMenuItemInOpenMenu = (m) => {
     const menus = [...document.querySelectorAll('[role="menu"], [role="listbox"], [role="menubar"], [data-radix-menu-content], [data-radix-popper-content-wrapper]')].filter(visible);
-    for (const menu of menus) {
-      const hit = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]')]
-        .filter(visible)
-        .find(matcher);
-      if (hit) return hit;
-    }
-    return findMenuItem(matcher);
+    for (const menu of menus) { const hit = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]')].filter(visible).find(m); if (hit) return hit; }
+    return [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]')].filter(visible).find(m);
   };
-  const findAny = (matcher) => [...document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], a, div, span')]
-    .filter(visible)
-    .find(matcher);
-  const dismissCookieBanner = async () => {
-    const el = findButton((node) => {
-      const t = labelOf(node);
-      return t === '我知道了' || t === '我知道了cookie政策' || (t.includes('我知道了') && /cookie|政策|使用/.test(t));
-    });
-    if (!el) return { ok: true, reason: '无 Cookie 提示' };
-    clickEl(el);
-    await sleep(700);
-    return { ok: true, reason: '已关闭 Cookie 提示' };
-  };
-  const clickVideoEntry = async () => {
-    const hasToolbar = [...document.querySelectorAll('button, [role="button"]')].filter(visible).some((el) => {
-      const t = labelOf(el);
-      const k = keyOf(t);
-      return (k.includes('模型') && /seedance|2\\.5|2\\.0|1\\.0/.test(k)) || /(10s|5s)/.test(k) || k.includes('比例');
-    });
-    if (hasToolbar) return { ok: true, reason: '已在视频生成界面' };
-    const entry = findButton((el) => {
-      const t = labelOf(el);
-      const cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
-      return t === '视频生成' || (cls.includes('skill-bar-button') && t.includes('视频生成') && !/额度|计算|说明|帮助|历史/.test(t));
-    });
-    if (!entry) return { ok: false, reason: '未找到「视频生成」入口' };
-    clickEl(entry);
-    await sleep(2000);
-    return { ok: true, reason: '已点击视频生成' };
-  };
-  const openMenuAndChoose = async (triggerMatcher, itemMatcher) => {
-    const trigger = findButton(triggerMatcher) || findAny(triggerMatcher);
-    if (!trigger) return { ok: false, reason: '未找到参数触发按钮' };
-    clickEl(trigger);
-    await sleep(1200);
-    const item = findMenuItemInOpenMenu(itemMatcher) || findAny(itemMatcher);
-    if (!item) {
-      try { clickEl(trigger); } catch {}
-      await sleep(500);
-      return { ok: false, reason: '下拉中未找到目标项' };
-    }
-    clickEl(item);
-    await sleep(900);
-    return { ok: true };
-  };
-  const chooseModel = async () => {
-    const targetKey = keyOf(targetModel);
-    const current = findButton((el) => {
-      const t = keyOf(labelOf(el));
-      return t.includes('模型') || t.includes('seedance');
-    });
-    if (current && keyOf(labelOf(current)).includes(targetKey)) return { ok: true, reason: '模型已为目标模型' };
-    return openMenuAndChoose(
-      (el) => keyOf(labelOf(el)).includes('seedance') || keyOf(labelOf(el)).includes('模型'),
-      (el) => {
-        const t = keyOf(labelOf(el));
-        return t.includes(targetKey) || t.includes(targetKey.replace('dreamina', '').trim());
-      }
-    );
-  };
-  const chooseDuration = async () => {
-    const current = findButton((el) => {
-      const t = keyOf(labelOf(el));
-      return /(10s|5s|10秒|5秒|时长)/.test(t);
-    });
-    if (current && keyOf(labelOf(current)).includes(targetDuration)) return { ok: true, reason: '时长已为目标时长' };
-    return openMenuAndChoose(
-      (el) => /(10s|5s|10秒|5秒|时长)/.test(keyOf(labelOf(el))),
-      (el) => keyOf(labelOf(el)).includes(targetDuration) || keyOf(labelOf(el)).includes(targetDuration.replace('s', '秒'))
-    );
-  };
-  const chooseRatio = async () => {
-    const targetKey = keyOf(targetRatio);
-    const current = findButton((el) => {
-      const t = keyOf(labelOf(el));
-      return t.includes(targetKey) || /(比例|16:9|9:16|1:1)/.test(t);
-    });
-    if (current && keyOf(labelOf(current)).includes(targetKey)) return { ok: true, reason: '比例已为目标比例' };
-    return openMenuAndChoose(
-      (el) => /(比例|16:9|9:16|1:1)/.test(keyOf(labelOf(el))),
-      (el) => keyOf(labelOf(el)).includes(targetKey)
-    );
-  };
-  const cookie = await dismissCookieBanner();
-  if (!cookie.ok) return cookie;
-  const entry = await clickVideoEntry();
-  if (!entry.ok) return entry;
-  await sleep(800);
-  const model = await chooseModel();
-  if (!model.ok) return { ok: false, reason: 'Dola 模型设置失败：' + model.reason };
-  const duration = await chooseDuration();
-  if (!duration.ok) return { ok: false, reason: 'Dola 时长设置失败：' + duration.reason };
-  const ratio = await chooseRatio();
-  if (!ratio.ok) return { ok: false, reason: 'Dola 比例设置失败：' + ratio.reason };
-  return { ok: true, reason: 'Dola 视频生成参数已设置' };
-  } catch (e) {
-    return { ok: false, reason: 'Dola 参数设置脚本异常: ' + (e && e.message ? e.message : String(e)) };
+  const pt = (el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; };
+  const cands = () => [...document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="option"], a, div, span')].filter(visible).map((el) => labelOf(el)).filter((t) => t && /seedance|模型|2\s*\.?\s*5|1\s*\.?\s*0|fast|比例|时长/i.test(t)).slice(0, 18).join(' | ');
+`
+
+/** 参数单步脚本包装：body 返回 { ok, points:[[x,y]...], reason } */
+function paramStepScript(body: string): string {
+  return `(async () => { const run = async () => { ${DOLA_PARAM_HELPERS} ${body} }; try { return await run(); } catch (e) { return { ok: false, reason: 'step: ' + (e && e.message ? e.message : String(e)) }; } })()`
+}
+
+/** 主进程发送真实鼠标输入事件完成点击（受信事件，可展开 Dola Radix 菜单） */
+async function realClickDola(win: BrowserWindow, points: number[][]): Promise<void> {
+  for (const [x, y] of points) {
+    win.webContents.sendInputEvent({ type: 'mouseMove', x, y })
+    win.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+    win.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+    await sleep(300)
   }
-})()`
+}
+
+/**
+ * 进入 Dola 视频生成界面并设置模型/时长/比例（真实点击）。
+ * 每步：页面脚本定位元素并返回中心坐标 → 主进程 sendInputEvent 真实点击 → 等菜单展开再点目标项。
+ */
+async function setupDolaParams(
+  win: BrowserWindow,
+  opts: { model?: string; durationSec?: number; ratio?: string },
+  cancelState?: { aborted: boolean; submitted: boolean }
+): Promise<{ ok: boolean; reason?: string }> {
+  const modelName = opts.model || ALLOWED_MODELS[0]
+  const tModelKey = modelName.replace(/[\s·•]/g, '').toLowerCase()
+  const tModelKey2 = tModelKey.replace(/^dreamina/, '')
+  const tDur = opts.durationSec === 10 ? '10s' : '5s'
+  const tRatioKey = (opts.ratio || '9:16').replace(/[\s·•]/g, '').toLowerCase()
+
+  const runStep = async (body: string, waitMs: number, label: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> => {
+    if (cancelState?.aborted) return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+    const r = (await win.webContents.executeJavaScript(paramStepScript(body), true)) as { ok?: boolean; reason?: string; points?: number[][] }
+    if (r?.ok === false) return { ok: false, reason: (label ? label + '：' : '') + (r.reason || '定位失败') }
+    await realClickDola(win, r?.points ?? [])
+    if (waitMs) await sleep(waitMs)
+    return { ok: true }
+  }
+
+  // 1) 关闭 Cookie 提示（有则点击）
+  const cookie = await runStep(
+    `const el = findButton((node) => { const t = labelOf(node); return t === '我知道了' || t === '我知道了cookie政策' || (t.includes('我知道了') && /cookie|政策|使用/.test(t)); }); if (!el) return { ok: true, points: [] }; return { ok: true, points: [pt(el)] };`,
+    700,
+    '关闭 Cookie 提示'
+  )
+  if (!cookie.ok) return cookie
+
+  // 2) 进入视频生成界面
+  const entry = await runStep(
+    `const hasToolbar = [...document.querySelectorAll('button,[role="button"]')].filter(visible).some((el)=>{ const t=labelOf(el); const k=keyOf(t); return (k.includes('模型') && /seedance|2\\.5|2\\.0|1\\.0/.test(k)) || /(10s|5s)/.test(k) || k.includes('比例'); }); if (hasToolbar) return { ok: true, points: [] }; const en=findButton((el)=>{ const t=labelOf(el); const cls=(typeof el.className==='string'?el.className:'').toLowerCase(); return t==='视频生成'||(cls.includes('skill-bar-button')&&t.includes('视频生成')&&!/额度|计算|说明|帮助|历史/.test(t)); }); if(!en) return { ok:false, points:[], reason:'未找到「视频生成」入口；候选:'+cands() }; return { ok:true, points:[pt(en)] };`,
+    2000,
+    '进入视频生成'
+  )
+  if (!entry.ok) return entry
+  await sleep(500)
+
+  // 3) 模型：触发按钮 → 展开 → 目标项
+  const model = await runStep(
+    `const cur=findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型')||t.includes('seedance'); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tModelKey)})) return { ok:true, points:[] }; const tr=findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes('seedance')||t.includes('模型'); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return t.includes('seedance')||t.includes('模型'); }); if(!tr) return { ok:false, points:[], reason:'未找到模型触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
+    1200,
+    'Dola 模型设置失败'
+  )
+  if (!model.ok) return model
+  const modelItem = await runStep(
+    `const it=findMenuItemInOpenMenu((el)=>{ const t=keyOf(labelOf(el)); return t.includes(${JSON.stringify(tModelKey)}) || t.includes(${JSON.stringify(tModelKey2)}); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return t.includes(${JSON.stringify(tModelKey)}) || t.includes(${JSON.stringify(tModelKey2)}); }); if(!it) return { ok:false, points:[], reason:'下拉中未找到目标项；候选:'+cands() }; return { ok:true, points:[pt(it)] };`,
+    900,
+    'Dola 模型设置失败'
+  )
+  if (!modelItem.ok) return modelItem
+
+  // 4) 时长
+  const dur = await runStep(
+    `const cur=findButton((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tDur)})) return { ok:true, points:[] }; const tr=findButton((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到时长触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
+    1200,
+    'Dola 时长设置失败'
+  )
+  if (!dur.ok) return dur
+  const durItem = await runStep(
+    `const it=findMenuItemInOpenMenu((el)=>keyOf(labelOf(el)).includes(${JSON.stringify(tDur)})) || findAny((el)=>keyOf(labelOf(el)).includes(${JSON.stringify(tDur)})); if(!it) return { ok:false, points:[], reason:'下拉中未找到目标项；候选:'+cands() }; return { ok:true, points:[pt(it)] };`,
+    900,
+    'Dola 时长设置失败'
+  )
+  if (!durItem.ok) return durItem
+
+  // 5) 比例
+  const ratioStep = await runStep(
+    `const cur=findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes(${JSON.stringify(tRatioKey)}) || /(比例|16:9|9:16|1:1)/.test(t); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tRatioKey)})) return { ok:true, points:[] }; const tr=findButton((el)=>{ const t=keyOf(labelOf(el)); return /(比例|16:9|9:16|1:1)/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return /(比例|16:9|9:16|1:1)/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到比例触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
+    1200,
+    'Dola 比例设置失败'
+  )
+  if (!ratioStep.ok) return ratioStep
+  const ratioItem = await runStep(
+    `const it=findMenuItemInOpenMenu((el)=>keyOf(labelOf(el)).includes(${JSON.stringify(tRatioKey)})) || findAny((el)=>keyOf(labelOf(el)).includes(${JSON.stringify(tRatioKey)})); if(!it) return { ok:false, points:[], reason:'下拉中未找到目标项；候选:'+cands() }; return { ok:true, points:[pt(it)] };`,
+    900,
+    'Dola 比例设置失败'
+  )
+  if (!ratioItem.ok) return ratioItem
+
+  return { ok: true, reason: 'Dola 视频生成参数已设置' }
 }
 
 function buildFillPromptScript(prompt: string): string {
@@ -882,14 +849,15 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
   options.onProgress?.('apply-params', { prompt: options.prompt, model, durationSec, ratio: options.ratio })
   let prepareResult: { ok?: boolean; reason?: string } = {}
   try {
-    prepareResult = (await win.webContents.executeJavaScript(
-      buildPrepareDolaScript({ ...options, model, durationSec }),
-      true
-    )) as typeof prepareResult
+    prepareResult = await setupDolaParams(win, { model, durationSec, ratio: options.ratio }, cancelState)
   } catch (e) {
     prepareResult = { ok: false, reason: scriptError('Dola 参数设置', e) }
   }
   if (!prepareResult.ok) {
+    if (prepareResult.reason === '已手动终止生成（提示词未发送）') {
+      win.destroy()
+      return failCancelled(attempts)
+    }
     const shot = await captureDolaDebug(win, 'params')
     win.destroy()
     return failWith((prepareResult.reason || 'Dola 页面参数设置失败') + (shot ? ` [截图:${shot}]` : ''))
