@@ -5,7 +5,7 @@
 
 import { app, BrowserWindow, clipboard, session } from 'electron'
 import { existsSync, mkdirSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { OriginStorage, ProviderCookie } from './webview-engine'
 
@@ -175,13 +175,16 @@ const DOLA_PARAM_HELPERS = `
   const keyOf = (s) => (s || '').replace(/[\\s·•]/g, '').toLowerCase();
   const findButton = (m) => [...document.querySelectorAll('button, [role="button"], a, [class*="button" i], [class*="btn" i]')].filter((el) => visible(el) && canClick(el)).find(m);
   const findAny = (m) => [...document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], a, div, span')].filter(visible).find(m);
+  // Radix 下拉触发器都带 [aria-haspopup="menu"]，用它精确定位模型/时长/比例，避免误点「Seedance 视频生成」这类入口
+  const findTrigger = (m) => [...document.querySelectorAll('[aria-haspopup="menu"]')].filter((el) => visible(el) && canClick(el)).find(m);
   const findMenuItemInOpenMenu = (m) => {
     const menus = [...document.querySelectorAll('[role="menu"], [role="listbox"], [role="menubar"], [data-radix-menu-content], [data-radix-popper-content-wrapper]')].filter(visible);
     for (const menu of menus) { const hit = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]')].filter(visible).find(m); if (hit) return hit; }
     return [...document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]')].filter(visible).find(m);
   };
   const pt = (el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; };
-  const cands = () => [...document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="menuitemradio"], [role="option"], a, div, span')].filter(visible).map((el) => labelOf(el)).filter((t) => t && /seedance|模型|2\s*\.?\s*5|1\s*\.?\s*0|fast|比例|时长/i.test(t)).slice(0, 18).join(' | ');
+  // 简洁候选：只取下拉触发器与当前菜单项文本，去重、限长，避免报错刷屏
+  const cands = () => { const out=[]; const seen=new Set(); const push=(el)=>{ const t=norm(labelOf(el)); if(!t||seen.has(t))return; seen.add(t); if(t.length<=40) out.push(t); }; document.querySelectorAll('[aria-haspopup="menu"]').forEach((el)=>{ if(visible(el))push(el); }); [...document.querySelectorAll('[role="menu"]')].filter(visible).forEach((m)=>{ m.querySelectorAll('[role="menuitem"],[role="option"]').forEach(push); }); document.querySelectorAll('button,[role="button"]').forEach((el)=>{ if(visible(el)&&/模型|时长|比例|seedance|dreamina/i.test(labelOf(el)))push(el); }); return (out.length?out:['无']).slice(0,8).join(' | '); };
 `
 
 /** 参数单步脚本包装：body 返回 { ok, points:[[x,y]...], reason } */
@@ -240,9 +243,9 @@ async function setupDolaParams(
   if (!entry.ok) return entry
   await sleep(500)
 
-  // 3) 模型：触发按钮 → 展开 → 目标项
+  // 3) 模型：触发按钮 → 展开 → 目标项（优先 Radix 触发器，避免误点「Seedance 视频生成」入口）
   const model = await runStep(
-    `const cur=findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型')||t.includes('seedance'); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tModelKey)})) return { ok:true, points:[] }; const tr=findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes('seedance')||t.includes('模型'); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return t.includes('seedance')||t.includes('模型'); }); if(!tr) return { ok:false, points:[], reason:'未找到模型触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
+    `const cur=findTrigger((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型'); }) || findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型')&&!t.includes('视频'); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tModelKey)})) return { ok:true, points:[] }; const tr=findTrigger((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型'); }) || findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型')&&!/视频|生成/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return t.includes('模型')&&!/视频|生成|seedance/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到模型触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
     1200,
     'Dola 模型设置失败'
   )
@@ -254,9 +257,9 @@ async function setupDolaParams(
   )
   if (!modelItem.ok) return modelItem
 
-  // 4) 时长
+  // 4) 时长（优先 Radix 触发器）
   const dur = await runStep(
-    `const cur=findButton((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tDur)})) return { ok:true, points:[] }; const tr=findButton((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到时长触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
+    `const cur=findTrigger((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }) || findButton((el)=>{ const t=keyOf(labelOf(el)); return /^(10s|5s|10秒|5秒)$/.test(t); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tDur)})) return { ok:true, points:[] }; const tr=findTrigger((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }) || findButton((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return /(10s|5s|10秒|5秒|时长)/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到时长触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
     1200,
     'Dola 时长设置失败'
   )
@@ -268,9 +271,9 @@ async function setupDolaParams(
   )
   if (!durItem.ok) return durItem
 
-  // 5) 比例
+  // 5) 比例（优先 Radix 触发器）
   const ratioStep = await runStep(
-    `const cur=findButton((el)=>{ const t=keyOf(labelOf(el)); return t.includes(${JSON.stringify(tRatioKey)}) || /(比例|16:9|9:16|1:1)/.test(t); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tRatioKey)})) return { ok:true, points:[] }; const tr=findButton((el)=>{ const t=keyOf(labelOf(el)); return /(比例|16:9|9:16|1:1)/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return /(比例|16:9|9:16|1:1)/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到比例触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
+    `const cur=findTrigger((el)=>{ const t=keyOf(labelOf(el)); return t.includes('比例')||/(16:9|9:16|1:1|21:9|3:4|4:3)/.test(t); }); if(cur && keyOf(labelOf(cur)).includes(${JSON.stringify(tRatioKey)})) return { ok:true, points:[] }; const tr=findTrigger((el)=>{ const t=keyOf(labelOf(el)); return t.includes('比例'); }) || findButton((el)=>{ const t=keyOf(labelOf(el)); return /(比例|16:9|9:16|1:1)/.test(t); }) || findAny((el)=>{ const t=keyOf(labelOf(el)); return /(比例|16:9|9:16|1:1)/.test(t); }); if(!tr) return { ok:false, points:[], reason:'未找到比例触发按钮；候选:'+cands() }; return { ok:true, points:[pt(tr)] };`,
     1200,
     'Dola 比例设置失败'
   )
@@ -375,6 +378,9 @@ function buildFocusInputScript(): string {
   };
   const input = findInput();
   if (!input) return { ok: false, reason: '未找到 Dola 输入框，无法通过 Ctrl+V 上传素材，请开启显示窗口确认页面正常' };
+  const r = input.getBoundingClientRect();
+  const cx = Math.round(r.left + r.width / 2);
+  const cy = Math.round(Math.min(r.top + r.height / 2, r.top + 40));
   input.focus();
   if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
     const len = (input.value || '').length;
@@ -387,8 +393,8 @@ function buildFocusInputScript(): string {
     }
   }
   try { input.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
-  await sleep(300);
-  return { ok: true, reason: 'Dola 输入框已聚焦，准备通过 Ctrl+V 上传素材' };
+  await sleep(200);
+  return { ok: true, x: cx, y: cy, reason: 'Dola 输入框已定位，准备通过 Ctrl+V 上传素材' };
   } catch (e) {
     return { ok: false, reason: 'Dola 素材上传脚本异常: ' + (e && e.message ? e.message : String(e)) };
   }
@@ -421,6 +427,37 @@ function buildCFHDrop(paths: string[]): Buffer {
   return buf
 }
 
+/**
+ * 把本地图片字节构造为真实 File 对象，写入 Dola 隐藏的 <input type="file" multiple> 并触发 change，
+ * 从而走 Dola 官方上传逻辑（比注入剪贴板粘贴更可靠）。
+ */
+function buildUploadVideoInputScript(
+  items: Array<{ name: string; type: string; base64: string }>
+): string {
+  const arrJson = JSON.stringify(
+    items.map((it) => ({ name: it.name, type: it.type, base64: it.base64 }))
+  )
+  return `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const items = ${arrJson};
+  const inp = document.querySelector('input[type="file"]') || document.querySelector('input[accept*="image"], input[accept*="jpg"], input[accept*="png"], input[accept*="jpeg"], input[accept*="webp"]');
+  if (!inp) return { ok: false, reason: '未找到 Dola 图片上传 input' };
+  const dt = new DataTransfer();
+  for (const it of items) {
+    const bin = atob(it.base64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const f = new File([u8], it.name, { type: it.type });
+    dt.items.add(f);
+  }
+  // 覆盖 files 并派发 change，触发 React 的 onChange 上传处理
+  Object.defineProperty(inp, 'files', { value: dt.files, configurable: true });
+  inp.dispatchEvent(new Event('change', { bubbles: true }));
+  await sleep(500);
+  return { ok: true, reason: '已向 Dola 文件上传框写入 ' + dt.files.length + ' 个文件' };
+})()`
+}
+
 async function uploadDolaImages(
   win: BrowserWindow,
   images: string[],
@@ -430,17 +467,6 @@ async function uploadDolaImages(
   if (files.length === 0) {
     return { ok: false, reason: '读取 Dola 素材图片失败，请确认图片文件仍存在' }
   }
-  const savedText = clipboard.readText()
-  const savedImage = clipboard.readImage()
-  // paste() 依赖窗口可见可聚焦，隐藏窗口下 Ctrl+V 粘贴图片不生效；
-  // 上传素材阶段临时显示窗口，传完再恢复隐藏。
-  const wasVisible = win.isVisible()
-  if (!wasVisible) {
-    win.show()
-    win.center()
-  }
-  win.webContents.focus()
-  win.focus()
   const sleepOrAbort = async (ms: number): Promise<boolean> => {
     const step = 150
     const end = Date.now() + ms
@@ -454,37 +480,29 @@ async function uploadDolaImages(
     if (cancelState?.aborted) {
       return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
     }
-    const focus = (await win.webContents.executeJavaScript(
-      buildFocusInputScript(),
-      true
-    )) as { ok: boolean; reason?: string }
-    if (!focus.ok) {
-      return { ok: false, reason: focus.reason || '未找到 Dola 输入框，无法通过 Ctrl+V 上传素材' }
+    // 读取每张图片的原始字节，注入页面构造成真实 File 对象。
+    // 直接喂给 Dola 隐藏的 <input type="file" multiple> 并触发 change，绕开剪贴板/粘贴的不确定性。
+    const items: Array<{ name: string; type: string; base64: string }> = []
+    for (const p of files) {
+      const name = p.split(/[\\/]/).pop() || 'image'
+      const type = /\.png$/i.test(p) ? 'image/png' : /\.gif$/i.test(p) ? 'image/gif' : /\.webp$/i.test(p) ? 'image/webp' : /\.jpe?g$/i.test(p) ? 'image/jpeg' : 'application/octet-stream'
+      const base64 = (await readFile(p)).toString('base64')
+      items.push({ name, type, base64 })
     }
-    win.webContents.focus()
-    // 多张图一次写入剪贴板的文件列表，再粘贴一次（Dola 支持一次粘贴多张图）
-    clipboard.writeBuffer('CF_HDROP', buildCFHDrop(files))
-    win.webContents.paste()
-    if (await sleepOrAbort(2500)) {
+    const upload = (await win.webContents.executeJavaScript(
+      buildUploadVideoInputScript(items),
+      true
+    )) as { ok: boolean; reason?: string; inputCls?: string; files?: number }
+    if (!upload.ok) {
+      return { ok: false, reason: upload.reason || '未找到 Dola 图片上传入口' }
+    }
+    if (await sleepOrAbort(3000)) {
       return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
     }
-    return { ok: true, reason: `已在 Dola 输入框通过 Ctrl+V 粘贴 ${files.length} 张素材图片（多图一次粘贴）` }
+    const shot = await captureDolaDebug(win, 'uploaded')
+    return { ok: true, reason: `已向 Dola 上传 ${items.length} 张素材图片` + (shot ? `[截图:${shot}]` : '') }
   } catch (e) {
     return { ok: false, reason: scriptError('Dola 素材上传', e) }
-  } finally {
-    try {
-      if (!savedImage.isEmpty() || savedText) {
-        clipboard.write({ text: savedText, image: savedImage })
-      } else {
-        clipboard.clear()
-      }
-    } catch {}
-    // 上传阶段临时显示的窗口恢复隐藏（原本就隐藏才 hide）
-    if (!wasVisible) {
-      try {
-        win.hide()
-      } catch {}
-    }
   }
 }
 
