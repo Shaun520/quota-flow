@@ -2140,10 +2140,11 @@ body {
 }
 .material-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  gap: 8px;
 }
 .material-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--bg-card);
@@ -2155,6 +2156,10 @@ body {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .material-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
+}
+.material-card.selected {
   border-color: var(--accent);
   box-shadow: var(--shadow-md);
 }
@@ -2182,11 +2187,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 10px;
+  padding: 6px 8px;
 }
 .material-card-body h4 {
   margin: 0;
-  font-size: 0.85em;
+  font-size: 0.78em;
   font-weight: 600;
   color: var(--fg-primary);
   white-space: nowrap;
@@ -2197,14 +2202,60 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.75em;
+  font-size: 0.7em;
   color: var(--fg-muted);
 }
 .material-card-actions {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 4px;
+  margin-top: 2px;
+}
+.material-card-actions .btn-sm {
+  padding: 2px 6px;
+  font-size: 0.72em;
+}
+.material-select {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+.material-select.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* 批量多选工具条（勾选后浮在素材网格上方） */
+.material-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.material-batch-bar .hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82em;
+  color: var(--fg-primary);
+}
+.material-batch-bar .hint .count {
+  font-weight: 600;
 }
 .material-detail {
   background: var(--bg-card);

@@ -35,6 +35,8 @@ let allowClose = false
 let isGenerating = false
 /** 任务注册前用户已点停止 → 注册后立即置 aborted */
 let pendingCancel = false
+/** 最近一次生成的 Supabase 上下文：优雅关闭时把运行中任务改写为 failed（等下次启动 reconcile 兜底） */
+let lastDispatchCtx: { supabaseUrl: string; supabaseAnonKey: string; userId: string } | null = null
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
 
 // 禁用 GPU 硬件加速：Windows 上 Chromium 合成器在频繁重绘（如快速点击 tab 切换页面）时
@@ -247,6 +249,42 @@ function clearStoredSession(): void {
   }
 }
 
+/**
+ * 优雅关闭时把仍在运行的生成任务 best-effort 改写为 failed，
+ * 这样无需等下次启动 reconcile，admin 端/下次查看即可看到「失败」而非「排队/生成中」。
+ * 写失败不阻断退出（服务端已接单的任务仍由下次启动 reconcile 兜底清扫）。
+ */
+async function markActiveRunsFailed(): Promise<void> {
+  const ctx = lastDispatchCtx
+  const jobs = [...activeRuns.keys()]
+  if (!ctx || jobs.length === 0) return
+  try {
+    const session = readStoredSession()
+    if (!session) return
+    const client = createSupabaseClient({
+      supabaseUrl: ctx.supabaseUrl,
+      supabaseAnonKey: ctx.supabaseAnonKey
+    })
+    await client.auth.setSession({ access_token: session.accessToken, refresh_token: session.refreshToken })
+    const jobSvc = new JobService(client)
+    await Promise.all(
+      jobs.map(async (jobId) => {
+        try {
+          await jobSvc.updateJob(ctx.userId, jobId, {
+            status: 'failed',
+            error: '应用已关闭，生成中断',
+            completedAt: new Date().toISOString()
+          })
+        } catch {
+          // 单条写失败不阻断，reconcile 下次启动兜底
+        }
+      })
+    )
+  } catch {
+    // 会话/网络异常不阻断退出
+  }
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1200,
@@ -285,8 +323,9 @@ function createWindow(): void {
         cancelId: 0,
         noLink: true
       })
-      .then(({ response }) => {
+      .then(async ({ response }) => {
         if (response === 1) {
+          await markActiveRunsFailed()
           allowClose = true
           win.close()
         }
@@ -451,6 +490,7 @@ app.whenReady().then(() => {
     let registeredJobId: string | null = null
     isGenerating = true
     pendingCancel = false
+    lastDispatchCtx = { supabaseUrl: input.supabaseUrl, supabaseAnonKey: input.supabaseAnonKey, userId: input.userId }
     try {
       return await runGenerate(input, emit, (jobId, state) => {
         registeredJobId = jobId
@@ -577,7 +617,8 @@ app.whenReady().then(() => {
       const providerSvc = new ProviderService(client)
       let recovered = false
 
-      // 1. 恢复崩溃残留：上次会话遗留的 pending/running → 标记「意外中断」（不做自动恢复）
+      // 1. 恢复崩溃残留：上次会话遗留的 pending/running → 标记为失败（不做自动恢复）。
+      //    注意 jobs.status 的 DB CHECK 约束不含 'interrupted'，写失败(含约束)不报错。
       const { data: stuckJobs } = await client
         .from('jobs')
         .select('id, created_at')
@@ -587,7 +628,7 @@ app.whenReady().then(() => {
         .limit(20)
       for (const j of (stuckJobs ?? [])) {
         await jobSvc.updateJob(params.userId, j.id, {
-          status: 'interrupted',
+          status: 'failed',
           error: '应用意外退出，生成中断',
           completedAt: new Date().toISOString()
         })

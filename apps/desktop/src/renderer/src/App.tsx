@@ -204,8 +204,8 @@ function MainApp({
     location.hash = 'tab=dispatch'
   }, [])
 
-  const handleUseMaterial = useCallback((path: string, url: string): void => {
-    setMaterialImages([{ path, url }])
+  const handleUseMaterial = useCallback((materials: Array<{ path: string; url: string }>): void => {
+    setMaterialImages(materials)
     setTab('dispatch')
     location.hash = 'tab=dispatch'
   }, [])

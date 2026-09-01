@@ -12,7 +12,7 @@ function formatBytes(bytes: number): string {
 }
 
 interface MaterialLibraryProps {
-  onUseMaterial?: (path: string, url: string) => void
+  onUseMaterial?: (materials: Array<{ path: string; url: string }>) => void
   onNotify?: (message: string) => void
 }
 
@@ -23,7 +23,30 @@ export default function MaterialLibrary({ onUseMaterial, onNotify }: MaterialLib
   const [urls, setUrls] = useState<Record<string, string>>({})
   const [selected, setSelected] = useState<MaterialRecord | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
+  /** 多选「用作参考」的素材 id 集合（仅图片可勾选） */
+  const [multiSel, setMultiSel] = useState<ReadonlySet<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const toggleMulti = (id: string): void => {
+    setMultiSel((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const clearMulti = (): void => setMultiSel(new Set())
+
+  // 批量回填调度台（多张图片一次用作参考）
+  const useSelected = (): void => {
+    const picked = visibleItems
+      .filter((m) => multiSel.has(m.id) && !!urls[m.id])
+      .map((m) => ({ path: m.path, url: urls[m.id]! }))
+    if (picked.length === 0) return
+    clearMulti()
+    onUseMaterial?.(picked)
+  }
 
   const visibleItems = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
@@ -83,6 +106,13 @@ export default function MaterialLibrary({ onUseMaterial, onNotify }: MaterialLib
     try {
       await remove(item.id)
       if (selected?.id === item.id) setSelected(null)
+      // 从多选中剔除已删除项，避免计数残留
+      setMultiSel((prev) => {
+        if (!prev.has(item.id)) return prev
+        const next = new Set(prev)
+        next.delete(item.id)
+        return next
+      })
       onNotify?.('已删除素材')
     } catch (err) {
       onNotify?.(err instanceof Error ? err.message : '删除失败')
@@ -174,17 +204,41 @@ export default function MaterialLibrary({ onUseMaterial, onNotify }: MaterialLib
       ) : visibleItems.length === 0 ? (
         <div className="community-state">没有匹配的素材。</div>
       ) : (
-        <div className="material-grid">
+        <>
+          {multiSel.size > 0 && (
+            <div className="material-batch-bar">
+              <div className="hint">
+                <span className="count">已选 {multiSel.size} 张图片</span>
+              </div>
+              <div className="material-card-actions" style={{ margin: 0 }}>
+                <button className="btn-sm" onClick={clearMulti}>取消选择</button>
+                <button className="btn-sm primary" onClick={useSelected}>用作参考（{multiSel.size}）</button>
+              </div>
+            </div>
+          )}
+          <div className="material-grid">
           {visibleItems.map((m) => {
             const src = urls[m.id]
             const canUse = m.type === 'image'
+            const isSel = multiSel.has(m.id)
             return (
               <article
                 key={m.id}
-                className="material-card"
+                className={'material-card' + (isSel ? ' selected' : '')}
                 onClick={() => src && setSelected(m)}
               >
-                <div className="material-card-cover">{renderThumb(m)}</div>
+                <div className="material-card-cover">
+                  {renderThumb(m)}
+                  {canUse && (
+                    <div
+                      className={'material-select' + (isSel ? ' on' : '')}
+                      title={isSel ? '取消选择' : '选择用作参考'}
+                      onClick={(e) => { e.stopPropagation(); toggleMulti(m.id) }}
+                    >
+                      {isSel ? '✓' : '+'}
+                    </div>
+                  )}
+                </div>
                 <div className="material-card-body">
                   <h4 title={m.name}>{m.name}</h4>
                   <div className="material-meta">
@@ -198,7 +252,7 @@ export default function MaterialLibrary({ onUseMaterial, onNotify }: MaterialLib
                         title="回填到调度台作为参考图"
                         onClick={() => {
                           if (!src) return
-                          onUseMaterial?.(m.path, src)
+                          onUseMaterial?.([{ path: m.path, url: src }])
                         }}
                       >
                         用作参考
@@ -212,7 +266,8 @@ export default function MaterialLibrary({ onUseMaterial, onNotify }: MaterialLib
               </article>
             )
           })}
-        </div>
+          </div>
+        </>
       )}
 
       {selected &&
@@ -253,7 +308,7 @@ export default function MaterialLibrary({ onUseMaterial, onNotify }: MaterialLib
                       const src = urls[selected.id]
                       if (!src) return
                       setSelected(null)
-                      onUseMaterial?.(selected.path, src)
+                      onUseMaterial?.([{ path: selected.path, url: src }])
                     }}
                   >
                     用作参考

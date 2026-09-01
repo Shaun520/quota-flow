@@ -67,7 +67,7 @@ interface CreationCenterProps {
   features: DesktopFeatureFlags
   userId?: string
   onReferenceGenerate?: (draft: RegenerateDraft) => void
-  onUseMaterial?: (path: string, url: string) => void
+  onUseMaterial?: (materials: Array<{ path: string; url: string }>) => void
   onNotify?: (message: string) => void
 }
 

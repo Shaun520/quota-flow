@@ -1216,35 +1216,42 @@ export default function Dashboard({
     [savedImagePaths]
   )
 
-  const onFilesSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? [])
-    const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
-    const picked = files.slice(0, remaining)
+  // 图片上传的共享入口：过滤图片类型 + 数量限制，API 型厂商走公网 URL 上传，否则本地 blob 预览。
+  // 选择文件 / 粘贴 / 拖拽三处共用，保证行为一致。
+  const appendImageFiles = useCallback((files: File[]) => {
+    const picked = files
+      .filter((f) => f.type.startsWith('image/'))
+      .slice(0, Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length))
+    if (picked.length === 0) return
     if (API_IMAGE_PROVIDERS.includes(provider)) {
       void appendApiImages(picked)
-      e.target.value = ''
       return
     }
     const urls = picked.map((f) => URL.createObjectURL(f))
     setImages((prev) => [...prev, ...urls])
     setImageFiles((prev) => [...prev, ...picked])
-    e.target.value = ''
   }, [provider, model, savedImagePaths, appendApiImages])
 
+  const onFilesSelected = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    appendImageFiles(files)
+    e.target.value = ''
+  }, [appendImageFiles])
+
   const onPasteImages = useCallback((e: ReactClipboardEvent<HTMLDivElement>) => {
-    const files = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith('image/'))
-    if (files.length === 0) return
+    const files = Array.from(e.clipboardData.files ?? [])
+    if (!files.some((f) => f.type.startsWith('image/'))) return
     e.preventDefault()
-    const remaining = Math.max(0, maxImageUploadCount(provider, model) - savedImagePaths.length)
-    const picked = files.slice(0, remaining)
-    if (API_IMAGE_PROVIDERS.includes(provider)) {
-      void appendApiImages(picked)
-      return
-    }
-    const urls = picked.map((f) => URL.createObjectURL(f))
-    setImages((prev) => [...prev, ...urls])
-    setImageFiles((prev) => [...prev, ...picked])
-  }, [provider, model, savedImagePaths, appendApiImages])
+    appendImageFiles(files)
+  }, [appendImageFiles])
+
+  // 拖拽上传图片
+  const handleImagesDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(e.dataTransfer.files ?? [])
+    if (!files.some((f) => f.type.startsWith('image/'))) return
+    e.preventDefault()
+    appendImageFiles(files)
+  }, [appendImageFiles])
 
   const onRemoveImage = useCallback((idx: number) => {
     setImages((prev) => prev.filter((_, i) => i !== idx))
@@ -1764,6 +1771,8 @@ export default function Dashboard({
               className={'upload-zone' + (images.length > 0 ? ' has-images' : '')}
               onClick={onPickFiles}
               onPaste={onPasteImages}
+              onDragOver={(e) => { e.preventDefault() }}
+              onDrop={(e) => { e.preventDefault(); void handleImagesDrop(e) }}
             >
               {images.length > 0 ? (
                 <div className="thumb-strip">

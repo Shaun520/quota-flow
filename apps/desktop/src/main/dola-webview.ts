@@ -3,9 +3,10 @@
 //       → 通过 Ctrl+V 粘贴多参考图片（最多 10 张）→ 追加 prompt → 点击生成 → 轮询页面/网络媒体地址提取 mp4 URL
 // 说明：Dola 视频生成有独立入口与参数控件，参数不拼入 prompt。
 
-import { BrowserWindow, clipboard, nativeImage, session } from 'electron'
-import { readFile } from 'node:fs/promises'
-import { basename, extname } from 'node:path'
+import { app, BrowserWindow, clipboard, session } from 'electron'
+import { existsSync, mkdirSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { OriginStorage, ProviderCookie } from './webview-engine'
 
 const UA =
@@ -427,33 +428,30 @@ function buildFocusInputScript(): string {
 })()`
 }
 
-interface DolaImageData {
-  name: string
-  mime: string
-  dataUrl: string
-}
-
-async function readDolaImages(images: string[]): Promise<DolaImageData[]> {
-  const out: DolaImageData[] = []
-  for (const imagePath of images) {
-    try {
-      const ext = extname(imagePath).toLowerCase()
-      const mime =
-        ext === '.png' ? 'image/png' :
-        ext === '.gif' ? 'image/gif' :
-        ext === '.webp' ? 'image/webp' :
-        'image/jpeg'
-      const data = await readFile(imagePath)
-      out.push({
-        name: basename(imagePath),
-        mime,
-        dataUrl: `data:${mime};base64,${data.toString('base64')}`
-      })
-    } catch {
-      // 单张失败不阻断，只要至少有一张可上传即可
-    }
+/**
+ * 构造 Windows CF_HDROP（DROPFILES）剪贴板数据：把多张图片的本地路径以「多文件」方式一次写入剪贴板，
+ * 这样 Dola 输入框一次 Ctrl+V 即可把多张图全部贴进来（而非逐张粘贴导致只保留一张）。
+ */
+function buildCFHDrop(paths: string[]): Buffer {
+  const enc: Buffer[] = []
+  for (const p of paths) {
+    enc.push(Buffer.from(p, 'utf16le'))
+    enc.push(Buffer.alloc(2)) // 每个路径以 NUL 结尾
   }
-  return out
+  const filesLen = enc.reduce((n, b) => n + b.length, 0)
+  const buf = Buffer.alloc(20 + filesLen + 2)
+  buf.writeUInt32LE(20, 0) // pFiles：文件列表相对头部的偏移（20 = 头部长度）
+  buf.writeUInt32LE(0, 4)  // pt.x
+  buf.writeUInt32LE(0, 8)  // pt.y
+  buf.writeUInt32LE(0, 12) // fNC
+  buf.writeUInt32LE(1, 16) // fWide：使用 UTF-16
+  let o = 20
+  for (const b of enc) {
+    b.copy(buf, o)
+    o += b.length
+  }
+  buf.writeUInt16LE(0, o) // 列表末尾补双 NUL
+  return buf
 }
 
 async function uploadDolaImages(
@@ -461,12 +459,21 @@ async function uploadDolaImages(
   images: string[],
   cancelState?: { aborted: boolean; submitted: boolean }
 ): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
-  const data = await readDolaImages(images)
-  if (data.length === 0) {
+  const files = (images || []).filter((p) => existsSync(p))
+  if (files.length === 0) {
     return { ok: false, reason: '读取 Dola 素材图片失败，请确认图片文件仍存在' }
   }
   const savedText = clipboard.readText()
   const savedImage = clipboard.readImage()
+  // paste() 依赖窗口可见可聚焦，隐藏窗口下 Ctrl+V 粘贴图片不生效；
+  // 上传素材阶段临时显示窗口，传完再恢复隐藏。
+  const wasVisible = win.isVisible()
+  if (!wasVisible) {
+    win.show()
+    win.center()
+  }
+  win.webContents.focus()
+  win.focus()
   const sleepOrAbort = async (ms: number): Promise<boolean> => {
     const step = 150
     const end = Date.now() + ms
@@ -477,35 +484,24 @@ async function uploadDolaImages(
     return cancelState?.aborted === true
   }
   try {
-    let pasted = 0
-    for (const item of data) {
-      if (cancelState?.aborted) {
-        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
-      }
-      const image = nativeImage.createFromDataURL(item.dataUrl)
-      if (image.isEmpty()) {
-        return { ok: false, reason: `Dola 素材图片读取失败：${item.name}` }
-      }
-      const focus = (await win.webContents.executeJavaScript(
-        buildFocusInputScript(),
-        true
-      )) as { ok: boolean; reason?: string }
-      if (!focus.ok) {
-        return { ok: false, reason: focus.reason || '未找到 Dola 输入框，无法通过 Ctrl+V 上传素材' }
-      }
-      if (cancelState?.aborted) {
-        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
-      }
-      win.webContents.focus()
-      clipboard.writeImage(image)
-      win.webContents.paste()
-      if (await sleepOrAbort(2200)) {
-        return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
-      }
-      pasted += 1
+    if (cancelState?.aborted) {
+      return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
     }
-
-    return { ok: true, reason: `已在 Dola 输入框通过 Ctrl+V 上传 ${pasted} 张素材图片` }
+    const focus = (await win.webContents.executeJavaScript(
+      buildFocusInputScript(),
+      true
+    )) as { ok: boolean; reason?: string }
+    if (!focus.ok) {
+      return { ok: false, reason: focus.reason || '未找到 Dola 输入框，无法通过 Ctrl+V 上传素材' }
+    }
+    win.webContents.focus()
+    // 多张图一次写入剪贴板的文件列表，再粘贴一次（Dola 支持一次粘贴多张图）
+    clipboard.writeBuffer('CF_HDROP', buildCFHDrop(files))
+    win.webContents.paste()
+    if (await sleepOrAbort(2500)) {
+      return { ok: false, cancelled: true, reason: '已手动终止生成（提示词未发送）' }
+    }
+    return { ok: true, reason: `已在 Dola 输入框通过 Ctrl+V 粘贴 ${files.length} 张素材图片（多图一次粘贴）` }
   } catch (e) {
     return { ok: false, reason: scriptError('Dola 素材上传', e) }
   } finally {
@@ -516,6 +512,29 @@ async function uploadDolaImages(
         clipboard.clear()
       }
     } catch {}
+    // 上传阶段临时显示的窗口恢复隐藏（原本就隐藏才 hide）
+    if (!wasVisible) {
+      try {
+        win.hide()
+      } catch {}
+    }
+  }
+}
+
+/**
+ * 参数设置失败/进入视频界面异常时自动截屏保存到 userData/dola-debug/，便于定位页面实际状态。
+ */
+async function captureDolaDebug(win: BrowserWindow, tag: string): Promise<string | null> {
+  try {
+    const image = await win.webContents.capturePage()
+    if (image.isEmpty()) return null
+    const dir = join(app.getPath('userData'), 'dola-debug')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${Date.now()}-${tag}.png`)
+    await writeFile(file, image.toPNG())
+    return file
+  } catch {
+    return null
   }
 }
 
@@ -850,8 +869,9 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
     if (await waitOrAbort(1000)) return abortNow()
   }
   if (loadError || !videoEntryFound) {
+    const shot = await captureDolaDebug(win, 'entry')
     win.destroy()
-    return failWith(loadError ? `页面加载失败 (${loadError.code}: ${loadError.desc})` : 'Dola 页面未出现「视频生成」入口（可能未登录或页面结构变化）')
+    return failWith((loadError ? `页面加载失败 (${loadError.code}: ${loadError.desc})` : 'Dola 页面未出现「视频生成」入口（可能未登录或定位不到入口）') + (shot ? ` [截图:${shot}]` : ''))
   }
 
   {
@@ -870,8 +890,9 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
     prepareResult = { ok: false, reason: scriptError('Dola 参数设置', e) }
   }
   if (!prepareResult.ok) {
+    const shot = await captureDolaDebug(win, 'params')
     win.destroy()
-    return failWith(prepareResult.reason || 'Dola 页面参数设置失败')
+    return failWith((prepareResult.reason || 'Dola 页面参数设置失败') + (shot ? ` [截图:${shot}]` : ''))
   }
 
   {

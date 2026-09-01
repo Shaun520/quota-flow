@@ -2,13 +2,15 @@
 // + 豆包执行（webview-engine）+ 额度扣减（quota_ledger）+ 视频下载落盘（URL 时效）
 
 import { app, safeStorage } from 'electron'
-import { copyFileSync, createWriteStream, mkdirSync, renameSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { copyFileSync, createWriteStream, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { get as httpsGet } from 'node:https'
 import { join } from 'node:path'
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
 import type { QuotaLedgerRow } from '@quota-flow/db-supabase'
 import { runDoubaoGeneration } from './webview-engine'
 import type { ProviderCookie, OriginStorage } from './webview-engine'
+import { resolveFfmpegPath } from './watermark-remover/engine'
 import { parseStoredCredentials as parseProviderCredentials } from './providers'
 import { clearVolcModelUnavailable, markVolcModelUnavailable } from './providers'
 import { runQwenGeneration } from './qwen-webview'
@@ -246,6 +248,75 @@ function downloadVideo(url: string, jobId: string, providerId = 'doubao', redire
     })
     out.on('error', () => finish(false, null))
   })
+}
+
+/**
+ * 判断本地视频是否为 HEVC/H.265 编码。
+ * Dola（Dreamina）导出多为 HEVC，桌面 Chromium 无 HEVC 解码器，应用内 <video> 会报“不支持的格式”。
+ */
+function isHevcVideo(ffmpeg: string, file: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const child = execFile(ffmpeg, ['-hide_banner', '-i', file], { windowsHide: true }, (_err, _stdout, stderr) => {
+        resolve(/Video:\s*(hevc|h265|hvc1|hev1)(\s|,|$)/i.test(stderr || ''))
+      })
+      child.on('error', () => resolve(true)) // 探测异常保守按 HEVC 处理（宁可转码）
+    } catch {
+      resolve(true)
+    }
+  })
+}
+
+/** 用 ffmpeg 重编码为 H.264 + AAC（yuv420p + faststart），输出写入 dest；成功返回 true。 */
+function reencodeTo264(ffmpeg: string, src: string, dest: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      resolve(ok)
+    }
+    try {
+      const child = execFile(
+        ffmpeg,
+        [
+          '-y', '-hide_banner', '-loglevel', 'error',
+          '-i', src,
+          '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac', '-b:a', '128k',
+          '-movflags', '+faststart',
+          dest
+        ],
+        { windowsHide: true },
+        (err) => finish(!err)
+      )
+      child.on('error', () => finish(false))
+    } catch {
+      finish(false)
+    }
+  })
+}
+
+/**
+ * 让本地视频可在应用内 Chromium 播放：仅对 Dola，检测到 HEVC 则转码为 H.264 并原地替换。
+ * 转码失败不阻断生成；其它厂商直接跳过。
+ */
+async function ensurePlayableVideo(providerId: string, file: string): Promise<void> {
+  if (providerId !== 'dola') return
+  const ffmpeg = resolveFfmpegPath()
+  if (!ffmpeg) return
+  try {
+    if (!(await isHevcVideo(ffmpeg, file))) return
+    const tmp = file + '.h264tmp.mp4'
+    if (await reencodeTo264(ffmpeg, file, tmp)) {
+      rmSync(file, { force: true })
+      renameSync(tmp, file)
+    } else {
+      rmSync(tmp, { force: true })
+    }
+  } catch {
+    // 转码失败不阻断，保留原始文件
+  }
 }
 
 export async function runGenerate(
@@ -491,11 +562,11 @@ export async function runGenerate(
         }
         if (result.ok && result.videoUrl) break
         lastError = result.error || '生成失败'
-        // 用户手动终止（提示词未发送）：标记为意外中断，不再换号
+        // 用户手动终止（提示词未发送）：标记为失败，不再换号
         if (result.cancelled) {
           try {
             await jobSvc.updateJob(input.userId, job.id, {
-              status: 'interrupted',
+              status: 'failed',
               error: '已手动终止生成（提示词未发送）',
               options: jobOptions,
               completedAt: new Date().toISOString()
@@ -567,6 +638,8 @@ export async function runGenerate(
     })
   }
   const resultUrl = localPath || result.videoUrl
+  // Dola（Dreamina）导出多为 HEVC，Chromium 无 HEVC 解码器 → 检测为 HEVC 时转码为 H.264，保证应用内可播
+  if (localPath) await ensurePlayableVideo(resolvedProviderId, localPath)
 
   // 先扣额度（原子 RPC），成功后再写 job success；
   // 失败则 job 标记 failed，通过 reconciliation 兜底追记
@@ -811,7 +884,7 @@ async function runApiBranch(
 
   if (runCancelState.aborted) {
     await jobSvc.updateJob(input.userId, job.id, {
-      status: 'interrupted',
+      status: 'failed',
       error: '已手动终止生成',
       options: jobOptions,
       completedAt: new Date().toISOString()

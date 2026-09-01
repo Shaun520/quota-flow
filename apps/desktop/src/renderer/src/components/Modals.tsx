@@ -1445,20 +1445,20 @@ export function AddProviderModal({
               <>
                 <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--fg-secondary)' }}>
                   {selected?.providerId === 'dola'
-                    ? '先在浏览器中打开 dola.com 并完成登录（真实浏览器登录不会被 Google 拦截），登录后回这里点「抓取浏览器登录态」。首次需在浏览器 chrome://inspect/#remote-debugging 开启一次「Enable remote debugging」开关。'
+                    ? '谷歌邮箱等账号登录需用「系统浏览器登录」（谷歌邮箱安全限制问题）；Dola扫码登录可直接用「内置浏览器登录」扫码完成'
                     : `点击按钮将打开 ${selected?.name ?? '厂商'} 登录窗口。请在窗口中完成登录，登录成功后点击「已完成登录」。`}
                 </p>
                 {selected?.providerId === 'dola' && (
                   <>
-                    <button className="btn-sm primary" onClick={() => void handleLoginClick('system')}>
-                      抓取浏览器登录态 →
+                    <button className="btn-sm" onClick={() => void handleLoginClick('window')}>
+                      内置浏览器登录
                     </button>
                     <button
-                      className="btn-sm"
-                      onClick={() => void handleLoginClick('window')}
+                      className="btn-sm primary"
+                      onClick={() => void handleLoginClick('system')}
                       style={{ marginLeft: 8 }}
                     >
-                      内置窗口登录
+                      系统浏览器登录 →
                     </button>
                   </>
                 )}
@@ -1473,7 +1473,7 @@ export function AddProviderModal({
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--fg-muted)' }}>
                 <span className="spinner" style={{ width: 14, height: 14, border: '2px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
                 {selected?.providerId === 'dola' && loginMode === 'system'
-                  ? '正在抓取浏览器中的 dola 登录态…（若弹出「允许调试」提示，请点击允许）'
+                  ? '正在系统浏览器登录 dola…（若弹出「允许调试」，请点击允许）'
                   : '正在获取登录状态，请在登录窗口完成登录…'}
               </div>
             )}

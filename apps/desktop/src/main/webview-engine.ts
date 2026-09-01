@@ -1502,7 +1502,6 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
   // 比例：真实 UI 网格点击；失败时回退文本拼接（页面结构变化时不阻断任务）
   let ratioViaDom = false
   if (options.ratio) {
-    progress(options, 'apply-ratio', { ratio: options.ratio })
     const ratioApply = await applyDoubaoRatio(win, options.ratio)
     if (ratioApply.ok) ratioViaDom = true
   }

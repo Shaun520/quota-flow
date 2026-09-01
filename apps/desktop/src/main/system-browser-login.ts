@@ -422,7 +422,7 @@ export async function collectDolaSystemBrowserLogin(
     const authState = await readDolaAuthState(client, sessionId)
     if (!isSessionReady(cookies, authState)) {
       throw new Error(
-        '未检测到已登录的 dola 会话。请先在浏览器中完成 dola 登录（需在未附加调试的浏览器里登录，否则会被 Google 拦截），然后重新点击「抓取浏览器登录态」'
+        '未检测到已登录的 dola 会话。请先在浏览器中完成 dola 登录（谷歌账号需在未附加调试的浏览器里登录，否则会被 Google 拦截），然后重新点击「系统浏览器登录」'
       )
     }
     const storages = await collectDolaStorage(client, sessionId)
