@@ -39,11 +39,6 @@ let pendingCancel = false
 let lastDispatchCtx: { supabaseUrl: string; supabaseAnonKey: string; userId: string } | null = null
 import { createSupabaseClient, JobService, ProviderService, todayKey } from '@quota-flow/db-supabase'
 
-// 禁用 GPU 硬件加速：Windows 上 Chromium 合成器在频繁重绘（如快速点击 tab 切换页面）时
-// 偶发丢帧/显示旧缓冲，导致整窗"时不时闪一下"。切到软件合成可根治。
-// 必须在 app ready 之前调用。
-app.disableHardwareAcceleration()
-
 // 本地媒体预览服务：127.0.0.1 随机端口
 //  - 根路径：userData/videos 下 <uuid>.mp4（视频，支持 Range）
 //  - /images/：userData/images 下 <jobId>-<n>.<ext>（图生视频上传的图片副本）
