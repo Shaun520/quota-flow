@@ -739,11 +739,13 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
   const abortNow = (): DolaGenerateResult => abortIfCancelled() ?? failCancelled(attempts)
 
   const mode = options.mode ?? 'multi_ref'
-  if (mode !== 'multi_ref') {
-    return failWith('Dola 当前仅支持多参考生成，请选择多参考生成并上传素材图片')
+  // Dola 支持文生视频 + 多参考生成；多参考必须传图，文生视频不要求素材
+  if (mode !== 'multi_ref' && mode !== 'text2video' && mode !== 't2v') {
+    return failWith('Dola 不支持该生成模式，请选择「文生视频」或「多参考生成」')
   }
+  const isMultiRef = mode === 'multi_ref'
   const images = (options.images ?? []).slice(0, MAX_DOLA_IMAGES)
-  if (mode === 'multi_ref' && images.length === 0) {
+  if (isMultiRef && images.length === 0) {
     return failWith('Dola 多参考生成需要至少上传一张素材图片')
   }
   const durationSec = options.durationSec === 10 ? 10 : 5

@@ -312,7 +312,11 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
     ]
   }
   if (provider === 'dola') {
-    return [{ value: 'multi_ref', label: '多参考生成' }]
+    // 默认保持「多参考生成」（Dola 原默认、脚本适配的界面）；文生视频为可选能力
+    return [
+      { value: 'multi_ref', label: '多参考生成' },
+      { value: 'text2video', label: '文生视频' }
+    ]
   }
   if (provider === 'tokenhub') {
     // 腾讯云 TokenHub 各模型模式与主进程 TOKENHUB_MODEL_MODES 一致；FX 待模板选择器，暂无入口

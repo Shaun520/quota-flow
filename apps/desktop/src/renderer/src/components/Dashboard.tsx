@@ -196,7 +196,7 @@ function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
   if (rawMode === 'text2video' || rawMode === 't2v') return 't2v'
   if (rawMode === 'img2video' || rawMode === 'img') return 'img'
   if (rawMode === 'multi_ref' || rawMode === 'first_last' || rawMode === 'first_frame') return rawMode
-  if (providerId === 'dola' || providerId === 'qwenwan') return 'multi_ref'
+  if (providerId === 'qwenwan') return 'multi_ref'
   return 't2v'
 }
 
@@ -949,7 +949,7 @@ export default function Dashboard({
   }, [preview, imagePreview, promptPreview, refVideoPreviewing])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
-    const currentMode = provider === 'dola' ? 'multi_ref' : mode
+    const currentMode = mode
     if (generating) return
     // 开放平台 API 型厂商（智谱/火山）：图生/多参考/首尾帧需公网 https 图片，上传未完成时禁用，避免提交空图报错
     if ((provider === 'zhipu' || provider === 'volcengine') && uploadingCount > 0) {
