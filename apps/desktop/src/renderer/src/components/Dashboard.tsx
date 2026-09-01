@@ -188,16 +188,20 @@ export interface RegenerateDraft {
 }
 
 function normalizeRegenerateMode(providerId: string, rawMode?: string): string {
-  // 元宝仅图生/文生：历史 multi_ref（多参考）记录归为图生视频
+  // 历史入库 mode 统一为完整值（text2video / img2video / multi_ref / first_last / first_frame）。
+  // 这里只做规范化，返回完整值，杜绝与 providerModeOptions 的简写(value='t2v'/'img')不匹配。
+  const m = (rawMode || '').trim()
   if (providerId === 'yuanbao') {
-    if (rawMode === 'text2video' || rawMode === 't2v') return 't2v'
-    return 'img'
+    // 元宝仅图生/文生：历史 multi_ref（多参考）记录归为图生视频
+    if (m === 'text2video' || m === 't2v') return 'text2video'
+    return 'img2video'
   }
-  if (rawMode === 'text2video' || rawMode === 't2v') return 't2v'
-  if (rawMode === 'img2video' || rawMode === 'img') return 'img'
-  if (rawMode === 'multi_ref' || rawMode === 'first_last' || rawMode === 'first_frame') return rawMode
-  if (providerId === 'qwenwan') return 'multi_ref'
-  return 't2v'
+  if (m === 'text2video' || m === 't2v') return 'text2video'
+  if (m === 'img2video' || m === 'img') return 'img2video'
+  if (m === 'multi_ref' || m === 'first_last' || m === 'first_frame' || m === 'firstlast') {
+    return m === 'firstlast' ? 'first_last' : m
+  }
+  return 'text2video'
 }
 
 /** 桌面子模式键归一为 admin 目录扁平键，用于与 caps.modes 求交集 */
@@ -396,7 +400,7 @@ export default function Dashboard({
     }
     // 百炼文生音频参考：有本地副本则重传取新公网 URL（原 https URL 生成后已删），供生成时透传 input.audio_url
     const audioLocal = regenerateDraft.audioLocalPath ?? null
-    if (nextProvider === 'bailian' && normalizedMode === 't2v' && audioLocal) {
+    if (nextProvider === 'bailian' && normalizedMode === 'text2video' && audioLocal) {
       const aExt = audioExt(audioLocal)
       window.api.storage
         .readImageLocal(audioLocal)

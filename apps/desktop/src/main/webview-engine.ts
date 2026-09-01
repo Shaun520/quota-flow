@@ -409,17 +409,22 @@ const extractResultScript = (): unknown => {
     }
   } catch {}
   const text = document.body ? document.body.innerText : ''
+  // 内容政策拒绝，但其并非"免责声明/承诺"弹窗文案：
+  // 免责声明（"均已获充分授权…相关责任需由你自行承担"）只是用户确认弹窗，不应判失败。
+  const isDisclaimer = /均已获充分授权|无侵权违法风险|责任需由你自行承担|自行承担|免责声明/.test(text)
   // 豆包内容政策拒绝：侵权/肖像/版权等拒绝文案（非视频结果）→ 直接判失败
-  const blockedMatch = text.match(
-    /生成内容中疑似包含侵权[^，。\n]{0,80}|出于肖像保护考虑[^，。\n]{0,80}|由于版权相关限制[^，。\n]{0,80}|无法返回该内容|换个主题|分身认证|侵权|违规|肖像保护|版权相关限制/
-  )
   let blockedText: string | null = null
-  if (blockedMatch) {
-    const idx = blockedMatch.index ?? 0
-    const lineStart = text.lastIndexOf('\n', idx) + 1
-    let lineEnd = text.indexOf('\n', idx)
-    if (lineEnd === -1) lineEnd = text.length
-    blockedText = text.slice(lineStart, lineEnd).trim().slice(0, 120) || blockedMatch[0].slice(0, 80)
+  if (!isDisclaimer) {
+    const blockedMatch = text.match(
+      /生成内容中疑似包含侵权[^，。\n]{0,80}|出于肖像保护考虑[^，。\n]{0,80}|由于版权相关限制[^，。\n]{0,80}|无法返回该内容|换个主题|分身认证|侵权|违规|肖像保护|版权相关限制/
+    )
+    if (blockedMatch) {
+      const idx = blockedMatch.index ?? 0
+      const lineStart = text.lastIndexOf('\n', idx) + 1
+      let lineEnd = text.indexOf('\n', idx)
+      if (lineEnd === -1) lineEnd = text.length
+      blockedText = text.slice(lineStart, lineEnd).trim().slice(0, 120) || blockedMatch[0].slice(0, 80)
+    }
   }
   return {
     vids,
@@ -1165,10 +1170,15 @@ const riskProbeScript = (): unknown => {
     const mo = new MutationObserver(() => {
       try {
         const t = document.body ? document.body.innerText : ''
-        if (
-          /安全验证|滑块验证|请完成验证|拖动滑块|人机验证|完成验证|验证码/.test(t) ||
+        const riskShown = /安全验证|滑块验证|请完成验证|拖动滑块|人机验证|完成验证|验证码/.test(t) ||
           document.querySelector('[class*="captcha" i], [class*="verify" i], iframe[src*="captcha" i]')
-        ) {
+        // 免责/安全确认弹窗：只标记为 disclaimer（实时），不进持久 verify，避免窗口点完不恢复
+        const disclaimerShown = /免责声明|安全确认|充分授权|素材授权|内容授权/.test(t)
+        if (disclaimerShown) {
+          if ((window.__qfRisk as { type?: string }).type !== 'limit') {
+            window.__qfRisk = { type: 'disclaimer', at: Date.now() }
+          }
+        } else if (riskShown) {
           if ((window.__qfRisk as { type?: string }).type !== 'ok') {
             window.__qfRisk = { type: 'verify', detail: 'dom-verify', at: Date.now() }
           }
@@ -1183,13 +1193,20 @@ const riskProbeScript = (): unknown => {
 const readRiskScript = (): unknown => {
   const w = (window.__qfRisk || { type: 'none' }) as { type?: string; detail?: string | null }
   let domVerify = false
+  let disclaimer = false
   try {
     const t = document.body ? document.body.innerText : ''
     if (/安全验证|滑块验证|请完成验证|拖动滑块|人机验证|完成验证/.test(t)) domVerify = true
+    // 免责/安全确认弹窗：完全由实时 DOM 判断（弹窗消失即不再命中），避免类型残留导致窗口不恢复
+    if (/免责声明|安全确认|充分授权|素材授权|内容授权/.test(t)) disclaimer = true
     if (document.querySelector('[class*="captcha" i], iframe[src*="captcha" i]')) domVerify = true
   } catch {}
-  const type = w.type === 'verify' || w.type === 'limit' ? w.type : domVerify ? 'verify' : 'none'
-  return { type, detail: w.detail || null, domVerify }
+  let type: 'verify' | 'limit' | 'disclaimer' | 'none' = 'none'
+  if (w.type === 'limit') type = 'limit'
+  else if (domVerify) type = 'verify'
+  else if (disclaimer) type = 'disclaimer'
+  else if (w.type === 'verify') type = 'verify'
+  return { type, detail: w.detail || null, domVerify, disclaimer }
 }
 
 /** 读取风控状态（主进程） */
@@ -1667,18 +1684,18 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     try {
       riskTick = await readDoubaoRisk(win)
     } catch {}
-    if (riskTick.type === 'verify' && !riskMode) {
+    if ((riskTick.type === 'verify' || riskTick.type === 'disclaimer') && !riskMode) {
       riskMode = true
       riskSince = Date.now()
       showRiskWindow(win)
-      progress(options, 'risk-verify', { message: '豆包要求验证，请在弹出的豆包窗口中完成验证' })
+      progress(options, 'risk-verify', { message: riskTick.type === 'disclaimer' ? '豆包弹出安全确认，请在弹出的豆包窗口点确认' : '豆包要求验证，请在弹出的豆包窗口中完成验证' })
     }
     if (riskTick.type === 'limit') {
       win.destroy()
       return fail('豆包风控/限流：' + (riskTick.detail || '请稍后再试'))
     }
     if (riskMode) {
-      if (riskTick.type !== 'verify') {
+      if (riskTick.type !== 'verify' && riskTick.type !== 'disclaimer') {
         riskMode = false
         if (options.showWebview !== true) {
           try {
