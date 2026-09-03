@@ -345,6 +345,13 @@ export async function runGenerate(
   // 元宝当前没有独立视频生成入口，生成完全靠 chat 输入框提示词完成；
   // 这里在进入任务前补前缀，保证任务记录与页面实际发送的 prompt 一致。
   const dispatchPrompt = resolvedProviderId === 'yuanbao' ? `视频生成：${input.prompt}` : input.prompt
+  // WebView 厂商（豆包/元宝/Dola/千问）发送时有时会弹「是否确认/继续」类对话框打断生成；
+  // 在 prompt 尾部统一追加一句「直接生成、不要再确认」，缓解这类交互，不影响内容本身。
+  // API 型厂商走 runApiBranch，不命中此拼接。
+  const webviewPrompt =
+    // 开头加空格避免与前文粘连
+    (resolvedProviderId === 'yuanbao' ? ' ' : '  ') + '请不要再向我确认，直接按照我的提示词生成视频'
+  const finalPrompt = dispatchPrompt + webviewPrompt
 
   // API 型厂商（智谱等）走独立分支：实体为 API Key，无 cookie 自动化，额度在平台资源包。
   if (resolvedProviderId in API_BRANCHES) {
@@ -368,7 +375,7 @@ export async function runGenerate(
     job = await jobSvc.insertJob(input.userId, {
       teamId: input.teamId,
       mode: normalizeJobMode(input.mode),
-      prompt: dispatchPrompt,
+      prompt: finalPrompt,
       status: 'pending',
       providerId: input.providerId
     })
@@ -498,7 +505,7 @@ export async function runGenerate(
           result = await runQwenGeneration({
             cookies,
             storages,
-            prompt: dispatchPrompt,
+            prompt: finalPrompt,
             model: input.model,
             mode: input.mode,
             durationSec: input.durationSec,
@@ -516,7 +523,7 @@ export async function runGenerate(
           result = await runYuanbaoGeneration({
             cookies,
             storages,
-            prompt: dispatchPrompt,
+            prompt: finalPrompt,
             images,
             keyId: cand.id,
             cancel: runCancelState,
@@ -528,7 +535,7 @@ export async function runGenerate(
           result = await runDolaGeneration({
             cookies,
             storages,
-            prompt: dispatchPrompt,
+            prompt: finalPrompt,
             mode: input.mode,
             model: input.model,
             durationSec: input.durationSec,
@@ -545,7 +552,7 @@ export async function runGenerate(
             cookies,
             localStorage: s,
             storages,
-            prompt: dispatchPrompt,
+            prompt: finalPrompt,
             mode: input.mode,
             model: input.model,
             durationSec: input.durationSec,
