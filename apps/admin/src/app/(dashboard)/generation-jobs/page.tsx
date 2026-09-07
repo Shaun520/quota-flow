@@ -162,11 +162,11 @@ export default function GenerationJobsPage() {
 
       <div className="filter-bar">
         <div className="filter-group">
-          <span className="filter-label">搜索提示词/用户</span>
+          <span className="filter-label">搜索 Prompt/错误/用户</span>
           <input
             className="form-input"
             type="search"
-            placeholder="输入 Prompt、用户名或邮箱关键词"
+            placeholder="输入 Prompt、错误信息、用户名或邮箱关键词"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />

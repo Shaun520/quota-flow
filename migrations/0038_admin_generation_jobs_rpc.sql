@@ -47,6 +47,7 @@ BEGIN
     AND (
       p_search IS NULL OR p_search = '' OR
       j.prompt ILIKE '%' || p_search || '%' OR
+      j.error ILIKE '%' || p_search || '%' OR
       EXISTS (
         SELECT 1 FROM public.profiles pu
         WHERE pu.id = j.user_id
@@ -97,6 +98,7 @@ BEGIN
       AND (
         p_search IS NULL OR p_search = '' OR
         j.prompt ILIKE '%' || p_search || '%' OR
+        j.error ILIKE '%' || p_search || '%' OR
         EXISTS (
           SELECT 1 FROM public.profiles pu2
           WHERE pu2.id = j.user_id
@@ -121,4 +123,4 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_list_generation_jobs(text, text, text, uuid, timestamptz, timestamptz, text, integer, integer) TO authenticated;
 
 COMMENT ON FUNCTION public.admin_list_generation_jobs(text, text, text, uuid, timestamptz, timestamptz, text, integer, integer)
-  IS '后台生成记录列表：join 用户/团队/厂商信息，不下发 options/attempts/cost_breakdown 大字段，支持多维度筛选与分页（仅 admin 可调用）。';
+  IS '后台生成记录列表：join 用户/团队/厂商信息，不下发 options/attempts/cost_breakdown 大字段，关键词同时匹配 prompt/error/用户名/邮箱/团队名，支持多维度筛选与分页（仅 admin 可调用）。';
