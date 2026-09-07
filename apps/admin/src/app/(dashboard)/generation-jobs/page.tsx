@@ -260,6 +260,7 @@ export default function GenerationJobsPage() {
                     <th>时间</th>
                     <th>用户</th>
                     <th>团队</th>
+                    <th>桌面端版本</th>
                     <th>厂商</th>
                     <th>模式</th>
                     <th>状态</th>
@@ -299,6 +300,7 @@ export default function GenerationJobsPage() {
                         </div>
                       </td>
                       <td>{item.team_name ?? "—"}</td>
+                      <td>{item.client_version ?? "—"}</td>
                       <td>{item.provider_name ?? item.provider_id ?? "—"}</td>
                       <td>{modeLabel(item.mode)}</td>
                       <td>

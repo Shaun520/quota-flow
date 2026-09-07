@@ -1055,6 +1055,7 @@ export interface InsertJobInput {
   teamId?: string | null
   providerId?: string | null
   accountId?: string | null
+  clientVersion?: string | null
   mode: string
   prompt?: string | null
   options?: Record<string, unknown> | null
@@ -1164,6 +1165,7 @@ export class JobService {
     if (input.teamId) payload.team_id = input.teamId
     if (input.providerId) payload.provider_id = input.providerId
     if (input.accountId) payload.account_id = input.accountId
+    if (input.clientVersion) payload.client_version = input.clientVersion
     if (input.prompt) payload.prompt = input.prompt
     if (input.options) payload.options = input.options
     if (input.attempts) payload.attempts = input.attempts
