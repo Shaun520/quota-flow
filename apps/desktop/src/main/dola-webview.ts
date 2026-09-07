@@ -803,7 +803,10 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
 
   let loadError: { code: number; desc: string; url: string } | null = null
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
-    loadError = { code, desc, url }
+    // ERR_ABORTED(-3)：页面被中止/重定向/重载（storage 注入 reload、SPA 跳转）的预期结果，非真正加载失败，忽略
+    if (code !== -3) {
+      loadError = { code, desc, url }
+    }
   })
   try {
     await Promise.race([
@@ -853,10 +856,13 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
     } catch {}
     if (await waitOrAbort(1000)) return abortNow()
   }
-  if (loadError || !videoEntryFound) {
+  if (loadError) {
     const shot = await captureDolaDebug(win, 'entry')
     win.destroy()
-    return failWith((loadError ? `页面加载失败 (${loadError.code}: ${loadError.desc})` : 'Dola 页面未出现「视频生成」入口（可能未登录或定位不到入口）') + (shot ? ` [截图:${shot}]` : ''))
+    return failWith(`页面加载失败 (${loadError.code}: ${loadError.desc})` + (shot ? ` [截图:${shot}]` : ''))
+  }
+  if (!videoEntryFound) {
+    // 未找到「视频生成」入口：不阻断任务，继续尝试直接发送提示词（Dola 可能已停留在可生成状态）
   }
 
   {
@@ -876,9 +882,7 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
       win.destroy()
       return failCancelled(attempts)
     }
-    const shot = await captureDolaDebug(win, 'params')
-    win.destroy()
-    return failWith((prepareResult.reason || 'Dola 页面参数设置失败') + (shot ? ` [截图:${shot}]` : ''))
+    // 模型/时长/比例等参数设置失败：不阻断任务，跳过参数继续按提示词发送
   }
 
   {
@@ -956,7 +960,7 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
 
   if (cancelState) cancelState.submitted = true
   options.onProgress?.('waiting', { message: '已发送 prompt，等待 Dola 生成…' })
-  const maxWaitMs = (options.maxWaitSec ?? 360) * 1000
+  const maxWaitMs = (options.maxWaitSec ?? 600) * 1000
   const started = Date.now()
   let clickedCard = false
   let final: { videoUrl: string; posterUrl?: string } | null = null

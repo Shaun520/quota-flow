@@ -3426,8 +3426,8 @@ export function initProviders(): void {
     return healthCheck(providerId, encrypted, typeof keyId === 'string' ? keyId : undefined)
   })
 
-  // 按 keyId+userId 解析加密凭证：优先命中主进程个人维度密钥分区缓存（TTL 5 分钟，调度/续命已预热时零请求），
-  // 未命中（他人持有的团队密钥等不在本 user 分区）兜底按 id 单次读，行为与渲染层原 getProviderKeySecret 一致。
+  // 按 keyId+userId 解析加密凭证：命中 keyId 单行密文缓存则零请求；
+  // 未命中由 resolveProviderKeyEncrypted 内部单行读（getProviderKeySecret）并回填缓存。
   ipcMain.handle(
     'provider:resolve-key',
     async (
@@ -3457,11 +3457,7 @@ export function initProviders(): void {
         })
         await client.auth.setSession({ access_token: input.accessToken, refresh_token: input.refreshToken })
         const cached = await resolveProviderKeyEncrypted(client, input.userId, input.keyId)
-        if (cached !== null) return { encrypted: cached }
-        // 兜底：不在 user 分区（团队密钥等）时按 id 单次读，保持原语义
-        const svc = new ProviderService(client)
-        const secret = await svc.getProviderKeySecret(input.userId, input.keyId)
-        return { encrypted: secret?.encrypted_key ?? null }
+        return { encrypted: cached ?? null }
       } catch {
         return { encrypted: null }
       }
