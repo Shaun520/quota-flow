@@ -733,6 +733,8 @@ export async function runYuanbaoGeneration(options: YuanbaoGenerateOptions): Pro
 
   let loadError: { code: number; desc: string; url: string } | null = null
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    // ERR_ABORTED(-3)：页面被中止/重定向/重载（SPA 跳转、storage 注入 reload）的预期结果，非真正加载失败，忽略
+    if (code === -3) return
     loadError = { code, desc, url }
   })
   try {

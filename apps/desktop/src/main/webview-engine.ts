@@ -1096,8 +1096,9 @@ const riskProbeScript = (): unknown => {
   const analyze = (acc: string): void => {
     if (!acc) return
     if (/async_task|"task_id"/.test(acc)) {
-      // 任务已创建：若此前不是验证态，则标记 ok（验证解除）
-      if ((window.__qfRisk as { type?: string }).type !== 'verify') setRisk('ok', null)
+      // 任务已创建 = 验证已通过并进入正常生成：无条件解除验证态（原逻辑用了
+      // type !== 'verify'，但验证态正是 verify，导致验证成功后永远清不掉，卡在 riskMode）
+      setRisk('ok', null)
       return
     }
     if (/710022002|710022004/.test(acc)) {
@@ -1203,9 +1204,10 @@ const readRiskScript = (): unknown => {
   } catch {}
   let type: 'verify' | 'limit' | 'disclaimer' | 'none' = 'none'
   if (w.type === 'limit') type = 'limit'
-  else if (domVerify) type = 'verify'
+  else if (w.type === 'ok') type = 'none' // 任务已创建/验证已解除：优先采纳，避免 DOM 残留字样把状态顶回 verify 卡住
   else if (disclaimer) type = 'disclaimer'
   else if (w.type === 'verify') type = 'verify'
+  else if (domVerify) type = 'verify'
   return { type, detail: w.detail || null, domVerify, disclaimer }
 }
 
@@ -1346,7 +1348,11 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
 
   let loadError: { code: number; desc: string; url: string } | null = null
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
-    loadError = { code, desc, url }
+    // ERR_ABORTED(-3) 是页面被中止/重定向/重载的预期内结果（如 storage 注入后的 location.reload、
+    // SPA 内部跳转），不代表真正加载失败。忽略它，避免把正常页面误判成「加载失败」。
+    if (code !== -3) {
+      loadError = { code, desc, url }
+    }
   })
   try {
     await Promise.race([
@@ -1434,9 +1440,12 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
       const r = await win.webContents.executeJavaScript(
         `(() => {
           const norm = (s) => (s || '').trim();
-          return [...document.querySelectorAll('button, [role="button"], [role="tab"]')].some(
-            (b) => b.offsetParent !== null && (norm(b.textContent) === '视频生成' || (norm(b.textContent).includes('视频生成') && !/额度|计算|说明|提示|帮助/.test(norm(b.textContent))))
-          );
+          const textOf = (b) => norm(b.textContent || '') || norm(b.getAttribute('aria-label') || '') || norm(b.getAttribute('title') || '');
+          return [...document.querySelectorAll('button, [role="button"], [role="tab"]')].some((b) => {
+            if (b.offsetParent === null) return false;
+            const t = textOf(b);
+            return t === '视频生成' || (t.includes('视频生成') && !/额度|计算|说明|提示|帮助/.test(t));
+          });
         })()`,
         true
       )
@@ -1448,8 +1457,8 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     if (await waitOrAbort(1000)) return abortNow()
   }
   if (!tabReady) {
-    win.destroy()
-    return fail('豆包页面未出现「视频生成」入口（可能未登录或页面结构变化）')
+    // 未找到「视频生成」入口：不阻断任务，继续尝试直接发送提示词。
+    // 豆包会从提示词文本解析生成模式（见下方 submitPrompt 拼接），即使没点到页签也能触发生成。
   }
 
   {
@@ -1485,35 +1494,28 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     }
   }
   if (!entered) {
-    let lastView: unknown = null
-    try {
-      lastView = await win.webContents.executeJavaScript('(' + inspectScript.toString() + ')()', true)
-    } catch {}
-    win.destroy()
-    return fail('未进入视频生成界面（页面结构可能有变化）' + (lastView ? JSON.stringify(lastView).slice(0, 300) : ''))
+    // 未进入视频生成界面：不阻断任务，继续尝试通过提示词发送（豆包按提示词文本解析生成模式）。
   }
 
   {
     const aborted = abortIfCancelled()
     if (aborted) return aborted
   }
-  // 模型：真实 UI 模型选择器（页面无模型选择器时跳过不阻断；有选择器但设置失败则终止）
+  // 模型：真实 UI 模型选择器（页面无选择器/设置失败均不阻断，继续按提示词发送）
   if (options.model) {
     progress(options, 'apply-model', { model: options.model })
     const modelApply = await applyDoubaoModel(win, options.model)
     if (!modelApply.ok) {
-      win.destroy()
-      return fail('豆包模型设置失败：' + (modelApply.reason || '未知原因'))
+      // 模型设置失败：不阻断任务，跳过模型切换，继续发送
     }
   }
 
   const durationSec = options.durationSec === 10 ? 10 : options.durationSec === 15 ? 15 : 5
-  // 时长：真实 UI 滑块（Radix Slider），避免「5秒 文本 vs 10s chip」双时长冲突
+  // 时长：真实 UI 滑块（Radix Slider），避免「5秒 文本 vs 10s chip」双时长冲突；设置失败不阻断
   progress(options, 'apply-duration', { durationSec })
   const durApply = await applyDoubaoDuration(win, durationSec)
   if (!durApply.ok) {
-    win.destroy()
-    return fail('豆包时长设置失败：' + (durApply.reason || '未知原因'))
+    // 时长设置失败：不阻断任务，跳过时长调整，继续发送
   }
 
   // 比例：真实 UI 网格点击；失败时回退文本拼接（页面结构变化时不阻断任务）
