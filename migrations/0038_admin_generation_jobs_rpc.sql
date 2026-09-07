@@ -77,6 +77,7 @@ BEGIN
       j.cost_unit,
       j.cost_amount,
       j.equivalent_count,
+      j.client_version,
       j.created_at,
       j.completed_at,
       pu.display_name AS user_name,

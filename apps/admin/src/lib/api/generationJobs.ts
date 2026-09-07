@@ -23,6 +23,7 @@ export interface AdminGenerationJob {
   cost_unit: string | null;
   cost_amount: number | null;
   equivalent_count: number | null;
+  client_version: string | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -148,6 +149,7 @@ function normalizeGenerationJob(it: Record<string, unknown>): AdminGenerationJob
     cost_unit: (it.cost_unit as string) ?? null,
     cost_amount: it.cost_amount as number | null,
     equivalent_count: it.equivalent_count as number | null,
+    client_version: (it.client_version as string) ?? null,
     created_at: String(it.created_at ?? ""),
     completed_at: (it.completed_at as string) ?? null
   };

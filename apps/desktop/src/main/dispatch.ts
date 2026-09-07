@@ -374,6 +374,7 @@ export async function runGenerate(
   try {
     job = await jobSvc.insertJob(input.userId, {
       teamId: input.teamId,
+      clientVersion: app.getVersion(),
       mode: normalizeJobMode(input.mode),
 // 入库用不含「无需确认」兜底后缀的原始 prompt：该后缀仅用于实际发送给官网 webview，不该出现在记录/历史里
       prompt: dispatchPrompt,
@@ -773,6 +774,7 @@ async function runApiBranch(
   try {
     job = await jobSvc.insertJob(input.userId, {
       teamId: input.teamId,
+      clientVersion: app.getVersion(),
       mode: normalizeJobMode(input.mode),
       prompt: input.prompt,
       status: 'pending',
