@@ -29,6 +29,13 @@ const keyCache = new Map<string, KeyCacheEntry>()
 const keyToPartitions = new Map<string, Set<string>>()
 const KEY_CACHE_TTL_MS = 5 * 60 * 1000
 
+/** P0：按 keyId 的单行密文缓存（keyId -> encrypted）。
+ *  渲染层经 IPC 取单个账号凭证时，若 user 分区缓存未命中，走单行读并缓存于此，
+ *  避免「全表带 encrypted_key 拉取再 find」造成的 PostgREST egress 字节大头。
+ *  命中零请求；写点失效时随 invalidateKeysByKeyId 同步清理。 */
+const encryptedByKeyId = new Map<string, { at: number; encrypted: string }>()
+const ENCRYPTED_BY_KEY_ID_TTL_MS = 5 * 60 * 1000
+
 /** 删除某个分区，并同步清理其内所有 key 的反查索引（避免孤儿索引失效不到） */
 function evictPartition(pk: string): void {
   const entry = keyCache.get(pk)
@@ -46,6 +53,7 @@ function evictPartition(pk: string): void {
 export function clearKeysCache(): void {
   keyCache.clear()
   keyToPartitions.clear()
+  encryptedByKeyId.clear()
 }
 
 /** 按 owner scope 失效：清掉 {kind}:{scopeId}:* 下所有分区（含具体厂商与全量两种） */
@@ -56,8 +64,9 @@ export function invalidateKeysByScope(kind: KeyScopeKind, scopeId: string): void
   }
 }
 
-/** 按 keyId 失效：清掉反查到的所有含该 key 的分区 */
+/** 按 keyId 失效：清掉反查到的所有含该 key 的分区 + 单行密文缓存 */
 export function invalidateKeysByKeyId(keyId: string): void {
+  encryptedByKeyId.delete(keyId)
   const partitions = keyToPartitions.get(keyId)
   if (!partitions) return
   for (const pk of [...partitions]) evictPartition(pk)
@@ -123,14 +132,27 @@ export function cachedListTeamProviderKeysWithSecrets(
   )
 }
 
-/** 按 userId+keyId 从个人维度密钥分区缓存解析 encrypted_key（未命中且 5 分钟 TTL 内不重复打库）。
- *  复用主进程已有 5 分钟缓存，渲染层经 IPC 取凭证时命中即零请求。
- *  仅覆盖 owner 为该 user 的密钥（个人/自己持有的团队密钥）；其余（他人持有的团队密钥）返回 null，交由调用方兜底 by-id 读。 */
+/** 按 userId+keyId 解析某账号 encrypted_key（P0 优化）。
+ *  优先命中 keyId 单行密文缓存（TTL 5 分钟，命中零请求）；未命中走 getProviderKeySecret 单行读。
+ *  不再通过 listProviderKeysWithSecrets 全表（含 encrypted_key）拉取后 find，
+ *  避免「取单个账号凭证却整表回传大字段」造成的 PostgREST egress 字节大头。
+ *  单行密文缓存写点失效沿用 invalidateKeysByKeyId；登出/换账号 clearKeysCache 全清。 */
 export async function resolveProviderKeyEncrypted(
   client: ProviderServiceClient,
   userId: string,
   keyId: string
 ): Promise<string | null> {
-  const keys = await cachedListProviderKeysWithSecrets(client, userId)
-  return keys.find((k) => k.id === keyId)?.encrypted_key ?? null
+  // 1) 单行密文缓存命中：零请求
+  const hit = encryptedByKeyId.get(keyId)
+  if (hit && Date.now() - hit.at < ENCRYPTED_BY_KEY_ID_TTL_MS) return hit.encrypted
+
+  // 2) 未命中：按 keyId 单行读（只回传目标行，含 encrypted_key），写入单行缓存
+  const svc = new ProviderService(client)
+  const secret = await svc.getProviderKeySecret(userId, keyId)
+  if (!secret) return null
+  if (secret.encrypted_key) {
+    encryptedByKeyId.set(keyId, { at: Date.now(), encrypted: secret.encrypted_key })
+    return secret.encrypted_key
+  }
+  return null
 }
