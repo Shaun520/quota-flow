@@ -13,6 +13,8 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
 const DOLA_URL = 'https://www.dola.com/chat/'
 const BLOCKED_PATTERN = /违[规法]|内容审核|无法生成|版权|侵权|肖像|敏感|检测到.*(风险|违规)|拒绝生成|请勿生成|无法返回该内容/
+/** 额度/次数耗尽文案（服务端拦截）：区别于内容封禁——此情形应切下一个账号，而非终止 */
+const QUOTA_CAP_PATTERN = /达到.{0,6}上限|生成次数.{0,10}上限|免费生成.{0,10}(用完|用尽)|免费.{0,4}次数.{0,6}(用完|用尽)|明天再来.{0,6}免费|今日.{0,8}免费.{0,8}(用完|用尽)/
 const MAX_DOLA_IMAGES = 10
 const ALLOWED_MODELS = ['Dreamina Seedance 2.5', 'Dreamina Seedance 2.0 Fast', 'Dreamina Seedance 1.0']
 const ALLOWED_DURATIONS = [5, 10]
@@ -656,11 +658,21 @@ function buildExtractResultScript(): string {
     if (lineEnd === -1) lineEnd = text.length;
     blockedText = text.slice(lineStart, lineEnd).trim().slice(0, 120) || blockedMatch[0].slice(0, 80);
   }
+  const quotaMatch = text.match(/达到.{0,6}上限|生成次数.{0,10}上限|免费生成.{0,10}(用完|用尽)|免费.{0,4}次数.{0,6}(用完|用尽)|明天再来.{0,6}免费|今日.{0,8}免费.{0,8}(用完|用尽)/);
+  let quotaText = null;
+  if (quotaMatch) {
+    const idx = quotaMatch.index ?? 0;
+    const lineStart = text.lastIndexOf('\\n', idx) + 1;
+    let lineEnd = text.indexOf('\\n', idx);
+    if (lineEnd === -1) lineEnd = text.length;
+    quotaText = text.slice(lineStart, lineEnd).trim().slice(0, 120) || quotaMatch[0].slice(0, 80);
+  }
   return {
     vids,
     mp4s: mp4s.slice(0, 12),
     hasDone: /你的视频生成好了|生成完成|生成成功|生成完毕|下载视频|保存视频/.test(text),
     blockedText,
+    quotaText,
     textTail: text.slice(-240)
   };
   } catch (e) {
@@ -972,6 +984,7 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
       mp4s?: string[]
       hasDone?: boolean
       blockedText?: string | null
+      quotaText?: string | null
       textTail?: string
       ok?: boolean
       error?: string
@@ -984,6 +997,11 @@ export async function runDolaGeneration(options: DolaGenerateOptions): Promise<D
     if (r.blockedText) {
       win.destroy()
       return failBlocked(r.blockedText, attempts)
+    }
+    // 额度/次数耗尽：普通失败（非 blocked），让上层切换到下一个有额度的账号重试
+    if (r.quotaText) {
+      win.destroy()
+      return fail(r.quotaText, attempts)
     }
     const mediaUrls = captured.current ? [...captured.current.mediaUrls] : []
     const picked = pickMediaUrl({ ...r, mediaUrls })

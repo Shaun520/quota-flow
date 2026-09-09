@@ -93,7 +93,7 @@ function normalizeJobMode(mode?: string): string {
 }
 
 function providerLabel(providerId: string): string {
-  if (providerId === 'qwenwan') return '千问（通义万相）'
+  if (providerId === 'qwenwan' || providerId === 'qwen') return '千问（通义万相）'
   if (providerId === 'yuanbao') return '元宝混元'
   if (providerId === 'dola') return 'Dola'
   return '豆包'
@@ -110,7 +110,7 @@ function parseSupportedDurations(meta: { capabilities?: Record<string, unknown> 
 
 function providerCost(providerId: string, durationSec: number, resolution?: string): { amount: number; unitName: string } {
   const durationPoint = durationSec <= 5 ? 0 : durationSec <= 10 ? 1 : 2
-  if (providerId === 'qwenwan') {
+  if (providerId === 'qwenwan' || providerId === 'qwen') {
     const amount = 1 + durationPoint + (resolution === '1080' ? 1 : 0)
     return { amount, unitName: '额度' }
   }
@@ -345,13 +345,7 @@ export async function runGenerate(
   // 元宝当前没有独立视频生成入口，生成完全靠 chat 输入框提示词完成；
   // 这里在进入任务前补前缀，保证任务记录与页面实际发送的 prompt 一致。
   const dispatchPrompt = resolvedProviderId === 'yuanbao' ? `视频生成：${input.prompt}` : input.prompt
-  // WebView 厂商（豆包/元宝/Dola/千问）发送时有时会弹「是否确认/继续」类对话框打断生成；
-  // 在 prompt 尾部统一追加一句「直接生成、不要再确认」，缓解这类交互，不影响内容本身。
-  // API 型厂商走 runApiBranch，不命中此拼接。
-  const webviewPrompt =
-    // 开头加空格避免与前文粘连
-    (resolvedProviderId === 'yuanbao' ? ' ' : '  ') + '请不要再向我确认，直接按照我的提示词生成视频'
-  const finalPrompt = dispatchPrompt + webviewPrompt
+  const finalPrompt = dispatchPrompt
 
   // API 型厂商（智谱等）走独立分支：实体为 API Key，无 cookie 自动化，额度在平台资源包。
   if (resolvedProviderId in API_BRANCHES) {
@@ -503,7 +497,7 @@ export async function runGenerate(
           break
         }
         const cookies = c ?? []
-        if (resolvedProviderId === 'qwenwan') {
+        if (resolvedProviderId === 'qwenwan' || resolvedProviderId === 'qwen') {
           result = await runQwenGeneration({
             cookies,
             storages,

@@ -292,7 +292,7 @@ export function providerModeOptions(provider: string, model = ''): Array<{ value
     // 兜底：识别不出类型的百炼视频模型统一按「文生视频」，避免下拉落到裸 value 't2v'
     return [t2v()]
   }
-  if (provider === 'qwenwan') {
+  if (provider === 'qwenwan' || provider === 'qwen') {
     if (model === '万相 2.7') {
       return [
         { value: 'multi_ref', label: '多参考生成' },
@@ -415,7 +415,7 @@ export function ratioOptions(provider: string): Array<{ value: string; label: st
       { value: '21:9', label: '21:9' }
     ]
   }
-  if (provider === 'qwenwan') {
+  if (provider === 'qwenwan' || provider === 'qwen') {
     return [
       { value: '9:16', label: '9:16' },
       { value: '3:4', label: '3:4' },

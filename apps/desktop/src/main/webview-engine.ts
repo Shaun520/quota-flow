@@ -276,6 +276,76 @@ const insertPromptAndSubmitScript = (prompt: string): unknown => {
         if (/^\d{1,2}s$/.test(t)) el.remove()
       }
     } catch {}
+    // 追加 prompt 并校验确实落进编辑器：图生视频会在图片 chip 后追加一段提示词，
+    // 之前没校验，插入失败仍返回 ok → 调度台误显示「排队中」但提示词根本没进输入框。
+    const headCore = prompt.split(/[，,]/)[0].substring(0, 6)
+    let inserted = false
+    for (let i = 0; i < 4 && !inserted; i++) {
+      editor.focus()
+      try {
+        const sel = window.getSelection()
+        if (sel) {
+          const range = document.createRange()
+          range.selectNodeContents(editor)
+          range.collapse(false)
+          sel.removeAllRanges()
+          sel.addRange(range)
+        }
+      } catch {}
+      try {
+        document.execCommand('insertText', false, prompt)
+      } catch {}
+      editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: prompt }))
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: prompt }))
+      await sleep(600)
+      const t = norm(editor.innerText || editor.textContent || '')
+      if (headCore.length > 0 && t.includes(headCore)) inserted = true
+    }
+    if (!inserted) {
+      return { ok: false, reason: '提示词未成功进入输入框，已中止以避免误报生成中' }
+    }
+    editor.focus()
+    const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
+    editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts))
+    editor.dispatchEvent(new KeyboardEvent('keypress', enterOpts))
+    editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }))
+    await sleep(1500)
+    return { ok: true }
+  })()
+}
+
+// 豆包可能以「聊天回复」的形式要求先确认参数（如「确认后我再开始生成视频」），此时视频并未开始生成、
+// 也没有可点的弹窗。用此脚本检测页面是否出现这类「等待确认」回复，供主进程决定是否回一条确认。
+const detectConfirmRequestScript = (): boolean => {
+  const t = document.body ? document.body.innerText : ''
+  return /确认后我再开始生成视频|我将按最终要求生成|视频生成参数确认|确认以上参数|请确认以上方案/.test(t)
+}
+
+// 校验自动回复的确认消息是否真的落进了聊天区（豆包可能没把输入推进去，需据此重试）。
+const confirmReplySentScript = (marker: string): boolean => {
+  const t = document.body ? document.body.innerText : ''
+  return t.includes(marker)
+}
+
+// 向豆包输入框追加一段文本并回车（不清空输入框，避免误删已上传图片/内容），用于回复「确认开始生成」。
+const appendAndSubmitTextScript = (text: string): unknown => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const findEditor = (): HTMLElement | null => {
+    const sels = ['[class*="ProseMirror"]', '[class*="tiptap"]', '[contenteditable="true"]', '[contenteditable="plaintext-only"]', '[role="textbox"]']
+    for (const s of sels) {
+      const els = [...document.querySelectorAll<HTMLElement>(s)]
+      // 优先可见输入框；生成过程中输入框可能被收起，offsetParent 为 null，此时回退到任意匹配的第一个。
+      const visible = els.find((el) => el.offsetParent !== null)
+      if (visible) return visible
+      if (els.length) return els[0]
+    }
+    return null
+  }
+  return (async () => {
+    const editor = findEditor()
+    if (!editor) return { ok: false, reason: '未找到输入框' }
+    // 主动唤起输入（有些 UI 要点击展开，否则 insertText 进不到被折叠的编辑器）
+    try { (editor as HTMLElement).click() } catch {}
     editor.focus()
     try {
       const sel = window.getSelection()
@@ -288,11 +358,25 @@ const insertPromptAndSubmitScript = (prompt: string): unknown => {
       }
     } catch {}
     try {
-      document.execCommand('insertText', false, prompt)
+      document.execCommand('insertText', false, text)
     } catch {}
-    editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: prompt }))
-    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: prompt }))
+    editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }))
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }))
     await sleep(800)
+    // 校验插入是否成功，失败则换 TipTap setContent（替换式，仅兜底，确认消息无图片依赖）
+    const norm = (s: string): string => (s || '').trim()
+    if (!norm(editor.innerText || editor.textContent || '').includes(text.trim())) {
+      try {
+        const tiptap = (window as unknown as Record<string, { commands?: { setContent?: (c: string, e?: boolean) => void } }>)[Object.keys(window).find((k) => {
+          try {
+            const v = (window as unknown as Record<string, unknown>)[k]
+            return !!v && typeof v === 'object' && !!((v as { commands?: unknown }).commands) && typeof ((v as { commands?: { setContent?: unknown } }).commands?.setContent) === 'function'
+          } catch { return false }
+        }) || '']
+        if (tiptap && tiptap.commands?.setContent) tiptap.commands.setContent(text, false)
+      } catch {}
+      await sleep(400)
+    }
     editor.focus()
     const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
     editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts))
@@ -379,7 +463,13 @@ const fillAndSubmitScript = (prompt: string): unknown => {
       await sleep(350)
     }
     const finalText = norm(editor.innerText || editor.textContent || '')
-    if (finalText !== prompt) {
+    // 豆包会把 prompt 片段（如 16：9 比例、8K、PBR、UE5）自动转成 chip，innerText 不再逐字等于原始文本，
+    // 精确相等会误报「编辑器内容未清理干净」而杀掉整条任务。改为容忍性兜底校验：
+    // 只要提交内容开头（首个逗号前的核心句前 6 字）已完整落到编辑器，即视为写入成功；
+    // 残留的 UI 自动 chip（比例/时长等）不影响豆包按提示词解析，故不再拦截。
+    const headCore = prompt.split(/[，,]/)[0].substring(0, 6)
+    const cleanOk = finalText === prompt || (headCore.length > 0 && finalText.includes(headCore))
+    if (!cleanOk) {
       return { ok: false, reason: '编辑器内容未清理干净: ' + finalText.slice(0, 60) }
     }
     const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
@@ -1208,6 +1298,12 @@ const readRiskScript = (): unknown => {
   else if (disclaimer) type = 'disclaimer'
   else if (w.type === 'verify') type = 'verify'
   else if (domVerify) type = 'verify'
+  // 宽限解封：verify 仅来自 __qfRisk 历史残留（fetch 未抓到 async_task 时不会置 ok），
+  // 但 DOM 已长时间无验证/免责元素说明用户已完成验证并进入生成。给一个短宽限期
+  // （兼顾「响应先到、验证 DOM 后渲染」的时序差），超期即解封，避免永远卡在「等待验证中」。
+  if (type === 'verify' && !domVerify && !disclaimer && w.type !== 'ok' && w.at && Date.now() - w.at > 8000) {
+    type = 'none'
+  }
   return { type, detail: w.detail || null, domVerify, disclaimer }
 }
 
@@ -1665,6 +1761,8 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
   const started = Date.now()
   let cardClicked = false
   let doneTicks = 0
+  let confirmReplied = false
+  let confirmReplyAttempts = 0
   let final: { videoUrl?: string; posterUrl?: string | null } | null = null
 
   while (Date.now() - started < maxWaitMs) {
@@ -1714,6 +1812,35 @@ export async function runDoubaoGeneration(options: DoubaoGenerateOptions): Promi
     if (r.blockedText) {
       win.destroy()
       return failBlocked(r.blockedText)
+    }
+    // 豆包以「聊天回复」要求确认参数（视频未开始生成）：回一条「确认，直接开始生成」推进。
+    // 每次轮询校验确认消息是否真的落进聊天区，没落地就一直补发（最多 confirmReplyAttempts 次)，
+    // 落地后才真正标记已确认，避免「发失败却被当成功」导致一直卡在确认上。
+    if (!confirmReplied && confirmReplyAttempts < 3) {
+      let needConfirm = false
+      try {
+        needConfirm = (await win.webContents.executeJavaScript('(' + detectConfirmRequestScript.toString() + ')()', true)) as boolean
+      } catch {
+        needConfirm = false
+      }
+      if (needConfirm) {
+        let landed = false
+        try {
+          landed = (await win.webContents.executeJavaScript('(' + confirmReplySentScript.toString() + ')(' + JSON.stringify('确认，直接开始生成') + ')', true)) as boolean
+        } catch {
+          landed = false
+        }
+        if (!landed) {
+          confirmReplyAttempts += 1
+          progress(options, 'waiting', { message: '豆包要求确认参数，自动确认中...（第 ' + confirmReplyAttempts + ' 次）' })
+          try {
+            await win.webContents.executeJavaScript('(' + appendAndSubmitTextScript.toString() + ')(' + JSON.stringify('确认，直接开始生成') + ')', true)
+          } catch {}
+        } else {
+          // 确认消息已落进聊天区（含用户手动确认的情况），标记处理完成避免重复发送。
+          confirmReplied = true
+        }
+      }
     }
     const video = r.vids && r.vids[0]
     const mp4 = r.mp4s && r.mp4s[0]
