@@ -254,7 +254,8 @@ export default function Dashboard({
 }: DashboardProps) {
   const { aggs: provAggs, zhipuQuotaOverrides, volcTokenOverrides, bailianQuotaOverrides } = providers
   const { user, team } = useAuth()
-  const { items: jobItems, reload: reloadJobs } = jobs
+  // 「最近生成」面板用独立 recent（首页最近10条），不与历史记录分页/筛选联动，翻页不再影响调度台
+  const { recent: jobItems, reload: reloadJobs } = jobs
   const [provider, setProvider] = useState('doubao')
   const [model, setModel] = useState(MODELS.doubao[0])
   const [mode, setMode] = useState('text2video')
@@ -796,7 +797,10 @@ export default function Dashboard({
   // 厂商选项只取「已启用且已绑定」的厂商
   const providerOptions = useMemo(() => {
     if (activeBoundAggs.length === 0) return []
-    return activeBoundAggs.map((a) => ({ value: a.providerId, label: a.name }))
+    return activeBoundAggs
+      // 智谱清言不在调度台展示生成入口
+      .filter((a) => a.providerId !== 'chatglm')
+      .map((a) => ({ value: a.providerId, label: a.name }))
   }, [activeBoundAggs])
 
   // 当前选择不在可用列表时（例如厂商被解绑），回退到第一个可用厂商

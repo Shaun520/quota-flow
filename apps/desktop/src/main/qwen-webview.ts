@@ -10,6 +10,22 @@ import { readFile } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import type { OriginStorage, ProviderCookie } from './webview-engine'
 
+// 检测千问页面是否出现滑块验证码（阿里系人机验证）
+const detectQwenCaptchaScript = (): boolean => {
+  const t = document.body ? document.body.innerText : ''
+  // 千问滑块验证码特征文案
+  return /请拖动下方滑块完成验证|通过验证以确保正常访问|请按住滑块，拖动到最右边|人机验证|拖动滑块/.test(t)
+}
+
+// 风控/验证时显示窗口交用户处理
+const showRiskWindow = (win: BrowserWindow): void => {
+  try {
+    win.show()
+    win.focus()
+    win.center()
+  } catch {}
+}
+
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
 const QWEN_CHAT_URL = 'https://www.qianwen.com/chat'
@@ -1214,6 +1230,34 @@ export async function runQwenGeneration(options: QwenGenerateOptions): Promise<Q
   if (!sendResult.ok) {
     win.destroy()
     return failWith(sendResult.reason || '千问发送失败')
+  }
+
+  // 发送后检查是否出现滑块验证码：出现则显示窗口交用户完成，完成后继续
+  await sleep(1500)
+  let captchaDetected = false
+  try {
+    captchaDetected = (await win.webContents.executeJavaScript('(' + detectQwenCaptchaScript.toString() + ')()', true)) as boolean
+  } catch {}
+  if (captchaDetected) {
+    options.onProgress?.('risk-verify', { message: '千问要求完成滑块验证，请在弹出的窗口中拖动滑块完成验证' })
+    showRiskWindow(win)
+    // 轮询等待用户完成验证（最多 5 分钟）
+    const captchaStart = Date.now()
+    const CAPTCHA_TIMEOUT_MS = 300000
+    while (Date.now() - captchaStart < CAPTCHA_TIMEOUT_MS) {
+      await sleep(3000)
+      let stillCaptcha = false
+      try {
+        stillCaptcha = (await win.webContents.executeJavaScript('(' + detectQwenCaptchaScript.toString() + ')()', true)) as boolean
+      } catch {}
+      if (!stillCaptcha) {
+        options.onProgress?.('risk-resolved')
+        if (options.showWebview !== true) {
+          try { win.hide() } catch {}
+        }
+        break
+      }
+    }
   }
 
   if (cancelState) cancelState.submitted = true

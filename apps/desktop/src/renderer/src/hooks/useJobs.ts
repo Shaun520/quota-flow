@@ -146,6 +146,8 @@ export interface JobsResult {
   loading: boolean
   error: string | null
   items: JobItem[]
+  /** 最近生成（首页最近 10 条），独立于历史列表分页/筛选——供「调度台/最近生成」面板使用 */
+  recent: JobItem[]
   total: number
   page: number
   hasAnySuccess: boolean
@@ -171,6 +173,8 @@ export function useJobs(): JobsResult {
   const [items, setItems] = useState<JobItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  // 最近生成列表：始终查第 1 页最近 10 条，不随历史列表分页/筛选变化（调度台「最近生成」独立于此）
+  const [recent, setRecent] = useState<JobItem[]>([])
   const [filters, setFiltersState] = useState<JobFilters>({ search: '', providerId: '', status: '' })
   const [hasAnySuccess, setHasAnySuccess] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -257,6 +261,24 @@ export function useJobs(): JobsResult {
     const svc = getJobService()
     if (!svc) return
     svc
+      .listJobs(user.id, { page: 1, pageSize: PAGE_SIZE })
+      .then((res) => {
+        if (!cancelled) setRecent(res.items.map(toJobItem))
+      })
+      .catch(() => {
+        // 最近生成非关键：失败保留上次数据，不阻塞调度台
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id, reloadKey])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!user) return
+    const svc = getJobService()
+    if (!svc) return
+    svc
       .hasAnySuccess(user.id)
       .then((value) => {
         if (!cancelled) setHasAnySuccess(value)
@@ -301,5 +323,5 @@ export function useJobs(): JobsResult {
     [reload, user]
   )
 
-  return { loading, error, items, total, page, hasAnySuccess, setPage, setFilters, reload, getDetail, remove, removeMany }
+  return { loading, error, items, recent, total, page, hasAnySuccess, setPage, setFilters, reload, getDetail, remove, removeMany }
 }
