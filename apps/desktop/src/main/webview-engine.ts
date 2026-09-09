@@ -1282,7 +1282,7 @@ const riskProbeScript = (): unknown => {
 }
 
 const readRiskScript = (): unknown => {
-  const w = (window.__qfRisk || { type: 'none' }) as { type?: string; detail?: string | null }
+  const w = (window.__qfRisk || { type: 'none' }) as { type?: string; detail?: string | null; at?: number }
   let domVerify = false
   let disclaimer = false
   try {
